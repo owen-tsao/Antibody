@@ -1,0 +1,9 @@
+[project]
+name = "chaos-monkey"
+version = "0.1.0"
+requires-python = ">=3.12"
+dependencies = [
+    "openai>=3.13.0",
+    "wandb>=0.30.0",
+    "weave>=0.53.9",
+]

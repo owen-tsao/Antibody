@@ -1,2 +1,6 @@
 cloud-agent-prompt.md
 .env*
+.venv/
+__pycache__/
+*.pyc
+wandb/
