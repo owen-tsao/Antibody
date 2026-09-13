@@ -3,7 +3,9 @@ name = "chaos-monkey"
 version = "0.1.0"
 requires-python = ">=3.12"
 dependencies = [
+    "fastapi>=0.141.1",
     "openai>=3.13.0",
+    "uvicorn[standard]>=0.52.4",
     "wandb>=0.30.0",
     "weave>=0.53.9",
 ]
