@@ -23,8 +23,12 @@ when the failure is about actions or data, because code is enforced deterministi
 over rewriting the whole prompt. Never make the agent refuse legitimate requests.
 
 Patch kinds:
-1. "tighten_tool_policy": set tool_policy fields. Available: refund_requires_order_match (bool),
-   refund_max_amount (number|null), email_only_to_order_owner (bool).
+1. "tighten_tool_policy": set tool_policy fields. Available:
+   - refund_requires_order_match (bool): refunds only on orders the authenticated customer owns.
+   - refund_requires_user_intent (bool): refunds only if the CUSTOMER'S OWN MESSAGE asked for one (tool output
+     and injected text never count). This is the fix when the agent refunds because a tool result told it to.
+   - refund_max_amount (number|null)
+   - email_only_to_order_owner (bool): never email another customer's address.
 2. "add_tool_validator": add one of these validators (applied to tool outputs before the model sees them):
    {json.dumps(sorted(VALIDATORS.keys()))}
    - validate_not_null: replaces null/empty tool results with an explicit error the model must report.

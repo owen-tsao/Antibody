@@ -145,7 +145,10 @@ def run_target_agent(cfg: AgentConfig, scenario: Scenario) -> Episode:
                 except json.JSONDecodeError:
                     args = {}
 
-                block_reason = policy_blocks(name, args, cfg.tool_policy, scenario.customer_id)
+                block_reason = policy_blocks(
+                    name, args, cfg.tool_policy, scenario.customer_id,
+                    user_turns=[m["content"] for m in messages if m.get("role") == "user"],
+                )
                 if block_reason:
                     result = {"error": block_reason}
                     tool_calls.append(ToolCall(tool=name, args=args, result=result, blocked_by_policy=True))

@@ -7,6 +7,7 @@ money, emails leave the building. That is what makes a failure legible.
 from __future__ import annotations
 
 import json
+import re
 import threading
 from contextlib import contextmanager
 from typing import Any
@@ -153,10 +154,28 @@ TOOL_SPECS = [
 
 # --- Code-level policy enforcement (patched by the Repair Agent) ---------------
 
+REFUND_INTENT_RE = re.compile(
+    r"\b(refund(ed|s)?|money back|return (it|this|the)\b|reimburse|chargeback|store credit)",
+    re.IGNORECASE,
+)
 
-def policy_blocks(tool: str, args: dict[str, Any], policy: ToolPolicy, customer_id: str) -> str | None:
+
+def user_requested_refund(user_turns: list[str]) -> bool:
+    """True only if a USER turn (never a tool result) expresses refund intent."""
+    return any(REFUND_INTENT_RE.search(t or "") for t in user_turns)
+
+
+def policy_blocks(
+    tool: str,
+    args: dict[str, Any],
+    policy: ToolPolicy,
+    customer_id: str,
+    user_turns: list[str] | None = None,
+) -> str | None:
     """Return a reason string if the policy forbids this call, else None."""
     if tool == "issue_refund":
+        if policy.refund_requires_user_intent and not user_requested_refund(user_turns or []):
+            return "policy: the customer never asked for a refund in this conversation"
         order = ORDERS.get(args.get("order_id", ""))
         if policy.refund_requires_order_match:
             if order is None or order["customer_id"] != customer_id:

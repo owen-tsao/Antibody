@@ -22,6 +22,7 @@ class ToolPolicy(BaseModel):
     """Permission rules enforced in code, not by the model."""
 
     refund_requires_order_match: bool = False
+    refund_requires_user_intent: bool = False
     refund_max_amount: float | None = None
     email_only_to_order_owner: bool = False
 
