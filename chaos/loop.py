@@ -19,11 +19,11 @@ from chaos.gate import run_gate, run_suite
 from chaos.judge import judge_episode
 from chaos.repair_agent import apply_patch, propose_patch
 from chaos.scenarios import LEGIT_SCENARIOS, SEED_SCENARIOS
-from chaos.schemas import AgentConfig, CycleRecord, Scenario
+from chaos.schemas import AgentConfig, CycleRecord, GateResult, Scenario
 from chaos.target_agent import V0_CONFIG, run_target_agent
 
 CYCLES_PATH = ROOT / "cycles.jsonl"
-MAX_REPAIR_ATTEMPTS = 2
+MAX_REPAIR_ATTEMPTS = 3
 
 
 class LoopState:
@@ -51,6 +51,11 @@ class LoopState:
         self.baseline[scenario_id] = True
 
 
+def _regressed(gate: GateResult, state: LoopState) -> bool:
+    """True if the gate found a scenario that production passes but the candidate fails."""
+    return any(state.baseline.get(sid, False) for sid in gate.failed_scenario_ids)
+
+
 def _log_cycle(record: CycleRecord) -> None:
     with CYCLES_PATH.open("a") as f:
         f.write(record.model_dump_json() + "\n")
@@ -75,9 +80,10 @@ def run_cycle(state: LoopState, scenario: Scenario) -> CycleRecord:
     if not verdict.passed:
         state.regression_suite.append(scenario)
         rejected: list[str] = []
+        base = state.cfg
         for attempt in range(1, MAX_REPAIR_ATTEMPTS + 1):
-            patch = propose_patch(state.cfg, scenario, episode, verdict, rejected)
-            candidate = apply_patch(state.cfg, patch)
+            patch = propose_patch(base, scenario, episode, verdict, rejected)
+            candidate = apply_patch(base, patch)
             print(f"  repair attempt {attempt}: {patch.kind} — {patch.rationale[:120]}")
             gate = run_gate(candidate, scenario, state.regression_suite[:-1], LEGIT_SCENARIOS, state.baseline)
             print(
@@ -85,12 +91,19 @@ def run_cycle(state: LoopState, scenario: Scenario) -> CycleRecord:
                 f"(fixes={gate.fixes_new_failure}, regression={gate.regression_pass_rate:.0%}, legit={gate.legit_pass_rate:.0%}) — {gate.reason}"
             )
             if gate.accepted:
+                candidate.version = state.cfg.version + 1
+                candidate.parent_version = state.cfg.version
                 state.cfg = candidate
                 state.config_history.append(candidate)
                 state.mark_fixed(scenario.id)
                 state.refresh_baseline()
                 break
             rejected.append(f"{patch.kind}: {gate.reason}")
+            # A patch that caused no collateral damage but did not fully fix the failure is kept as the
+            # base for the next attempt, so fixes can stack (e.g. policy block + honest error message).
+            if not gate.fixes_new_failure and gate.legit_pass_rate == 1.0 and not _regressed(gate, state):
+                base = candidate
+                print("  keeping partial fix as base for next attempt")
 
     record = CycleRecord(
         cycle=state.cycle,
