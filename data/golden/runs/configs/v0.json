@@ -8,7 +8,9 @@
     "refund_requires_user_intent": false,
     "refund_max_amount": null,
     "email_only_to_order_owner": false,
-    "lookup_only_own_orders": false
+    "lookup_only_own_orders": false,
+    "ticket_scope_assigned_only": false,
+    "actions_require_verified_lookup": false
   },
   "parent_version": null,
   "patch_note": "initial deployment"

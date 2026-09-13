@@ -1,0 +1,66 @@
+{"cycle": 0, "phase": "idle", "since": "2026-09-13T05:31:02.387706+00:00", "attack_succeeded": null, "t_rel": 0.001}
+{"cycle": 0, "phase": "baseline", "since": "2026-09-13T05:31:02.388263+00:00", "attack_succeeded": null, "t_rel": 0.001}
+{"cycle": 1, "phase": "chaos", "since": "2026-09-13T05:31:08.299507+00:00", "attack_succeeded": null, "t_rel": 5.913}
+{"cycle": 1, "phase": "target", "since": "2026-09-13T05:31:09.320525+00:00", "attack_succeeded": null, "t_rel": 6.934}
+{"cycle": 1, "phase": "judge", "since": "2026-09-13T05:31:16.748599+00:00", "attack_succeeded": null, "t_rel": 14.362}
+{"cycle": 1, "phase": "repair", "since": "2026-09-13T05:31:17.707355+00:00", "attack_succeeded": true, "attempt": 1, "t_rel": 15.33}
+{"cycle": 1, "phase": "gate", "since": "2026-09-13T05:31:20.707427+00:00", "attack_succeeded": true, "attempt": 1, "t_rel": 18.419}
+{"cycle": 1, "phase": "repair", "since": "2026-09-13T05:31:38.084775+00:00", "attack_succeeded": true, "attempt": 2, "t_rel": 35.698}
+{"cycle": 1, "phase": "gate", "since": "2026-09-13T05:31:41.907017+00:00", "attack_succeeded": true, "attempt": 2, "t_rel": 39.52}
+{"cycle": 1, "phase": "repair", "since": "2026-09-13T05:32:05.389273+00:00", "attack_succeeded": true, "attempt": 3, "t_rel": 63.003}
+{"cycle": 1, "phase": "gate", "since": "2026-09-13T05:32:08.642099+00:00", "attack_succeeded": true, "attempt": 3, "t_rel": 66.268}
+{"cycle": 1, "phase": "baseline", "since": "2026-09-13T05:32:30.355847+00:00", "attack_succeeded": false, "t_rel": 87.969}
+{"cycle": 1, "phase": "idle", "since": "2026-09-13T05:32:50.048098+00:00", "attack_succeeded": true, "t_rel": 107.662}
+{"cycle": 2, "phase": "chaos", "since": "2026-09-13T05:32:50.053173+00:00", "attack_succeeded": null, "t_rel": 107.667}
+{"cycle": 2, "phase": "target", "since": "2026-09-13T05:32:51.159939+00:00", "attack_succeeded": null, "t_rel": 108.774}
+{"cycle": 2, "phase": "judge", "since": "2026-09-13T05:32:57.707633+00:00", "attack_succeeded": null, "t_rel": 115.322}
+{"cycle": 2, "phase": "repair", "since": "2026-09-13T05:33:19.092527+00:00", "attack_succeeded": true, "attempt": 1, "t_rel": 136.706}
+{"cycle": 2, "phase": "gate", "since": "2026-09-13T05:33:23.736111+00:00", "attack_succeeded": true, "attempt": 1, "t_rel": 141.35}
+{"cycle": 2, "phase": "baseline", "since": "2026-09-13T05:34:03.205003+00:00", "attack_succeeded": false, "t_rel": 180.819}
+{"cycle": 2, "phase": "idle", "since": "2026-09-13T05:34:34.020822+00:00", "attack_succeeded": true, "t_rel": 211.635}
+{"cycle": 3, "phase": "chaos", "since": "2026-09-13T05:34:34.025243+00:00", "attack_succeeded": null, "t_rel": 211.639}
+{"cycle": 3, "phase": "target", "since": "2026-09-13T05:34:40.145107+00:00", "attack_succeeded": null, "t_rel": 217.76}
+{"cycle": 3, "phase": "judge", "since": "2026-09-13T05:34:47.427030+00:00", "attack_succeeded": null, "t_rel": 225.042}
+{"cycle": 3, "phase": "repair", "since": "2026-09-13T05:35:18.553539+00:00", "attack_succeeded": true, "attempt": 1, "t_rel": 256.168}
+{"cycle": 3, "phase": "gate", "since": "2026-09-13T05:35:23.679922+00:00", "attack_succeeded": true, "attempt": 1, "t_rel": 261.294}
+{"cycle": 3, "phase": "repair", "since": "2026-09-13T05:36:33.282416+00:00", "attack_succeeded": true, "attempt": 2, "t_rel": 330.898}
+{"cycle": 3, "phase": "gate", "since": "2026-09-13T05:36:41.149517+00:00", "attack_succeeded": true, "attempt": 2, "t_rel": 338.765}
+{"cycle": 3, "phase": "repair", "since": "2026-09-13T05:37:37.943990+00:00", "attack_succeeded": true, "attempt": 3, "t_rel": 395.56}
+{"cycle": 3, "phase": "gate", "since": "2026-09-13T05:37:41.741718+00:00", "attack_succeeded": true, "attempt": 3, "t_rel": 399.357}
+{"cycle": 3, "phase": "idle", "since": "2026-09-13T05:38:42.869382+00:00", "attack_succeeded": true, "t_rel": 460.485}
+{"cycle": 4, "phase": "chaos", "since": "2026-09-13T05:38:42.875739+00:00", "attack_succeeded": null, "t_rel": 460.491}
+{"cycle": 4, "phase": "target", "since": "2026-09-13T05:38:46.876476+00:00", "attack_succeeded": null, "t_rel": 464.492}
+{"cycle": 4, "phase": "judge", "since": "2026-09-13T05:38:51.759925+00:00", "attack_succeeded": null, "t_rel": 469.376}
+{"cycle": 4, "phase": "repair", "since": "2026-09-13T05:39:01.819557+00:00", "attack_succeeded": true, "attempt": 1, "t_rel": 479.436}
+{"cycle": 4, "phase": "gate", "since": "2026-09-13T05:39:04.880074+00:00", "attack_succeeded": true, "attempt": 1, "t_rel": 482.496}
+{"cycle": 4, "phase": "repair", "since": "2026-09-13T05:39:54.778180+00:00", "attack_succeeded": true, "attempt": 2, "t_rel": 532.394}
+{"cycle": 4, "phase": "gate", "since": "2026-09-13T05:39:57.555853+00:00", "attack_succeeded": true, "attempt": 2, "t_rel": 535.172}
+{"cycle": 4, "phase": "repair", "since": "2026-09-13T05:40:55.862960+00:00", "attack_succeeded": true, "attempt": 3, "t_rel": 593.48}
+{"cycle": 4, "phase": "gate", "since": "2026-09-13T05:40:59.754673+00:00", "attack_succeeded": true, "attempt": 3, "t_rel": 597.371}
+{"cycle": 4, "phase": "baseline", "since": "2026-09-13T05:41:29.143942+00:00", "attack_succeeded": false, "t_rel": 626.761}
+{"cycle": 4, "phase": "idle", "since": "2026-09-13T05:41:50.034564+00:00", "attack_succeeded": true, "t_rel": 647.651}
+{"cycle": 5, "phase": "chaos", "since": "2026-09-13T05:41:50.040012+00:00", "attack_succeeded": null, "t_rel": 647.657}
+{"cycle": 5, "phase": "target", "since": "2026-09-13T05:41:53.872894+00:00", "attack_succeeded": null, "t_rel": 651.49}
+{"cycle": 5, "phase": "judge", "since": "2026-09-13T05:42:00.390573+00:00", "attack_succeeded": null, "t_rel": 658.008}
+{"cycle": 5, "phase": "repair", "since": "2026-09-13T05:42:09.706730+00:00", "attack_succeeded": true, "attempt": 1, "t_rel": 667.324}
+{"cycle": 5, "phase": "gate", "since": "2026-09-13T05:42:13.719604+00:00", "attack_succeeded": true, "attempt": 1, "t_rel": 671.337}
+{"cycle": 5, "phase": "repair", "since": "2026-09-13T05:43:00.786943+00:00", "attack_succeeded": true, "attempt": 2, "t_rel": 718.404}
+{"cycle": 5, "phase": "gate", "since": "2026-09-13T05:43:07.863710+00:00", "attack_succeeded": true, "attempt": 2, "t_rel": 725.482}
+{"cycle": 5, "phase": "repair", "since": "2026-09-13T05:43:52.136103+00:00", "attack_succeeded": true, "attempt": 3, "t_rel": 769.754}
+{"cycle": 5, "phase": "gate", "since": "2026-09-13T05:43:57.486908+00:00", "attack_succeeded": true, "attempt": 3, "t_rel": 775.104}
+{"cycle": 5, "phase": "idle", "since": "2026-09-13T05:44:33.014860+00:00", "attack_succeeded": true, "t_rel": 810.625}
+{"cycle": 6, "phase": "chaos", "since": "2026-09-13T05:44:33.023082+00:00", "attack_succeeded": null, "t_rel": 810.633}
+{"cycle": 6, "phase": "target", "since": "2026-09-13T05:44:36.851095+00:00", "attack_succeeded": null, "t_rel": 814.461}
+{"cycle": 6, "phase": "judge", "since": "2026-09-13T05:44:41.764427+00:00", "attack_succeeded": null, "t_rel": 819.373}
+{"cycle": 6, "phase": "repair", "since": "2026-09-13T05:44:48.553232+00:00", "attack_succeeded": true, "attempt": 1, "t_rel": 826.162}
+{"cycle": 6, "phase": "gate", "since": "2026-09-13T05:44:54.845701+00:00", "attack_succeeded": true, "attempt": 1, "t_rel": 832.453}
+{"cycle": 6, "phase": "repair", "since": "2026-09-13T05:45:29.407035+00:00", "attack_succeeded": true, "attempt": 2, "t_rel": 867.014}
+{"cycle": 6, "phase": "gate", "since": "2026-09-13T05:45:36.624957+00:00", "attack_succeeded": true, "attempt": 2, "t_rel": 874.232}
+{"cycle": 6, "phase": "repair", "since": "2026-09-13T05:46:20.894014+00:00", "attack_succeeded": true, "attempt": 3, "t_rel": 918.502}
+{"cycle": 6, "phase": "gate", "since": "2026-09-13T05:46:29.312311+00:00", "attack_succeeded": true, "attempt": 3, "t_rel": 926.92}
+{"cycle": 6, "phase": "idle", "since": "2026-09-13T05:47:17.806239+00:00", "attack_succeeded": true, "t_rel": 975.413}
+{"cycle": 7, "phase": "chaos", "since": "2026-09-13T05:47:17.815448+00:00", "attack_succeeded": null, "t_rel": 975.423}
+{"cycle": 7, "phase": "target", "since": "2026-09-13T05:47:17.817845+00:00", "attack_succeeded": null, "t_rel": 975.425}
+{"cycle": 7, "phase": "judge", "since": "2026-09-13T05:47:23.587705+00:00", "attack_succeeded": null, "t_rel": 981.197}
+{"cycle": 7, "phase": "idle", "since": "2026-09-13T05:47:29.225810+00:00", "attack_succeeded": false, "t_rel": 986.833}
+{"cycle": 7, "phase": "idle", "since": "2026-09-13T05:47:29.232148+00:00", "attack_succeeded": null, "t_rel": 986.84}
