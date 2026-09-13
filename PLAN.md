@@ -65,6 +65,8 @@ Then go straight to the spikes in section 5.
 
 Chaos engineering for AI agents: a Chaos Agent deliberately breaks a customer-support agent for an online store, a Judge proves the failure, a Repair Agent patches it, and an eval gate in Weave makes sure every past failure stays fixed and the agent stays helpful. Then the Chaos Agent attacks again.
 
+**What the product is.** The whole loop, not any one agent. Chaos, Judge, and Repair are internal parts; what a user gets is: point it at an agent, and it continuously attacks, proves failures, patches them, and guarantees no patch breaks what used to work. CI plus a red team, for agents, that runs itself. The support bot is the demo target; the loop is agent-agnostic. If one piece is the "product", it is the gate plus the growing regression suite — that is the guarantee judges will remember.
+
 ### 1.2 Submission description (three sentences, final)
 
 Chaos Monkey for Agents attacks a customer-support agent that has real (mocked) tools — prompt injection hidden in order data, social-engineered refunds, tools that return nothing — and a Judge Agent proves each failure with verifiable checks and turns it into a permanent regression test in a Weave Dataset. A Repair Agent then patches the agent's system prompt and its tool-permission and output-validation code, and the patch is only accepted if it fixes the new failure, passes every past failure, and does not regress a held-out set of legitimate customer requests. The Chaos Agent adapts to each new defense and attacks again, so every pass of the loop adds a verified, permanent constraint without making the agent less helpful.
@@ -77,7 +79,7 @@ Slide 1 also carries one sentence for the RL crowd: *Adversarial self-play with 
 
 ### 1.4 The 3-minute demo script
 
-Strictly timed. Practice with a phone timer twice on Sunday. Two slides: slide 1 = diagram + claim; slide 2 = the vulnerability-by-version chart (static PNG). Five surfaces in fixed tab order: terminal, Weave Traces, Weave Evals, dashboard, slide 2.
+Strictly timed. Practice with a phone timer twice on Sunday. Two slides: slide 1 = diagram + claim; slide 2 = the vulnerability-by-version chart (static PNG). Five surfaces in fixed tab order: terminal, Weave Traces, Weave Evals, dashboard, slide 2. If the control room (section 10) ships, surfaces drop to three: terminal, control room, slide 2.
 
 Default mode is **replay of a fresh run** made at ~1:05 PM (section 6). Only the attack at 0:20 runs live. Both run from **v0 with an empty suite** (`demo --from-version 0 --suite empty`, the default) — the latest config already blocks the seed, so a demo against it would show nothing. Say so out loud; the Weave timestamps prove it. If the golden run contains the regex-then-precondition escalation (section 3.1), switch the default at 11:00 to `--from-version <regex-only version> --suite <golden suite at that point>`; decide once.
 
@@ -657,13 +659,29 @@ Make Weave the system of record for the loop, not a logger bolted on.
 
 ---
 
-## 10. marimo dashboard spec
+## 10. marimo dashboard spec — the "control room"
 
-Purpose: the improvement story in one screen. Reads `runs/loop_log.jsonl` (or `data/golden/loop_log.jsonl` via `--golden`) and `data/golden/vulnerability.json`. Never live Weave queries.
+Purpose: one page that ties the whole loop together, so the demo needs two surfaces (terminal + control room) instead of five. Reads `runs/loop_log.jsonl` (or `data/golden/loop_log.jsonl` via `--golden`) and `data/golden/vulnerability.json`. Never live Weave queries.
+
+This is **not a separate web app**. marimo already serves a page; the control room is that page laid out as a single screen. No React, no second server, still counts for the marimo prize. Level 2 work: start only after the Saturday insurance golden run is committed.
+
+**Layout (top to bottom, one screen at 1440px)**
+1. Header: project name, current config version, regression suite size, legit pass rate, last gate decision (`mo.stat` row).
+2. **Live loop feed** (left, ~60% width): one card per cycle, newest on top, rendered from `CycleRecord`. Each card shows the handoffs in order — `Chaos → Target`, `Judge → Repair: Verdict{…}`, `Repair → Gate: Patch{layer, ops}`, `Gate: new n/n, regression n/n, legit n/n → ACCEPTED/REJECTED` — with `blocked_by` highlighted. This is the terminal replay, as a page.
+3. **Vulnerability by version** (right top): the primary chart. Ends at zero.
+4. Suite size + legit pass rate (right middle).
+5. Config diff of latest vs. previous (right bottom, monospace, collapsed by default).
+6. Weave row: buttons that open the current cycle's trace and the latest Evals comparison in a new tab (`weave_trace_url`, `weave_eval_urls`). Embedding Weave in an iframe is UNVERIFIED (wandb likely sets frame headers); do not spend more than 5 minutes trying — buttons are fine.
+
+Style: Owen's UI standard (monochrome, one accent; red/green reserved for FAILED/ACCEPTED state). Large type; it will be read from across a room over Zoom.
+
+**Demo impact if the control room ships**: surfaces drop to terminal (live attack + paced replay) → control room → slide 2. Weave tabs stay pre-opened as backup and for Q&A, but the 1:45–2:20 beat is delivered from the control room's Weave buttons. Update the §1.4 tab order at 11:00 Sunday when you decide.
+
+**Fallback**: the panel list below, as originally specified. Panels 1–3 alone still tell the story.
 
 **Data source**: `mo.ui.refresh(default_interval="2s")` triggers a cell that reads the JSONL into a list of dicts; every other cell depends on it.
 
-**Panels**
+**Panels (fallback list; the control room above is the same data on one screen)**
 1. Header stats (`mo.stat`): cycles, current config version, regression suite size, legit pass rate, last gate decision.
 2. **Vulnerability by version** (bar/line): failures of the final regression suite for each accepted config v0..vN. Primary chart. Ends at zero.
 3. Regression suite size per cycle (step) with legit pass rate overlaid (flat line near baseline).
