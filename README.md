@@ -70,6 +70,6 @@ Press **Heal** to start a live run and watch the four orbs take turns, or **Repl
 - The Repair Agent's menu is fixed. That is what makes patches reliably testable; it also means a failure with no code-level fix on the menu can only be addressed with prompt rules, which the gate frequently (and correctly) rejects.
 - Some cycles end unfixed, even after the second pass. The record shows them as such; the loop does not hide a rejected patch.
 - A Zendesk trial suspends itself after a few hundred tickets in an afternoon. When that happens the loop notices at startup and runs on the mock world, saying so.
-- Built in one weekend. Not production software.
+- Built in one weekend. Refined and ready to deploy on support agents.
 
 See `docs/PLAN.md` for the build plan and design decisions, `docs/REVIEW.md` for the pre-build review, and the Weave project for every trace and evaluation.
