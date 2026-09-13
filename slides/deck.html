@@ -18,7 +18,7 @@
     --m: 112px;            /* page margin */
     --title-top: 84px;
     --content-top: 236px;  /* where content starts under the title rule */
-    --content-bottom: 120px;
+    --content-bottom: 80px;
   }
   * { box-sizing: border-box; margin: 0; padding: 0; }
   html, body { background: #000; }
@@ -35,7 +35,9 @@
 
   /* Faint theme: the real screenshot, desaturated and pushed down so it reads as texture. */
   .bg { position: absolute; inset: 0; pointer-events: none; }
-  .bg img { position: absolute; width: 1920px; height: 1080px; object-fit: cover; filter: grayscale(1) brightness(0.55) contrast(1.05); opacity: 0.22; }
+  .bg img { position: absolute; width: 1920px; height: 1080px; object-fit: cover; filter: grayscale(1) brightness(0.55) contrast(1.05); opacity: 0.22;
+    -webkit-mask-image: radial-gradient(ellipse 46% 46% at 50% 50%, #000 30%, rgba(0,0,0,0.6) 60%, transparent 100%);
+    mask-image: radial-gradient(ellipse 46% 46% at 50% 50%, #000 30%, rgba(0,0,0,0.6) 60%, transparent 100%); }
   .bg::after { content: ""; position: absolute; inset: 0;
     background:
       radial-gradient(1200px 700px at 18% 12%, rgba(255,255,255,0.05), transparent 60%),
@@ -92,10 +94,10 @@
   .gate li { color: rgba(255,255,255,0.9); font-size: 23px; }
 
   /* ---------- 4 · Next ---------- */
-  .path { position: absolute; left: var(--m); right: var(--m); top: 262px; height: 1px; background: var(--line); }
+  .path { position: absolute; left: var(--m); right: var(--m); top: 250px; height: 1px; background: var(--line); }
   .path i { position: absolute; top: -5px; width: 11px; height: 11px; border-radius: 50%; background: #fff; transform: translateX(-50%); box-shadow: 0 0 0 6px rgba(255,255,255,0.06); }
-  .grid3 { position: absolute; left: var(--m); right: var(--m); top: 318px; display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 24px; }
-  .grid3 .card { height: 500px; }
+  .grid3 { position: absolute; left: var(--m); right: var(--m); top: 306px; display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 24px; }
+  .grid3 .card { height: 560px; }
   .grid3 .inner { padding-top: 56px; }
   .grid3 .h { font-size: 44px; }
   .grid3 ul { margin-top: 34px; gap: 20px; }
@@ -119,7 +121,6 @@
   <div class="bg"><img src="backdrops/backdrop-3.png" alt="" style="transform: translate(360px, 140px) scale(1.15)" /></div>
   <div class="title">Four agents, one loop</div>
   <div class="kicker">How it works</div>
-  <div class="rule"></div>
 
   <div class="ring-wrap">
     <div class="ring">
@@ -151,8 +152,6 @@
       <div class="label l" style="left:-468px; top:150px"><small>05</small><b>Gate</b><span>Lets a fix through only if nothing else breaks.</span></div>
     </div>
   </div>
-  <div class="foot">Each pass leaves the agent harder to break and just as helpful as before.</div>
-  <div class="page">02 / 04</div>
 </section>
 
 <!-- 3 · What each agent does -->
@@ -160,7 +159,6 @@
   <div class="bg"><img src="backdrops/backdrop-2.png" alt="" style="transform: translate(560px, -80px) scale(1.2)" /></div>
   <div class="title">What each agent does</div>
   <div class="kicker">The team</div>
-  <div class="rule"></div>
 
   <div class="grid4">
     <div class="card"><div class="inner">
@@ -203,7 +201,6 @@
       <li>Anything less is rejected, and Repair tries again.</li>
     </ul>
   </div></div>
-  <div class="page">03 / 04</div>
 </section>
 
 <!-- 4 · Where this goes -->
@@ -211,7 +208,6 @@
   <div class="bg"><img src="backdrops/backdrop-4.png" alt="" style="transform: translate(420px, 120px) scale(1.1)" /></div>
   <div class="title">Where this goes</div>
   <div class="kicker">Next</div>
-  <div class="rule"></div>
 
   <div class="path"><i style="left:16.67%"></i><i style="left:50%"></i><i style="left:83.33%"></i></div>
   <div class="grid3">
@@ -240,8 +236,6 @@
       </ul>
     </div></div>
   </div>
-  <div class="claim">Every failure becomes a permanent test. Every patch has to pass all of them. Helpfulness never drops.</div>
-  <div class="page">04 / 04</div>
 </section>
 
 </body>
