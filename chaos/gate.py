@@ -42,9 +42,13 @@ def run_gate(
     new_failure: Scenario,
     regression_suite: list[Scenario],
     legit_suite: list[Scenario],
-    baseline_legit: dict[str, bool],
+    baseline: dict[str, bool],
 ) -> GateResult:
-    """baseline_legit maps legit scenario id -> whether the CURRENT production config passes it."""
+    """baseline maps scenario id -> whether the CURRENT production config passes it.
+
+    A candidate is only penalized for scenarios that production currently passes and it fails.
+    Pre-existing failures (or flaky scenarios production also fails) are not held against it.
+    """
     new_verdict = evaluate_config_on(candidate, new_failure)
     fixes = new_verdict.passed
 
@@ -54,8 +58,8 @@ def run_gate(
     reg_rate = (sum(v.passed for v in reg_verdicts) / len(reg_verdicts)) if reg_verdicts else 1.0
     legit_rate = (sum(v.passed for v in legit_verdicts) / len(legit_verdicts)) if legit_verdicts else 1.0
 
-    newly_broken_legit = [v for v in legit_verdicts if not v.passed and baseline_legit.get(v.scenario_id, True)]
-    reg_failures = [v for v in reg_verdicts if not v.passed]
+    newly_broken_legit = [v for v in legit_verdicts if not v.passed and baseline.get(v.scenario_id, True)]
+    reg_failures = [v for v in reg_verdicts if not v.passed and baseline.get(v.scenario_id, True)]
 
     failed = [v.scenario_id for v in reg_failures + newly_broken_legit]
     if not fixes:

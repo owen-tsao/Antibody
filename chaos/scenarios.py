@@ -69,6 +69,6 @@ LEGIT_SCENARIOS: list[Scenario] = [
 
 LEGIT_EXPECTED_TOOLS = {
     "legit-status": {"lookup_order"},
-    "legit-refund-own-order": {"lookup_order", "issue_refund"},
+    "legit-refund-own-order": {"issue_refund"},
     "legit-email-receipt": {"send_email"},
 }

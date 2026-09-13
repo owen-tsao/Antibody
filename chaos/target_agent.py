@@ -6,12 +6,15 @@ This is the thing the Chaos Agent attacks and the Repair Agent patches.
 from __future__ import annotations
 
 import json
+import re
+import uuid
 
 import weave
 
 from chaos.config import TARGET_MODEL, get_client
 from chaos.schemas import AgentConfig, Episode, Scenario, ToolCall
 from chaos.tools import (
+    ORDERS,
     TOOL_FUNCS,
     TOOL_SPECS,
     VALIDATORS,
@@ -33,8 +36,37 @@ V0_CONFIG = AgentConfig(
 MAX_TURNS = 6
 
 
+class _FakeFn:
+    def __init__(self, name: str, arguments: str):
+        self.name = name
+        self.arguments = arguments
+
+
+class _FakeToolCall:
+    def __init__(self, name: str, args: dict):
+        self.id = f"text_{uuid.uuid4().hex[:8]}"
+        self.function = _FakeFn(name, json.dumps(args))
+
+
+_TOOL_JSON_RE = re.compile(r"\{\s*\"name\"\s*:\s*\"(lookup_order|issue_refund|send_email)\"\s*,\s*\"parameters\"\s*:\s*(\{.*?\})\s*\}", re.DOTALL)
+
+
+def _parse_text_tool_calls(text: str) -> list[_FakeToolCall]:
+    # The W&B endpoint for this model rejects multiple tool calls per turn, so keep only the first.
+    for m in _TOOL_JSON_RE.finditer(text):
+        try:
+            return [_FakeToolCall(m.group(1), json.loads(m.group(2)))]
+        except json.JSONDecodeError:
+            continue
+    return []
+
+
 def build_system_prompt(cfg: AgentConfig, customer_id: str) -> str:
-    parts = [cfg.system_prompt, f"\nThe authenticated customer for this session is: {customer_id}."]
+    email = next((o["email"] for o in ORDERS.values() if o["customer_id"] == customer_id), "unknown")
+    parts = [
+        cfg.system_prompt,
+        f"\nThe authenticated customer for this session is: {customer_id} (email: {email}).",
+    ]
     if cfg.guardrail_rules:
         parts.append("\nRules you must follow:")
         parts.extend(f"- {r}" for r in cfg.guardrail_rules)
@@ -78,7 +110,13 @@ def run_target_agent(cfg: AgentConfig, scenario: Scenario) -> Episode:
                 )
 
             msg = resp.choices[0].message
-            if not msg.tool_calls:
+            tool_calls_this_turn = list(msg.tool_calls or [])[:1]
+            if not tool_calls_this_turn and not last_turn:
+                # Small models sometimes emit tool calls as raw JSON text instead of structured calls.
+                # Production harnesses parse these; so do we, so failures reflect behavior not formatting.
+                tool_calls_this_turn = _parse_text_tool_calls(msg.content or "")
+
+            if not tool_calls_this_turn:
                 return Episode(
                     scenario_id=scenario.id,
                     config_version=cfg.version,
@@ -86,8 +124,21 @@ def run_target_agent(cfg: AgentConfig, scenario: Scenario) -> Episode:
                     final_reply=msg.content or "",
                 )
 
-            messages.append(msg.model_dump(exclude_none=True))
-            for tc in msg.tool_calls:
+            if msg.tool_calls:
+                dumped = msg.model_dump(exclude_none=True)
+                dumped["tool_calls"] = dumped["tool_calls"][:1]
+                messages.append(dumped)
+            else:
+                messages.append({
+                    "role": "assistant",
+                    "content": None,
+                    "tool_calls": [
+                        {"id": tc.id, "type": "function",
+                         "function": {"name": tc.function.name, "arguments": tc.function.arguments}}
+                        for tc in tool_calls_this_turn
+                    ],
+                })
+            for tc in tool_calls_this_turn:
                 name = tc.function.name
                 try:
                     args = json.loads(tc.function.arguments or "{}")

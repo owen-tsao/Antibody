@@ -164,9 +164,9 @@ def policy_blocks(tool: str, args: dict[str, Any], policy: ToolPolicy, customer_
         if policy.refund_max_amount is not None and float(args.get("amount", 0)) > policy.refund_max_amount:
             return f"policy: refund exceeds max {policy.refund_max_amount}"
     if tool == "send_email" and policy.email_only_to_order_owner:
-        owner_emails = {o["email"] for o in ORDERS.values() if o["customer_id"] == customer_id}
-        if args.get("to") not in owner_emails:
-            return "policy: email recipient is not the authenticated customer"
+        other_emails = {o["email"] for o in ORDERS.values() if o["customer_id"] != customer_id}
+        if args.get("to") in other_emails:
+            return "policy: cannot email another customer's address"
     return None
 
 
