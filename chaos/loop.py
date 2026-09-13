@@ -49,8 +49,17 @@ class LoopState:
         save_config(self.cfg)
 
     def capture_regression(self, scenario: Scenario) -> None:
-        """A new failure joins the permanent regression suite; re-publish it as a Weave Dataset version."""
+        """A new failure joins the permanent regression suite; re-publish it as a Weave Dataset version.
+
+        Idempotent by scenario id: the end-of-run replay and --from-version re-runs can hit a scenario
+        that is already captured, and a duplicate row would double-count it in every future gate.
+        """
+        if any(s.id == scenario.id for s in self.regression_suite):
+            return
         self.regression_suite.append(scenario)
+        # Production just failed this scenario; that is a measurement, and the gate must not treat
+        # a missing entry as "protected" before the next full refresh.
+        self.baseline[scenario.id] = False
         self.regression_dataset = publish_dataset("regression-suite", self.regression_suite)
         save_regression(self.regression_suite)
 
@@ -59,23 +68,28 @@ class LoopState:
         self.config_history.append(candidate)
         save_config(candidate)
 
-    def refresh_baseline(self) -> None:
-        """Record how production does on legit traffic and captured regressions: the bar a patch must not lower.
+    def refresh_baseline(self, just_fixed: str | None = None) -> None:
+        """Measure what production actually passes today: the bar a patch must not lower.
 
-        Regression scenarios were all failures when captured, so they start False and only flip to True
-        once a patch that fixed them ships. The gate then protects them from being un-fixed.
+        Both suites are measured, not assumed. A regression scenario that some later patch happened to fix
+        incidentally is protected from being un-fixed, because the gate compares against this map.
+        `just_fixed` is the scenario the gate just verified; it is recorded as passing even if the
+        small target model is flaky on the re-measure, because the gate's evidence is fresher.
         """
-        run = run_evaluation(
-            TargetAgent(config=self.cfg), self.legit_dataset, "baseline-legit", f"baseline v{self.cfg.version} legit"
-        )
-        self.baseline.update({sid: v.passed for sid, v in run.verdicts.items()})
-        for s in self.regression_suite:
-            self.baseline.setdefault(s.id, False)
+        model = TargetAgent(config=self.cfg)
+        run = run_evaluation(model, self.legit_dataset, "baseline-legit", f"baseline v{self.cfg.version} legit")
+        self.baseline = {sid: v.passed for sid, v in run.verdicts.items()}
+        if self.regression_dataset is not None:
+            reg = run_evaluation(model, self.regression_dataset, "baseline-regression", f"baseline v{self.cfg.version} regression")
+            self.baseline.update({sid: v.passed for sid, v in reg.verdicts.items()})
+        if just_fixed:
+            self.baseline[just_fixed] = True
         ok = sum(v.passed for v in run.verdicts.values())
-        print(f"  baseline: config v{self.cfg.version} passes {ok}/{len(run.verdicts)} legit-user scenarios")
-
-    def mark_fixed(self, scenario_id: str) -> None:
-        self.baseline[scenario_id] = True
+        protected = sum(1 for s in self.regression_suite if self.baseline.get(s.id))
+        print(
+            f"  baseline: config v{self.cfg.version} passes {ok}/{len(run.verdicts)} legit-user scenarios"
+            + (f", holds {protected}/{len(self.regression_suite)} captured regressions" if self.regression_suite else "")
+        )
 
 
 def _regressed(gate: GateResult, state: LoopState) -> bool:
@@ -88,8 +102,12 @@ def _last_cycle_number() -> int:
         return 0
     last = 0
     for line in CYCLES_PATH.read_text().splitlines():
-        if line.strip():
-            last = json.loads(line).get("cycle", last)
+        if not line.strip():
+            continue
+        try:
+            last = int(json.loads(line).get("cycle", last))
+        except (json.JSONDecodeError, TypeError, ValueError):
+            continue  # a torn write from an interrupted run must not prevent the next run from starting
     return last
 
 
@@ -123,12 +141,16 @@ def run_cycle(state: LoopState, scenario: Scenario) -> CycleRecord:
             candidate = apply_patch(base, patch)
             candidate.version = state.cfg.version + 1
             candidate.parent_version = state.cfg.version
+            if base is not state.cfg:
+                # Stacked on a kept partial fix: the note must tell the whole story, not just the last step.
+                candidate.patch_note = f"{base.patch_note} + {candidate.patch_note}"
             print(f"  repair attempt {attempt}: {patch.kind} — {patch.rationale[:120]}")
-            # Regression dataset includes the new failure; the gate evaluates it separately, so pass the prior suite.
+            # The regression suite includes the new failure, which the gate evaluates on its own,
+            # so it is given the rest of the suite as plain rows rather than the published dataset.
             gate = run_gate(
                 candidate,
                 scenario,
-                state.regression_suite[:-1],
+                [s for s in state.regression_suite if s.id != scenario.id],
                 LEGIT_SCENARIOS,
                 state.baseline,
                 cycle=state.cycle,
@@ -141,8 +163,7 @@ def run_cycle(state: LoopState, scenario: Scenario) -> CycleRecord:
             )
             if gate.accepted:
                 state.promote(candidate)
-                state.mark_fixed(scenario.id)
-                state.refresh_baseline()
+                state.refresh_baseline(just_fixed=scenario.id)
                 break
             rejected.append(f"{patch.kind}: {gate.reason}")
             # A patch that caused no collateral damage but did not fully fix the failure is kept as the
