@@ -2,6 +2,7 @@ import { AnimatePresence, motion, useReducedMotion } from "framer-motion";
 import { useState } from "react";
 
 import CycleTimeline from "@/components/CycleTimeline";
+import { MetalFrame } from "@/components/ui/liquid-metal-border";
 import { fmtTime, type CycleResult, type CycleView } from "@/lib/derive";
 import { cn } from "@/lib/utils";
 
@@ -23,7 +24,7 @@ export default function CyclesBox({ views }: { views: CycleView[] }) {
   const [picked, setPicked] = useState<number | null>(null);
 
   // `picked === null` means "follow the newest".
-  const current = picked !== null ? views.find((v) => v.cycle === picked) ?? views[0] : views[0];
+  const current = picked !== null ? (views.find((v) => v.cycle === picked) ?? views[0]) : views[0];
 
   // Direction of travel, derived during render (not in an effect) so it is right on the very
   // render in which the key changes. AnimatePresence passes it to the exiting panel via `custom`,
@@ -41,86 +42,88 @@ export default function CyclesBox({ views }: { views: CycleView[] }) {
   const behind = picked !== null && newest !== null && newest !== picked && views.some((v) => v.cycle === picked);
 
   return (
-    <section className="rounded-lg border border-[var(--border)]">
-      <div className="flex items-center justify-between gap-4 border-b border-[var(--border)] px-3 py-2">
-        <CycleTabs
-          views={views}
-          current={current.cycle}
-          onPick={(c) => setPicked(c === newest ? null : c)}
-        />
-        <AnimatePresence>
-          {behind && (
-            <motion.button
-              type="button"
-              initial={{ opacity: 0, x: 6 }}
-              animate={{ opacity: 1, x: 0 }}
-              exit={{ opacity: 0 }}
-              onClick={() => setPicked(null)}
-              className="mr-1 whitespace-nowrap text-[12px] text-[var(--muted)] hover:text-[var(--fg)]"
-            >
-              latest →
-            </motion.button>
-          )}
-        </AnimatePresence>
-      </div>
+    // The box's edge is a liquid-metal rim (ui/liquid-metal-border). The shader canvas is the box's
+    // full size, so its pixel budget is capped: the rim is 1.5 px and does not need 2x detail.
+    <MetalFrame radius={8} thickness={1.5} maxPixelCount={400_000} innerClassName="overflow-hidden">
+      <section>
+        <div className="flex items-center justify-between gap-4 border-b border-[var(--border)] px-3 py-2">
+          <CycleTabs views={views} current={current.cycle} onPick={(c) => setPicked(c === newest ? null : c)} />
+          <AnimatePresence>
+            {behind && (
+              <motion.button
+                type="button"
+                initial={{ opacity: 0, x: 6 }}
+                animate={{ opacity: 1, x: 0 }}
+                exit={{ opacity: 0 }}
+                onClick={() => setPicked(null)}
+                className="mr-1 whitespace-nowrap text-[12px] text-[var(--muted)] hover:text-[var(--fg)]"
+              >
+                latest →
+              </motion.button>
+            )}
+          </AnimatePresence>
+        </div>
 
-      <div className="relative overflow-hidden">
-        <AnimatePresence mode="wait" initial={false} custom={dir}>
-          <motion.div
-            key={current.cycle}
-            custom={dir}
-            variants={{
-              enter: (d: number) => (reduced ? { opacity: 0 } : { opacity: 0, x: 32 * d }),
-              center: { opacity: 1, x: 0 },
-              exit: (d: number) => (reduced ? { opacity: 0 } : { opacity: 0, x: -24 * d }),
-            }}
-            initial="enter"
-            animate="center"
-            exit="exit"
-            transition={{ duration: 0.28, ease: [0.2, 0.65, 0.3, 0.9] }}
-            className="px-8 pb-8 pt-7"
-          >
-            <header className="flex flex-wrap items-start justify-between gap-x-8 gap-y-2">
-              <div className="min-w-0 flex-1">
-                <div className="tabular flex flex-wrap items-center gap-x-2.5 text-[12px] text-[var(--faint)]">
-                  <span>{current.name}</span>
-                  {current.kind && (
-                    <>
-                      <span>·</span>
-                      <span>{current.kind}</span>
-                    </>
-                  )}
-                  {current.timestamp && (
-                    <>
-                      <span>·</span>
-                      <span>{fmtTime(current.timestamp)}</span>
-                    </>
+        <div className="relative overflow-hidden">
+          <AnimatePresence mode="wait" initial={false} custom={dir}>
+            <motion.div
+              key={current.cycle}
+              custom={dir}
+              variants={{
+                enter: (d: number) => (reduced ? { opacity: 0 } : { opacity: 0, x: 32 * d }),
+                center: { opacity: 1, x: 0 },
+                exit: (d: number) => (reduced ? { opacity: 0 } : { opacity: 0, x: -24 * d }),
+              }}
+              initial="enter"
+              animate="center"
+              exit="exit"
+              transition={{ duration: 0.28, ease: [0.2, 0.65, 0.3, 0.9] }}
+              className="px-8 pb-8 pt-7"
+            >
+              <header className="flex flex-wrap items-start justify-between gap-x-8 gap-y-2">
+                <div className="min-w-0 flex-1">
+                  <div className="tabular flex flex-wrap items-center gap-x-2.5 text-[12px] text-[var(--faint)]">
+                    <span>{current.name}</span>
+                    {current.kind && (
+                      <>
+                        <span>·</span>
+                        <span>{current.kind}</span>
+                      </>
+                    )}
+                    {current.timestamp && (
+                      <>
+                        <span>·</span>
+                        <span>{fmtTime(current.timestamp)}</span>
+                      </>
+                    )}
+                  </div>
+                  <h2 className="mt-1.5 max-w-[46ch] text-[18px] font-medium leading-snug tracking-[-0.01em]">
+                    {current.title}
+                  </h2>
+                  {current.message && (
+                    <p className="mt-2 max-w-[64ch] text-[13px] leading-[1.6] text-[var(--muted)]">
+                      “{current.message}”
+                    </p>
                   )}
                 </div>
-                <h2 className="mt-1.5 max-w-[46ch] text-[18px] font-medium leading-snug tracking-[-0.01em]">
-                  {current.title}
-                </h2>
-                {current.message && (
-                  <p className="mt-2 max-w-[64ch] text-[13px] leading-[1.6] text-[var(--muted)]">“{current.message}”</p>
-                )}
-              </div>
-              <div className="tabular flex shrink-0 items-center gap-3 pt-0.5 text-[13px]">
-                <span className="flex items-center gap-2 text-[var(--muted)]">
-                  <span className="h-1.5 w-1.5 rounded-full" style={{ background: RESULT_DOT[current.result] }} />
-                  {current.result}
-                </span>
-                <span className="text-[var(--faint)]">·</span>
-                <span className="text-[var(--fg)]">{current.versions}</span>
-              </div>
-            </header>
+                <div className="tabular flex shrink-0 items-center gap-3 pt-0.5 text-[13px]">
+                  <span className="flex items-center gap-2 text-[var(--muted)]">
+                    <span className="h-1.5 w-1.5 rounded-full" style={{ background: RESULT_DOT[current.result] }} />
+                    {current.result}
+                  </span>
+                  <span className="text-[var(--faint)]">·</span>
+                  <span className="text-[var(--fg)]">{current.versions}</span>
+                </div>
+              </header>
 
-            <div className="mt-7 border-t border-[var(--border)] pt-7">
-              <CycleTimeline steps={current.steps} />
-            </div>
-          </motion.div>
-        </AnimatePresence>
-      </div>
-    </section>
+              <div className="mt-7 border-t border-[var(--border)] pt-7">
+                <CycleTimeline steps={current.steps} />
+              </div>
+            </motion.div>
+          </AnimatePresence>
+        </div>
+      </section>
+    </MetalFrame>
   );
 }
 

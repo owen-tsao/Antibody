@@ -1,11 +1,12 @@
-import { AnimatePresence } from "framer-motion";
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { AnimatePresence, motion, useReducedMotion } from "framer-motion";
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 
 import { api, type Status } from "@/api";
 import BackLink, { ForwardLink } from "@/components/BackLink";
 import CyclesBox from "@/components/CyclesBox";
 import ErrorBoundary from "@/components/ErrorBoundary";
 import ReplayControls from "@/components/ReplayControls";
+import { MetalFrame } from "@/components/ui/liquid-metal-border";
 import { Orb } from "@/components/ui/orb";
 import { useDwell } from "@/hooks/useDwell";
 import { usePoll } from "@/hooks/usePoll";
@@ -175,26 +176,31 @@ export default function Agents({
           )}
         </header>
 
-        {/* The run's numbers sit directly over the four agents they describe, centred with them. */}
+        {/* The run's numbers sit directly over the four agents they describe, centred with them, in
+            the same shell as the cycles box: black surface, liquid-metal rim, white words. */}
         <section className="mt-10">
           {!loading && !unreachable && (
-            <p className="tabular mb-6 text-center text-[13px] text-[var(--muted)]">
-              {sum.cycles === 0 ? (
-                running ? "measuring baseline…" : "no cycles yet"
-              ) : (
-                <>
-                  <Stat n={sum.accepted} label="patches accepted" />
-                  <Sep />
-                  <Stat n={sum.rejected} label="rejected" />
-                  <Sep />
-                  <Stat n={sum.blocked} label={sum.blocked === 1 ? "attack blocked" : "attacks blocked"} />
-                  <Sep />
-                  <Stat n={sum.suiteSize} label={sum.suiteSize === 1 ? "test in suite" : "tests in suite"} />
-                  <Sep />
-                  legit users <span className="text-[var(--fg)]">{sum.legit}</span>
-                </>
-              )}
-            </p>
+            <div className="mb-8 flex justify-center">
+              <StatsPlate stateKey={sum.cycles === 0 ? (running ? "measuring" : "none") : "stats"}>
+                {sum.cycles === 0 ? (
+                  running ? "measuring baseline…" : "no cycles yet"
+                ) : (
+                  <>
+                    <Stat n={sum.accepted} label="patches accepted" />
+                    <Sep />
+                    <Stat n={sum.rejected} label="rejected" />
+                    <Sep />
+                    <Stat n={sum.blocked} label={sum.blocked === 1 ? "attack blocked" : "attacks blocked"} />
+                    <Sep />
+                    <Stat n={sum.suiteSize} label={sum.suiteSize === 1 ? "test in suite" : "tests in suite"} />
+                    <Sep />
+                    <span>
+                      legit users <span className="font-medium">{sum.legit}</span>
+                    </span>
+                  </>
+                )}
+              </StatsPlate>
+            </div>
           )}
 
           {/* Four agents. The gate is not an agent: it is step five inside the cycles box. Kept
@@ -250,14 +256,66 @@ export default function Agents({
   );
 }
 
+const PLATE_PAD_X = 20; // px-5 on the inner surface
+const PLATE_RIM = 1.5;
+
+/**
+ * The stats plate. Its content changes shape once ("measuring baseline…" → the five numbers, and
+ * again whenever a count grows a digit), so the frame's width is animated rather than snapped: the
+ * text is laid out at its natural width inside the clipped frame, a ResizeObserver reports that
+ * width, and the frame springs to it. The words themselves crossfade on `stateKey` so the new line
+ * does not appear mid-stretch. `initial={false}` keeps the first paint from growing out of nothing.
+ */
+function StatsPlate({ stateKey, children }: { stateKey: string; children: React.ReactNode }) {
+  const reduced = useReducedMotion();
+  const measure = useRef<HTMLSpanElement | null>(null);
+  const [width, setWidth] = useState<number | null>(null);
+
+  useLayoutEffect(() => {
+    const el = measure.current;
+    if (!el) return;
+    const read = () => setWidth(el.offsetWidth + 2 * PLATE_PAD_X + 2 * PLATE_RIM);
+    read();
+    const ro = new ResizeObserver(read);
+    ro.observe(el);
+    return () => ro.disconnect();
+  }, []);
+
+  return (
+    <motion.div
+      className="max-w-full"
+      initial={false}
+      animate={width !== null ? { width } : undefined}
+      transition={reduced ? { duration: 0 } : { type: "spring", stiffness: 240, damping: 30, mass: 0.9 }}
+    >
+      <MetalFrame radius={8} thickness={PLATE_RIM} innerClassName="overflow-hidden px-5 py-2.5">
+        <span ref={measure} className="tabular inline-flex w-max whitespace-nowrap text-[13px] leading-none text-[var(--fg)]">
+          <AnimatePresence mode="wait" initial={false}>
+            <motion.span
+              key={stateKey}
+              className="inline-flex items-baseline gap-x-2.5"
+              initial={{ opacity: 0 }}
+              animate={{ opacity: 1 }}
+              exit={{ opacity: 0 }}
+              transition={{ duration: reduced ? 0 : 0.16 }}
+            >
+              {children}
+            </motion.span>
+          </AnimatePresence>
+        </span>
+      </MetalFrame>
+    </motion.div>
+  );
+}
+
 function Stat({ n, label }: { n: number; label: string }) {
   return (
-    <>
-      <span className="text-[var(--fg)]">{n}</span> {label}
-    </>
+    <span>
+      <span className="font-medium">{n}</span> {label}
+    </span>
   );
 }
 
 function Sep() {
-  return <span className="mx-2 text-[var(--faint)]">·</span>;
+  return <span className="text-[var(--faint)]">·</span>;
 }
