@@ -431,8 +431,10 @@ export default function InteractiveListPreview({
     if (x + w > b.width) x = px - CURSOR_GAP_PX - w;
     x = Math.min(Math.max(x, 0), Math.max(0, b.width - w));
 
+    // Clamped to the viewport, not the list: a short list may be shorter than the card, and the
+    // section no longer clips, so the card may extend past the last row.
     const minY = Math.max(0, VIEWPORT_MARGIN_PX - b.top);
-    const maxY = Math.min(b.height - h, window.innerHeight - VIEWPORT_MARGIN_PX - b.top - h);
+    const maxY = window.innerHeight - VIEWPORT_MARGIN_PX - b.top - h;
     let y = py - h / 2;
     y = Math.min(Math.max(y, minY), Math.max(minY, maxY));
 
@@ -461,14 +463,13 @@ export default function InteractiveListPreview({
 
   return (
     <section
-      className={`relative w-full overflow-hidden text-white ${className}`}
+      className={`relative w-full text-white ${className}`}
       style={{ backgroundColor: bgColor }}
       onMouseMove={handleContainerMouseMove}
       onMouseLeave={handleContainerMouseLeave}
     >
       <div className="relative z-10 mx-auto w-full max-w-6xl px-6 pb-2 pt-3 md:px-10">
-        {/* min-h keeps a one-row list tall enough to hold the card. */}
-        <div ref={wrapRef} className="relative min-h-[19rem]">
+        <div ref={wrapRef} className="relative">
           {/* The bar bleeds 20px past the table on both ends so hovered text never sits on its edge. */}
           <div
             ref={highlightRef}
