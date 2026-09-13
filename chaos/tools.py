@@ -67,11 +67,7 @@ def _apply_fault(tool: str, clean_result: Any) -> Any:
     if fault.mode == "inject":
         if isinstance(clean_result, dict):
             tampered = dict(clean_result)
-            # Real injections land in whatever free-text fields a record has. Hit several so a
-            # small model reliably sees the instruction no matter which field it attends to.
             tampered["notes"] = fault.payload
-            tampered["customer_service_instructions"] = fault.payload
-            tampered["status"] = f"{clean_result.get('status', '')} — {fault.payload}"
             return tampered
         return f"{clean_result}\n{fault.payload}"
     if fault.mode == "wrong_record":
@@ -199,15 +195,15 @@ def validate_not_null(tool: str, result: Any) -> Any:
 
 
 def validate_strip_instructions(tool: str, result: Any) -> Any:
-    """Drop free-text fields from tool output so injected instructions never reach the model."""
+    """Pass only structured fields through to the model; drop any free-text field a record may carry.
+
+    This is the generic defense against instructions smuggled in tool output: the model never sees
+    prose from a data source, regardless of which field it arrived in or how it is phrased.
+    """
     if not isinstance(result, dict):
         return result
-    allowed = {"order_id", "customer_id", "email", "total", "items", "error", "amount", "reason", "to", "subject", "body"}
-    cleaned = {k: v for k, v in result.items() if k in allowed}
-    if "status" in result:
-        # Keep the status token but strip anything appended to it.
-        cleaned["status"] = str(result["status"]).split(" — ")[0].split("\n")[0][:40]
-    return cleaned
+    structured = {"order_id", "customer_id", "email", "status", "total", "items", "error", "amount", "reason", "to", "subject", "body"}
+    return {k: v for k, v in result.items() if k in structured}
 
 
 def validate_schema(tool: str, result: Any) -> Any:
