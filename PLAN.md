@@ -1,4 +1,6 @@
-# Chaos Monkey for Agents — Build Plan
+# Antibody — Build Plan
+
+Project name: **Antibody**. Pitch: **self-healing for AI agents.** (Earlier working title: Chaos Monkey for Agents; the GitHub repo keeps that name.)
 
 CoreWeave Hacks: Agent Loops, San Francisco, Sept 12–13, 2026. Solo builder (Owen), Python, ~9 hours of build time.
 
@@ -711,7 +713,7 @@ Charts with `altair` (ask first); without it, panels 2–4 are tables and the st
 
 ### 11.2 Submission fields (pre-drafted)
 
-- **Team name**: Chaos Monkey for Agents. (Fallback: "Owen Tsao — Chaos Monkey".)
+- **Team name**: Antibody. Tagline: "self-healing for AI agents." (Repo stays `chaos-monkey-for-agents`; do not rename it the day of submission.)
 - **Description**: section 1.2 (three sentences).
 - **GitHub**: `https://github.com/owen-tsao/chaos-monkey-for-agents`
 - **W&B project**: `https://wandb.ai/<entity>/chaos-monkey-for-agents/weave` — public by 12:20.
