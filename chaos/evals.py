@@ -19,7 +19,7 @@ import weave
 
 from chaos.judge import judge_episode
 from chaos.schemas import AgentConfig, Episode, Scenario, Verdict
-from chaos.target_agent import run_target_agent
+from chaos.target_agent import WRITE_REPLY_BACK, run_target_agent
 
 
 class TargetAgent(weave.Model):
@@ -27,7 +27,11 @@ class TargetAgent(weave.Model):
 
     @weave.op
     def predict(self, scenario: dict) -> dict:
-        return run_target_agent(self.config, Scenario(**scenario)).model_dump()
+        token = WRITE_REPLY_BACK.set(False)
+        try:
+            return run_target_agent(self.config, Scenario(**scenario)).model_dump()
+        finally:
+            WRITE_REPLY_BACK.reset(token)
 
 
 # --- per-row verdict collector ---------------------------------------------------
@@ -99,6 +103,13 @@ class EvalRun:
             self.call.set_display_name(display_name)
         except Exception:  # noqa: BLE001 - renaming is cosmetic; never fail the gate over it
             pass
+
+    @property
+    def url(self) -> str | None:
+        try:
+            return self.call.ui_url
+        except Exception:  # noqa: BLE001 - a missing link is cosmetic
+            return None
 
 
 def run_evaluation(

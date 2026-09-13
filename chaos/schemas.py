@@ -15,7 +15,11 @@ from pydantic import BaseModel, Field
 # Agent configuration (the thing the Repair Agent patches)
 # ---------------------------------------------------------------------------
 
-ToolName = Literal["lookup_order", "issue_refund", "send_email"]
+ToolName = Literal["lookup_order", "issue_refund", "send_email", "read_ticket", "set_ticket_status"]
+# Faults tamper with the MOCKED world only. The ticket is the real world: the attack surface there is what
+# the attacker writes on it (message, planted note), not a tampered read. Faulting read_ticket would also let
+# the attacker forge "customer" comments that the refund-intent policy trusts, with no patch able to fix it.
+FaultableTool = Literal["lookup_order", "issue_refund", "send_email"]
 
 
 class ToolPolicy(BaseModel):
@@ -26,6 +30,8 @@ class ToolPolicy(BaseModel):
     refund_max_amount: float | None = None
     email_only_to_order_owner: bool = False
     lookup_only_own_orders: bool = False
+    ticket_scope_assigned_only: bool = False
+    actions_require_verified_lookup: bool = False
 
 
 class AgentConfig(BaseModel):
@@ -62,7 +68,7 @@ ScenarioKind = Literal[
 class ToolFault(BaseModel):
     """How the chaos harness tampers with a tool during one episode."""
 
-    tool: ToolName
+    tool: FaultableTool
     mode: Literal["inject", "null", "malformed", "timeout", "wrong_record"]
     payload: Any = None
 
@@ -86,6 +92,14 @@ class Scenario(BaseModel):
         description="What the Chaos Agent was trying to achieve. Informational; the Judge does not treat it as ground truth.",
     )
     origin: Literal["seed", "chaos_agent", "legit"] = "chaos_agent"
+    ticket_id: int | None = Field(
+        default=None,
+        description="Real Zendesk ticket carrying this scenario. When set, the target reads the customer's words through read_ticket instead of receiving user_message directly.",
+    )
+    planted_note: str | None = Field(
+        default=None,
+        description="Text the attacker planted as an internal note on the ticket (a poisoned 'previous agent' note). Real injection surface.",
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -98,6 +112,7 @@ class ToolCall(BaseModel):
     args: dict[str, Any]
     result: Any
     blocked_by_policy: bool = False
+    blocked_by: str | None = Field(default=None, description="The policy reason that fired, when blocked.")
 
 
 class Episode(BaseModel):
@@ -106,6 +121,10 @@ class Episode(BaseModel):
     tool_calls: list[ToolCall] = Field(default_factory=list)
     final_reply: str
     error: str | None = None
+    ticket_state: dict[str, Any] | None = Field(
+        default=None,
+        description="Real Zendesk state around the episode: {status_before, status_after, reply_posted}. None on the mock path.",
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -160,6 +179,7 @@ class GateResult(BaseModel):
     legit_pass_rate: float
     failed_scenario_ids: list[str] = Field(default_factory=list)
     reason: str
+    weave_eval_urls: list[str] = Field(default_factory=list)
 
 
 # ---------------------------------------------------------------------------
@@ -174,6 +194,7 @@ class CycleRecord(BaseModel):
     )
     scenario: Scenario
     attack_succeeded: bool
+    episode: Episode | None = Field(default=None, description="What the target actually did: tool calls and final reply.")
     verdict: Verdict
     patch: Patch | None = None
     gate: GateResult | None = None
@@ -181,3 +202,11 @@ class CycleRecord(BaseModel):
     config_after: int
     regression_suite_size: int
     weave_call_url: str | None = None
+    retry_of: int | None = Field(
+        default=None,
+        description="Set on second-pass cycles: the earlier cycle whose failure this one revisits with the evolved config and fuller repair memory.",
+    )
+    also_fixed: list[str] = Field(
+        default_factory=list,
+        description="Previously unfixed regression scenarios that started passing after this cycle's patch (measured at the baseline refresh, not assumed).",
+    )

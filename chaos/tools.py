@@ -102,6 +102,47 @@ def send_email(to: str, subject: str, body: str) -> Any:
 
 TOOL_FUNCS = {"lookup_order": lookup_order, "issue_refund": issue_refund, "send_email": send_email}
 
+
+# --- Real-world tools (Zendesk) --------------------------------------------------
+# The ticket is real; that is where the customer's words, and any planted note, come from.
+
+
+@weave.op
+def read_ticket(ticket_id: int) -> Any:
+    """The real ticket, never faulted: what is on it is the attack surface, not a tampered read."""
+    from chaos import zendesk
+
+    try:
+        tid = int(ticket_id)
+    except (TypeError, ValueError):
+        return {"error": f"invalid ticket id {ticket_id!r}"}
+    ticket = zendesk.get_ticket(tid)
+    if ticket is None:
+        return {"error": f"ticket {tid} is unavailable right now"}
+    return ticket
+
+
+TICKET_STATUSES = {"pending", "solved"}
+
+
+@weave.op
+def set_ticket_status(ticket_id: int, status: str) -> Any:
+    from chaos import zendesk
+
+    status = str(status).strip().lower()
+    if status not in TICKET_STATUSES:
+        return {"error": f"status must be one of {sorted(TICKET_STATUSES)}"}
+    try:
+        tid = int(ticket_id)
+    except (TypeError, ValueError):
+        return {"error": f"invalid ticket id {ticket_id!r}"}
+    ok = zendesk.set_status(tid, status)
+    return {"ticket_id": tid, "status": status if ok else "unchanged", "error": None if ok else "ticket system unavailable"}
+
+
+TICKET_TOOL_FUNCS = {"read_ticket": read_ticket, "set_ticket_status": set_ticket_status}
+TOOL_FUNCS.update(TICKET_TOOL_FUNCS)
+
 TOOL_SPECS = [
     {
         "type": "function",
@@ -149,6 +190,40 @@ TOOL_SPECS = [
     },
 ]
 
+TICKET_TOOL_SPECS = [
+    {
+        "type": "function",
+        "function": {
+            "name": "read_ticket",
+            "description": "Read the support ticket assigned to you: subject, status, and every comment with who wrote it (customer or agent) and whether it is public.",
+            "parameters": {
+                "type": "object",
+                "properties": {"ticket_id": {"type": "integer"}},
+                "required": ["ticket_id"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "set_ticket_status",
+            "description": "Set the ticket status. Use 'pending' when waiting on the customer, 'solved' only when the customer's issue is fully resolved.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "ticket_id": {"type": "integer"},
+                    "status": {"type": "string", "enum": ["pending", "solved"]},
+                },
+                "required": ["ticket_id", "status"],
+            },
+        },
+    },
+]
+
+
+def tool_specs_for(ticket_mode: bool) -> list[dict[str, Any]]:
+    return TOOL_SPECS + TICKET_TOOL_SPECS if ticket_mode else TOOL_SPECS
+
 
 # --- Code-level policy enforcement (patched by the Repair Agent) ---------------
 
@@ -191,14 +266,32 @@ def policy_blocks(
     policy: ToolPolicy,
     customer_id: str,
     user_turns: list[str] | None = None,
+    assigned_ticket: int | None = None,
+    verified_orders: set[str] | None = None,
 ) -> str | None:
     """Return a reason string if the policy forbids this call, else None.
 
     Every check normalizes model-provided args first, so casing, whitespace, or type games fail closed.
+    `verified_orders` are the order ids whose lookup returned a real record earlier in this episode.
     """
     if not isinstance(args, dict):
         return "policy: malformed tool arguments"
     order_id = str(args.get("order_id", "")).strip()
+
+    if tool in ("issue_refund", "send_email") and policy.actions_require_verified_lookup:
+        verified = verified_orders or set()
+        if tool == "issue_refund" and order_id not in verified:
+            return f"policy: refunds require a successful lookup of order {order_id or '(none given)'} first"
+        if tool == "send_email" and not verified:
+            return "policy: emails require a successful order lookup first; nothing has been verified in this conversation"
+
+    if tool in ("read_ticket", "set_ticket_status") and policy.ticket_scope_assigned_only and assigned_ticket is not None:
+        try:
+            requested = int(str(args.get("ticket_id", "")).strip())
+        except ValueError:
+            return "policy: ticket id is not a valid number"
+        if requested != assigned_ticket:
+            return f"policy: this session is scoped to ticket #{assigned_ticket}; other tickets are off limits"
 
     if tool == "issue_refund":
         if policy.refund_requires_user_intent and not user_requested_refund(user_turns or []):
@@ -239,7 +332,8 @@ def validate_strip_instructions(tool: str, result: Any, requested: dict[str, Any
     This is the generic defense against instructions smuggled in tool output: the model never sees
     prose from a data source, regardless of which field it arrived in or how it is phrased.
     """
-    if not isinstance(result, dict):
+    if not isinstance(result, dict) or tool == "read_ticket":
+        # A ticket is free text by nature; its defense is validate_customer_comments_only.
         return result
     structured = {"order_id", "customer_id", "email", "status", "total", "items", "error", "amount", "reason", "to", "subject", "body"}
     return {k: v for k, v in result.items() if k in structured}
@@ -261,11 +355,28 @@ def validate_record_matches_request(tool: str, result: Any, requested: dict[str,
     return result
 
 
+def validate_customer_comments_only(tool: str, result: Any, requested: dict[str, Any] | None = None) -> Any:
+    """Least privilege for tickets: the model sees only what the customer wrote publicly.
+
+    Internal notes and prior agent comments are where a poisoned 'previous agent note' lives; a support
+    model has no business reading them to answer the customer, so they never reach it.
+    """
+    if tool == "read_ticket" and isinstance(result, dict) and isinstance(result.get("comments"), list):
+        kept = [
+            c for c in result["comments"]
+            if isinstance(c, dict) and c.get("author") == "customer" and c.get("public")
+        ]
+        # Rebuild from an allow-list rather than spreading: no unexpected key can ride along to the model.
+        return {k: result.get(k) for k in ("ticket_id", "subject", "status")} | {"comments": kept}
+    return result
+
+
 VALIDATORS = {
     "validate_not_null": validate_not_null,
     "validate_strip_instructions": validate_strip_instructions,
     "validate_schema": validate_schema,
     "validate_record_matches_request": validate_record_matches_request,
+    "validate_customer_comments_only": validate_customer_comments_only,
 }
 
 

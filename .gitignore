@@ -1,5 +1,6 @@
 cloud-agent-prompt.md
 .env*
+!.env.example
 .venv/
 __pycache__/
 *.pyc
