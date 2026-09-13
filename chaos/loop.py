@@ -14,33 +14,50 @@ from pathlib import Path
 import weave
 
 from chaos.chaos_agent import generate_scenario
-from chaos.config import ENTITY_PROJECT, ROOT
+from chaos.config import ENTITY_PROJECT
 from chaos.evals import TargetAgent, publish_dataset, run_evaluation
 from chaos.gate import run_gate
 from chaos.judge import judge_episode
 from chaos.repair_agent import apply_patch, propose_patch
 from chaos.scenarios import LEGIT_SCENARIOS, SEED_SCENARIOS
 from chaos.schemas import AgentConfig, CycleRecord, GateResult, Scenario
+from chaos.state import (
+    CYCLES_PATH,
+    load_config,
+    load_regression,
+    reset,
+    save_config,
+    save_regression,
+    snapshot_golden,
+)
 from chaos.target_agent import V0_CONFIG, run_target_agent
 
-CYCLES_PATH = ROOT / "cycles.jsonl"
 MAX_REPAIR_ATTEMPTS = 3
 
 
 class LoopState:
-    def __init__(self, cfg: AgentConfig | None = None):
+    def __init__(self, cfg: AgentConfig | None = None, regression_suite: list[Scenario] | None = None):
         self.cfg = cfg or V0_CONFIG
-        self.regression_suite: list[Scenario] = []
-        self.cycle = 0
+        self.regression_suite: list[Scenario] = list(regression_suite or [])
+        self.cycle = _last_cycle_number()
         self.config_history: list[AgentConfig] = [self.cfg]
         self.baseline: dict[str, bool] = {}
         self.legit_dataset = publish_dataset("legit-users", LEGIT_SCENARIOS)
-        self.regression_dataset: weave.Dataset | None = None
+        self.regression_dataset: weave.Dataset | None = (
+            publish_dataset("regression-suite", self.regression_suite) if self.regression_suite else None
+        )
+        save_config(self.cfg)
 
     def capture_regression(self, scenario: Scenario) -> None:
         """A new failure joins the permanent regression suite; re-publish it as a Weave Dataset version."""
         self.regression_suite.append(scenario)
         self.regression_dataset = publish_dataset("regression-suite", self.regression_suite)
+        save_regression(self.regression_suite)
+
+    def promote(self, candidate: AgentConfig) -> None:
+        self.cfg = candidate
+        self.config_history.append(candidate)
+        save_config(candidate)
 
     def refresh_baseline(self) -> None:
         """Record how production does on legit traffic and captured regressions: the bar a patch must not lower.
@@ -64,6 +81,16 @@ class LoopState:
 def _regressed(gate: GateResult, state: LoopState) -> bool:
     """True if the gate found a scenario that production passes but the candidate fails."""
     return any(state.baseline.get(sid, False) for sid in gate.failed_scenario_ids)
+
+
+def _last_cycle_number() -> int:
+    if not CYCLES_PATH.exists():
+        return 0
+    last = 0
+    for line in CYCLES_PATH.read_text().splitlines():
+        if line.strip():
+            last = json.loads(line).get("cycle", last)
+    return last
 
 
 def _log_cycle(record: CycleRecord) -> None:
@@ -113,8 +140,7 @@ def run_cycle(state: LoopState, scenario: Scenario) -> CycleRecord:
                 f"(fixes={gate.fixes_new_failure}, regression={gate.regression_pass_rate:.0%}, legit={gate.legit_pass_rate:.0%}) — {gate.reason}"
             )
             if gate.accepted:
-                state.cfg = candidate
-                state.config_history.append(candidate)
+                state.promote(candidate)
                 state.mark_fixed(scenario.id)
                 state.refresh_baseline()
                 break
@@ -144,18 +170,51 @@ def main() -> None:
     import argparse
     import logging
 
-    parser = argparse.ArgumentParser(description="Run the Chaos Monkey self-healing loop")
-    parser.add_argument("--chaos-cycles", type=int, default=3, help="how many novel scenarios the Chaos Agent should invent after the seeds")
-    parser.add_argument("--no-seeds", action="store_true", help="skip the hand-written seed scenarios")
+    parser = argparse.ArgumentParser(prog="chaos.loop", description="Antibody: the self-healing loop for AI agents")
+    sub = parser.add_subparsers(dest="command")
+
+    run_p = sub.add_parser("run", help="run the loop (default)")
+    run_p.add_argument("--chaos-cycles", type=int, default=3, help="novel scenarios the Chaos Agent should invent after the seeds")
+    run_p.add_argument("--no-seeds", action="store_true", help="skip the hand-written seed scenarios")
+    run_p.add_argument(
+        "--from-version", type=int, default=None,
+        help="start from a saved config version (0 = fresh v0; omit = fresh v0 too, since the hardened config has nothing left to show)",
+    )
+    run_p.add_argument("--resume", action="store_true", help="continue from the latest saved config and regression suite")
+
+    sub.add_parser("reset", help="wipe runs/ and cycles.jsonl")
+    sub.add_parser("golden", help="snapshot the current run into data/golden/ for demo fallback")
+
     args = parser.parse_args()
+    if args.command is None:
+        args = parser.parse_args(["run"])
+
+    if args.command == "reset":
+        reset()
+        return
+    if args.command == "golden":
+        snapshot_golden()
+        return
 
     weave.init(ENTITY_PROJECT)
     # Evaluation progress and summary output drown out the loop narrative.
     for name in ("weave", "weave.evaluation.eval"):
         logging.getLogger(name).setLevel(logging.WARNING)
-    if CYCLES_PATH.exists():
-        CYCLES_PATH.unlink()
-    state = LoopState()
+
+    if args.resume:
+        from chaos.state import latest_version
+
+        v = latest_version()
+        if v is None:
+            raise SystemExit("nothing to resume; run without --resume first")
+        state = LoopState(cfg=load_config(v), regression_suite=load_regression())
+        print(f"Resuming from config v{v} with {len(state.regression_suite)} regression scenarios")
+    elif args.from_version not in (None, 0):
+        state = LoopState(cfg=load_config(args.from_version), regression_suite=load_regression())
+        print(f"Starting from saved config v{args.from_version}")
+    else:
+        state = LoopState()
+
     print("Measuring production baseline on legit traffic...")
     state.refresh_baseline()
 

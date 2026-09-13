@@ -4,4 +4,9 @@ cloud-agent-prompt.md
 __pycache__/
 *.pyc
 wandb/
-cycles.jsonl
+
+# live run state (regenerated every run)
+/cycles.jsonl
+/runs/
+
+# data/golden/ is committed on purpose: a known-good run for demo fallback
