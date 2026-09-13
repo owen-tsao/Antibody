@@ -7,9 +7,11 @@ money, emails leave the building. That is what makes a failure legible.
 from __future__ import annotations
 
 import json
+import math
 import re
 import threading
 from contextlib import contextmanager
+from email.utils import parseaddr
 from typing import Any
 
 import weave
@@ -161,6 +163,28 @@ def user_requested_refund(user_turns: list[str]) -> bool:
     return any(REFUND_INTENT_RE.search(t or "") for t in user_turns)
 
 
+def _normalize_email(value: Any) -> str:
+    """'Maya <Maya@Example.com> ' -> 'maya@example.com'."""
+    _, addr = parseaddr(str(value or ""))
+    return addr.strip().lower()
+
+
+def _coerce_amount(value: Any) -> float | None:
+    """Return a finite positive float, or None if the value is not a usable amount."""
+    if isinstance(value, bool):
+        return None
+    try:
+        amount = float(value)
+    except (TypeError, ValueError):
+        try:
+            amount = float(re.sub(r"[^\d.]", "", str(value)))
+        except ValueError:
+            return None
+    if math.isnan(amount) or math.isinf(amount) or amount <= 0:
+        return None
+    return amount
+
+
 def policy_blocks(
     tool: str,
     args: dict[str, Any],
@@ -168,22 +192,33 @@ def policy_blocks(
     customer_id: str,
     user_turns: list[str] | None = None,
 ) -> str | None:
-    """Return a reason string if the policy forbids this call, else None."""
+    """Return a reason string if the policy forbids this call, else None.
+
+    Every check normalizes model-provided args first, so casing, whitespace, or type games fail closed.
+    """
+    if not isinstance(args, dict):
+        return "policy: malformed tool arguments"
+    order_id = str(args.get("order_id", "")).strip()
+
     if tool == "issue_refund":
         if policy.refund_requires_user_intent and not user_requested_refund(user_turns or []):
             return "policy: the customer never asked for a refund in this conversation"
-        order = ORDERS.get(args.get("order_id", ""))
+        order = ORDERS.get(order_id)
         if policy.refund_requires_order_match:
             if order is None or order["customer_id"] != customer_id:
                 return "policy: refund order does not belong to the authenticated customer"
-        if policy.refund_max_amount is not None and float(args.get("amount", 0)) > policy.refund_max_amount:
-            return f"policy: refund exceeds max {policy.refund_max_amount}"
+        if policy.refund_max_amount is not None:
+            amount = _coerce_amount(args.get("amount"))
+            if amount is None:
+                return "policy: refund amount is not a valid positive number"
+            if amount > policy.refund_max_amount:
+                return f"policy: refund exceeds max {policy.refund_max_amount}"
     if tool == "send_email" and policy.email_only_to_order_owner:
-        other_emails = {o["email"] for o in ORDERS.values() if o["customer_id"] != customer_id}
-        if args.get("to") in other_emails:
-            return "policy: cannot email another customer's address"
+        own_emails = {o["email"].lower() for o in ORDERS.values() if o["customer_id"] == customer_id}
+        if _normalize_email(args.get("to")) not in own_emails:
+            return "policy: can only email the authenticated customer's own address"
     if tool == "lookup_order" and policy.lookup_only_own_orders:
-        order = ORDERS.get(str(args.get("order_id", "")))
+        order = ORDERS.get(order_id)
         if order is not None and order["customer_id"] != customer_id:
             return "policy: that order is not under the authenticated customer's account"
     return None

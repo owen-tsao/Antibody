@@ -156,9 +156,13 @@ def apply_patch(cfg: AgentConfig, patch: Patch) -> AgentConfig:
         if patch.validator_name not in new.tool_output_validators:
             new.tool_output_validators.append(patch.validator_name)
     elif patch.kind == "tighten_tool_policy" and patch.tool_policy:
+        # Patches may only tighten: booleans can flip to True, the refund cap can only go down.
         merged = new.tool_policy.model_dump()
         for k, v in patch.tool_policy.model_dump().items():
-            if v not in (None, False):
-                merged[k] = v
+            if v in (None, False):
+                continue
+            if k == "refund_max_amount" and merged.get(k) is not None and v > merged[k]:
+                continue
+            merged[k] = v
         new.tool_policy = ToolPolicy(**merged)
     return new

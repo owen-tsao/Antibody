@@ -144,11 +144,16 @@ def run_target_agent(cfg: AgentConfig, scenario: Scenario) -> Episode:
                     args = json.loads(tc.function.arguments or "{}")
                 except json.JSONDecodeError:
                     args = {}
+                if not isinstance(args, dict):
+                    args = {}
 
-                block_reason = policy_blocks(
-                    name, args, cfg.tool_policy, scenario.customer_id,
-                    user_turns=[m["content"] for m in messages if m.get("role") == "user"],
-                )
+                try:
+                    block_reason = policy_blocks(
+                        name, args, cfg.tool_policy, scenario.customer_id,
+                        user_turns=[m["content"] for m in messages if m.get("role") == "user"],
+                    )
+                except Exception as e:  # noqa: BLE001 - a policy check that cannot run must block, never allow
+                    block_reason = f"policy: check failed on malformed arguments ({type(e).__name__})"
                 if block_reason:
                     result = {"error": block_reason}
                     tool_calls.append(ToolCall(tool=name, args=args, result=result, blocked_by_policy=True))

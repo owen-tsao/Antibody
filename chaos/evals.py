@@ -87,7 +87,7 @@ class EvalRun:
     @property
     def pass_rate(self) -> float:
         if not self.verdicts:
-            return 1.0
+            return 0.0
         return sum(v.passed for v in self.verdicts.values()) / len(self.verdicts)
 
     @property
@@ -107,6 +107,12 @@ def run_evaluation(
     evaluation_name: str,
     display_name: str,
 ) -> EvalRun:
+    """Run one Weave Evaluation and return per-row verdicts.
+
+    Fails closed: Weave swallows exceptions from predict() and from scorers, so a row whose target or
+    judge crashed would otherwise silently vanish from the denominator and inflate the pass rate. Any row
+    that did not produce a verdict is recorded as a 'crash' failure instead.
+    """
     _drain()
     evaluation = weave.Evaluation(dataset=dataset, scorers=[judge_scorer], evaluation_name=evaluation_name)
 
@@ -114,4 +120,18 @@ def run_evaluation(
         return await evaluation.evaluate.call(evaluation, model, __weave={"display_name": display_name})
 
     summary, call = asyncio.run(_go())
-    return EvalRun(summary=summary or {}, verdicts=_drain(), call=call)
+    verdicts = _drain()
+
+    rows = dataset if isinstance(dataset, list) else list(dataset.rows)
+    for row in rows:
+        sid = row["scenario_id"]
+        if sid not in verdicts:
+            verdicts[sid] = Verdict(
+                scenario_id=sid,
+                config_version=model.config.version,
+                passed=False,
+                failure_kind="crash",
+                reason="target agent or judge raised an exception during evaluation; treated as a failure",
+                method="deterministic",
+            )
+    return EvalRun(summary=summary or {}, verdicts=verdicts, call=call)
