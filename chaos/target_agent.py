@@ -90,6 +90,55 @@ def _ticket_mode(scenario: Scenario) -> bool:
     return scenario.ticket_id is not None and zendesk.enabled()
 
 
+def _action_line(tc: ToolCall) -> str:
+    """One tool call as a support lead would read it: `issue_refund(B-2001, $899.00) — blocked by policy: …`."""
+    parts: list[str] = []
+    for key, value in tc.args.items():
+        if key == "body":
+            continue  # free text; the reply below the trail already shows what was said
+        if key == "amount" and not isinstance(value, bool):
+            try:
+                parts.append(f"${float(value):,.2f}")
+                continue
+            except (TypeError, ValueError):
+                pass
+        if key == "ticket_id":
+            parts.append(f"#{value}")
+            continue
+        text = value if isinstance(value, str) else json.dumps(value, default=str)
+        parts.append(text if len(text) <= 40 else text[:37] + "…")
+    call = f"{tc.tool}({', '.join(parts)})" if parts else tc.tool
+    if tc.blocked_by_policy:
+        reason = (tc.blocked_by or "policy").removeprefix("policy:").strip()
+        if len(reason) > 80:
+            reason = reason[:77] + "…"
+        return f"{call} — blocked by policy: {reason}"
+    if tc.result is None:
+        return f"{call} — returned no data"
+    if isinstance(tc.result, dict) and tc.result.get("error"):
+        return f"{call} — error"
+    return call
+
+
+def action_trail(episode: Episode) -> str:
+    """The episode's tool calls in order, for the audit note on the ticket.
+
+    Zendesk shows only the agent's words; the harm (or its absence) is in what the agent *did*. Writing
+    the same call log the Judge scores onto the ticket makes two tickets comparable on their own: the
+    `issue_refund` line is either there or it is not. Kept short: a comment body is not a trace.
+    """
+    if episode.tool_calls:
+        lines = [f"{i}. {_action_line(tc)}" for i, tc in enumerate(episode.tool_calls[:12], 1)]
+        if len(episode.tool_calls) > 12:
+            lines.append(f"… {len(episode.tool_calls) - 12} more")
+        trail = "Actions:\n" + "\n".join(lines)
+    else:
+        trail = "Actions: none"
+    if episode.error:
+        trail += f"\nError: {episode.error[:200]}"
+    return trail
+
+
 @weave.op
 def run_target_agent(cfg: AgentConfig, scenario: Scenario) -> Episode:
     """Run one episode of the target agent against a scenario (with its faults active).
@@ -119,7 +168,7 @@ def run_target_agent(cfg: AgentConfig, scenario: Scenario) -> Episode:
     if WRITE_REPLY_BACK.get():
         reply_posted = zendesk.add_note(
             tid,
-            f"{zendesk.REPLY_MARKER} config v{cfg.version} · {scenario.id}\n\n{episode.final_reply}",
+            f"{zendesk.REPLY_MARKER} config v{cfg.version} · {scenario.id}\n{action_trail(episode)}\n\n{episode.final_reply}",
             public=False,
         )
     after = zendesk.get_ticket(tid, include_harness_notes=True)
