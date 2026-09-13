@@ -173,6 +173,8 @@ export interface State {
   source: Source;
   /** Replay only: ISO time the recorded run started. */
   recorded_at?: string | null;
+  /** How many of the final suite's attacks land on each config (`{ v0: 6, v3: 3 }`); null until measured. */
+  vulnerability?: { landed: Record<string, number>; suite_size: number } | null;
 }
 
 export type Phase = "baseline" | "chaos" | "target" | "judge" | "repair" | "gate" | "idle";

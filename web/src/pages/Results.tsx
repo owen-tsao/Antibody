@@ -11,6 +11,8 @@ import {
   replayedPreview,
   rowStatus,
   shortTitle,
+  storyLine,
+  vulnerabilityLine,
   type AttackPreview,
 } from "@/lib/derive";
 import { cycleChartSvg } from "@/lib/previewSvg";
@@ -119,6 +121,10 @@ export default function Results({ onAgents, onCycle }: { onAgents: () => void; o
 
   const h = headline(cycles ?? [], LEGIT_SIZE);
   const latest = state?.latest_version ?? h.version;
+  const story = storyLine(cycles ?? [], LEGIT_SIZE);
+  // Keyed to the version the *visible* cycles reached (not the configs on disk), so a replay's
+  // before/after line cannot announce v3 while the list is still at "measuring baseline…".
+  const vuln = vulnerabilityLine(state?.vulnerability, h.version);
   const busy = attacking !== null || !cycles;
   const quietButton =
     "rounded text-[13px] text-[var(--muted)] hover:text-[var(--fg)] disabled:cursor-default disabled:text-[var(--faint)] disabled:hover:text-[var(--faint)]";
@@ -129,10 +135,8 @@ export default function Results({ onAgents, onCycle }: { onAgents: () => void; o
       <header className="mx-auto w-full max-w-6xl px-6 pb-3 pt-20 md:px-10 md:pt-24">
         <h1 className="text-[40px] font-medium leading-none tracking-[-0.025em]">Results</h1>
         <p className="tabular mt-3 text-[13px] text-[var(--muted)]">
-          {cycles && cycles.length > 0 ? (
-            <>
-              config v{h.version} · {h.suiteSize} tests in suite · legit users {h.legit} · last patch {h.lastGate ?? "—"}
-            </>
+          {story ? (
+            story
           ) : cycles ? (
             "measuring baseline…"
           ) : (
@@ -140,7 +144,7 @@ export default function Results({ onAgents, onCycle }: { onAgents: () => void; o
           )}
           {state && state.source !== "live" && <span className="text-[var(--faint)]"> · {state.source} run</span>}
         </p>
-        <p className="mt-1.5 text-[13px] text-[var(--faint)]">Every cycle the loop recorded. Hover for the gate history, click to open the evidence.</p>
+        {vuln && <p className="tabular mt-1 text-[13px] text-[var(--fg)]">{vuln}</p>}
       </header>
 
       {items.length > 0 && (

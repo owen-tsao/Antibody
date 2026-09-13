@@ -113,6 +113,9 @@ def get_state(source: Source = Query("live")) -> dict:
         "last_gate": last_gate,
         "loop": loop_ctl.state(),
         "source": "replay" if replaying else src,
+        # Before/after number for the Results headline. Null until `chaos.loop vulnerability` has run;
+        # a fresh run archives the previous file, so a live run never shows a stale one.
+        "vulnerability": store.read_vulnerability(src),
     }
     if replaying:
         out["recorded_at"] = replay.info().get("recorded_at")

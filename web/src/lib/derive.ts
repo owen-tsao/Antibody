@@ -952,6 +952,42 @@ export function runSummary(cycles: CycleRecord[], legitSize: number): RunSummary
   };
 }
 
+/**
+ * The Results headline as a sentence: `v0 → v3 · 3 patches shipped · 3 refused by the gate · legit users
+ * never broke`. Rejections read as the gate doing its job, not as failures. "never broke" is only claimed
+ * when every shipped patch passed the whole legit suite; otherwise the last gate's rate is shown.
+ */
+export function storyLine(cycles: CycleRecord[], legitSize: number): string | null {
+  if (cycles.length === 0) return null;
+  const s = runSummary(cycles, legitSize);
+  const from = cycles[0].config_before;
+  const to = s.version ?? from;
+  const parts = [from === to ? `v${to}` : `v${from} → v${to}`];
+  parts.push(`${s.accepted} ${s.accepted === 1 ? "patch" : "patches"} shipped`);
+  if (s.rejected > 0) parts.push(`${s.rejected} refused by the gate`);
+  const shipped = cycles.filter((c) => c.gate?.accepted);
+  const legitHeld = shipped.length > 0 && shipped.every((c) => (c.gate?.legit_pass_rate ?? 0) >= 1);
+  parts.push(legitHeld ? "legit users never broke" : `legit users ${s.legit}`);
+  return parts.join(" · ");
+}
+
+/**
+ * `attacks that land: 6 of 6 on v0 → 3 of 6 on v3`, from `chaos.loop vulnerability`'s before/after
+ * measurement. Null until both ends exist: v0 and the version the headline currently shows, so a replay
+ * only ever reports versions that have already appeared on screen.
+ */
+export function vulnerabilityLine(
+  v: { landed: Record<string, number>; suite_size: number } | null | undefined,
+  latest: number | null,
+): string | null {
+  if (!v || latest === null || latest <= 0 || v.suite_size <= 0) return null;
+  const before = v.landed.v0;
+  const after = v.landed[`v${latest}`];
+  if (before === undefined || after === undefined) return null;
+  const n = v.suite_size;
+  return `attacks that land: ${before} of ${n} on v0 → ${after} of ${n} on v${latest}`;
+}
+
 /** `judge is scoring` for the running phase, used under the hero while live. */
 export function phaseVerb(status: Status | null): string | null {
   return isRunning(status) ? PHASE_VERB[status.phase] : null;

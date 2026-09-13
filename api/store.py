@@ -101,6 +101,33 @@ def read_regression(source: Source) -> list[Scenario]:
         return []
 
 
+def read_vulnerability(source: Source) -> dict | None:
+    """`runs/vulnerability.json` as `{"landed": {"v0": 6, ...}, "suite_size": 6}`, or None when absent.
+
+    Written by `chaos.loop vulnerability` after a run: how many of the final regression suite's
+    attacks land on each saved config. The denominator is that final suite, so it comes from
+    `regression.json`, not from any one cycle's `regression_suite_size`.
+    """
+    _, _, regression = _paths(source)
+    path = regression.parent / "vulnerability.json"
+    if not path.exists():
+        return None
+    try:
+        doc = json.loads(path.read_text())
+    except (OSError, ValueError):
+        return None
+    if not isinstance(doc, dict):
+        return None
+    landed = {
+        k: v
+        for k, v in doc.items()
+        if isinstance(k, str) and k.startswith("v") and k[1:].isdigit() and isinstance(v, int) and not isinstance(v, bool)
+    }
+    if not landed:
+        return None
+    return {"landed": landed, "suite_size": len(read_regression(source))}
+
+
 def read_status() -> dict:
     """Raw contents of `runs/status.json` (written by chaos.status at every phase transition)."""
     if not STATUS_PATH.exists():
