@@ -69,6 +69,8 @@ Chaos engineering for AI agents: a Chaos Agent deliberately breaks a customer-su
 
 **What the product is.** The whole loop, not any one agent. Chaos, Judge, and Repair are internal parts; what a user gets is: point it at an agent, and it continuously attacks, proves failures, patches them, and guarantees no patch breaks what used to work. CI plus a red team, for agents, that runs itself. The support bot is the demo target; the loop is agent-agnostic. If one piece is the "product", it is the gate plus the growing regression suite — that is the guarantee judges will remember.
 
+**Product framing (decided 5:45 PM Sat).** The user journey is **connect → configure → loop**: open Antibody, connect the agent you want hardened, configure attack families and the legit set, press start, and the loop runs with a live feed. The control room (section 10) is the front door for this journey, not a side dashboard. This weekend ships the honest thin shell of that journey with the one target that exists; the agent-agnostic adapter (tool manifest → generated attack families and checks, HTTP/config-only targets) is the stated roadmap.
+
 ### 1.2 Submission description (three sentences, final)
 
 Chaos Monkey for Agents attacks a customer-support agent that has real (mocked) tools — prompt injection hidden in order data, social-engineered refunds, tools that return nothing — and a Judge Agent proves each failure with verifiable checks and turns it into a permanent regression test in a Weave Dataset. A Repair Agent then patches the agent's system prompt and its tool-permission and output-validation code, and the patch is only accepted if it fixes the new failure, passes every past failure, and does not regress a held-out set of legitimate customer requests. The Chaos Agent adapts to each new defense and attacks again, so every pass of the loop adds a verified, permanent constraint without making the agent less helpful.
@@ -112,6 +114,7 @@ If the live attack at 0:20 exceeds 15 seconds or errors, `demo` falls back to th
 | Why not fine-tune? | Nine hours. Also config patches are auditable and reversible, and the suite is what you'd fine-tune on later. |
 | Judge false-positive rate? | Measured on the legit set at baseline: report your number. |
 | Why a weak target model? | It's the realistic production case. The loop is model-agnostic; the target model is one env var. |
+| Can I connect my own agent? | Today it is in-process Python with a tool manifest. The manifest is what drives attack generation — side-effect tools become excessive-agency targets, free-text returns become injection surfaces — so HTTP and config-only adapters are the next step, not a redesign. |
 
 ---
 
@@ -585,9 +588,10 @@ Commit at every checkpoint and at least every 30 minutes; push after every commi
 ### If behind schedule — cut in this order
 
 1. Level 3 items (never start them unless Level 2 is green).
-2. Chaos Agent adaptation → `--chaos seeds` (seeds plus hand-written variants such as the `inject_refund_v2` paraphrase). The suite still grows and the loop still self-corrects; you lose the word "adapts".
-3. marimo dashboard → terminal summary table plus the static slide-2 chart (`vulnerability` still runs).
-4. Scenario 3 in the golden run → golden run on scenarios 1–2 only.
+2. Onboarding shell → the control room opens directly on the live feed; the connect → configure → loop journey is described on slide 1 instead.
+3. Chaos Agent adaptation → `--chaos seeds` (seeds plus hand-written variants such as the `inject_refund_v2` paraphrase). The suite still grows and the loop still self-corrects; you lose the word "adapts".
+4. marimo control room → terminal summary table plus the static slide-2 chart (`vulnerability` still runs).
+5. Scenario 3 in the golden run → golden run on scenarios 1–2 only.
 
 Never cut: the Weave Evaluation gate, the legit set, the regression dataset, `blocked_by` printing, commits.
 
@@ -623,7 +627,7 @@ Do not farm out: `target.py`, `policy.py`, `gate.py`, `loop.py`. That is where i
 | --- | --- | --- | --- |
 | **0 — eligible and demo-able** | **Sat 8:00 PM** | Target with 4 tools and a real policy layer; seed scenario 1; deterministic Judge; gate = three Weave Evaluations (single-run); hand-written v1 accepted by the gate (6:30); `loop --cycles 2` end to end with `--repair llm` or, if the LLM patches are not yet accepted, `--repair library` (hand-written patch per family, labeled as such); every role a `@weave.op`; JSONL log; handoffs printed. | Eligible. Best Loop baseline: breaks, fixes, holds, verified. Weave baseline. |
 | 1 | Sat 8:45 PM | LLM Repair Agent producing accepted patches; gate re-run rule; Chaos Agent adaptation (paraphrase variant); scenarios 2–3 as seeds; 3+ cycles; configs published as Weave objects; thumbs-down feedback on failed target calls; cycle time measured; 3-cycle golden run committed as insurance. | "Improves each pass" is credible; "team of agents" visible in one tree; replay data exists. |
-| 2 | Sun 10:15 AM (dashboard, golden run), 11:00 (demo) | Golden run (6 cycles, k=3) committed; `vulnerability` chart + slide 2; marimo dashboard; paced `replay`; `demo` with live attack + replay; LLM judge as `weave.Scorer`; README with diagram. | Legible 3-minute demo with no live dependency beyond one attack. marimo prize. Production-ready angle. |
+| 2 | Sun 10:15 AM (dashboard, golden run), 11:00 (demo) | Golden run (6 cycles, k=3) committed; `vulnerability` chart + slide 2; marimo control room; onboarding shell (connect → configure → start, real data only) if the control room is done by 9:45; paced `replay`; `demo` with live attack + replay; LLM judge as `weave.Scorer`; README with diagram. | Legible 3-minute demo with no live dependency beyond one attack. marimo prize. Production-ready angle; the product journey is visible. |
 | 3 — stretch | Sun 11:00–11:45 only; pick at most one | (a) scenario 4 (timeout); (b) `--require-approval` flag: gate pauses for a human yes before promotion; (c) Weave Leaderboard of config versions by regression pass rate. | Production-ready award; extra Weave depth. Not needed to win Best Loop. |
 
 ---
@@ -678,6 +682,18 @@ This is **not a separate web app**. marimo already serves a page; the control ro
 Style: Owen's UI standard (monochrome, one accent; red/green reserved for FAILED/ACCEPTED state). Large type; it will be read from across a room over Zoom.
 
 **Demo impact if the control room ships**: surfaces drop to terminal (live attack + paced replay) → control room → slide 2. Weave tabs stay pre-opened as backup and for Q&A, but the 1:45–2:20 beat is delivered from the control room's Weave buttons. Update the §1.4 tab order at 11:00 Sunday when you decide.
+
+**Onboarding shell — the front door (build after the layout above; cut before the control room if behind)**
+
+The control room opens on a three-step onboarding screen that shows the connect → configure → loop journey with real data only. Rule: **no fake inputs.** A disabled option labeled "roadmap" is fine; a text box that does nothing is not.
+
+1. **Connect.** Target picker with one live option: "Northwind support agent — 3 tools". Below it, the detected tool manifest rendered from `TOOL_SPECS`: tool name, side-effect flag (refund, email), free-text return fields (the injection surface). A second, disabled entry: "Connect your own agent (roadmap: in-process callable, HTTP endpoint, config-only)".
+2. **Configure.** Checkboxes for attack families to enable (default: all active); the legit-user set listed by case; gate rule shown read-only (fixes new failure, regression 100%, legit ≥ baseline); number of cycles.
+3. **Start loop.** Launches `chaos.loop` with those arguments as a subprocess; the page transitions to the live feed layout above and tails `cycles.jsonl`.
+
+Demo impact: the 0:20 beat becomes "connect, configure, start" (~15 s) instead of typing a CLI command. Q&A line for "can I connect my agent?": "Today it is in-process Python with a tool manifest; the manifest is what drives attack generation, so HTTP and config-only adapters are the next step."
+
+Estimated cost: ~45 minutes on top of the control room. Schedule slot: Sunday 9:15–10:15 inside the control-room block, only after tonight's core fixes (gate as a Weave Evaluation, per-version config persistence, replay data) are done.
 
 **Fallback**: the panel list below, as originally specified. Panels 1–3 alone still tell the story.
 
