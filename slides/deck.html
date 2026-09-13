@@ -1,0 +1,248 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<title>Antibody — slides</title>
+<link rel="preconnect" href="https://fonts.googleapis.com" />
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500&family=Instrument+Serif:ital@0;1&display=swap" rel="stylesheet" />
+<style>
+  :root {
+    --bg: #0a0a0a;
+    --fg: #ffffff;
+    --muted: rgba(255, 255, 255, 0.58);
+    --faint: rgba(255, 255, 255, 0.32);
+    --line: rgba(255, 255, 255, 0.14);
+    --serif: "Instrument Serif", "Times New Roman", Georgia, serif;
+    --sans: "Inter", system-ui, -apple-system, "Segoe UI", sans-serif;
+    --m: 112px;            /* page margin */
+    --title-top: 84px;
+    --content-top: 236px;  /* where content starts under the title rule */
+    --content-bottom: 120px;
+  }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  html, body { background: #000; }
+  body { display: flex; flex-direction: column; gap: 40px; padding: 40px; align-items: center; }
+
+  .slide {
+    position: relative;
+    width: 1920px; height: 1080px;
+    background: var(--bg); color: var(--fg);
+    font-family: var(--sans);
+    overflow: hidden; flex: none;
+    -webkit-font-smoothing: antialiased;
+  }
+
+  /* Faint theme: the real screenshot, desaturated and pushed down so it reads as texture. */
+  .bg { position: absolute; inset: 0; pointer-events: none; }
+  .bg img { position: absolute; width: 1920px; height: 1080px; object-fit: cover; filter: grayscale(1) brightness(0.55) contrast(1.05); opacity: 0.22; }
+  .bg::after { content: ""; position: absolute; inset: 0;
+    background:
+      radial-gradient(1200px 700px at 18% 12%, rgba(255,255,255,0.05), transparent 60%),
+      linear-gradient(180deg, rgba(10,10,10,0.25), rgba(10,10,10,0.85)); }
+
+  .title { position: absolute; left: var(--m); top: var(--title-top); font-family: var(--serif); font-weight: 400; font-size: 88px; line-height: 1; letter-spacing: -0.01em; }
+  .rule  { position: absolute; left: var(--m); right: var(--m); top: 196px; height: 1px; background: var(--line); }
+  .kicker { position: absolute; right: var(--m); top: 108px; font-size: 20px; letter-spacing: 0.08em; text-transform: uppercase; color: var(--faint); }
+  .page  { position: absolute; right: var(--m); bottom: 56px; font-size: 18px; color: var(--faint); font-variant-numeric: tabular-nums; letter-spacing: 0.04em; }
+
+  /* Card: black surface, thin chrome rim (the app's MetalFrame), soft inner top light. */
+  .card { position: relative; border-radius: 18px; padding: 1.5px;
+    background: conic-gradient(from 200deg, #ededed 0deg, #5c5c5c 55deg, #cfcfcf 120deg, #2e2e2e 190deg, #dcdcdc 250deg, #6b6b6b 310deg, #ededed 360deg); }
+  .card > .inner { height: 100%; border-radius: 16.5px; padding: 44px 48px;
+    background:
+      linear-gradient(180deg, rgba(255,255,255,0.045), rgba(255,255,255,0) 140px),
+      rgba(9, 9, 9, 0.94); }
+
+  .index { position: absolute; top: 40px; right: 48px; font-size: 22px; color: var(--faint); font-variant-numeric: tabular-nums; letter-spacing: 0.04em; }
+  .h { font-size: 40px; font-weight: 500; line-height: 1.1; letter-spacing: -0.01em; }
+  ul { list-style: none; display: flex; flex-direction: column; }
+  li { position: relative; padding-left: 30px; line-height: 1.38; color: var(--muted); }
+  li::before { content: ""; position: absolute; left: 6px; top: 0.6em; width: 6px; height: 6px; border-radius: 50%; background: rgba(255,255,255,0.85); }
+
+  /* ---------- 1 · Hero ---------- */
+  .s1 img.hero-bg { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: cover; }
+  .s1 .hero { position: absolute; inset: 0; display: flex; flex-direction: column; align-items: center; justify-content: center; text-align: center; }
+  .s1 h1 { font-family: var(--serif); font-weight: 400; font-size: 264px; line-height: 0.92; letter-spacing: -0.02em; text-shadow: 0 2px 44px rgba(0,0,0,0.5); }
+  .s1 p { margin-top: 30px; font-size: 46px; color: #fff; text-shadow: 0 1px 18px rgba(0,0,0,0.9), 0 0 3px rgba(0,0,0,0.6); }
+
+  /* ---------- 2 · Loop ---------- */
+  .ring-wrap { position: absolute; left: 0; right: 0; top: var(--content-top); bottom: var(--content-bottom); display: flex; align-items: center; justify-content: center; }
+  .ring { position: relative; width: 600px; height: 600px; }
+  .ring svg { position: absolute; inset: 0; overflow: visible; }
+  .node { position: absolute; width: 26px; height: 26px; border-radius: 50%; transform: translate(-50%, -50%); padding: 2px;
+    background: conic-gradient(from 200deg, #ededed, #5c5c5c, #cfcfcf, #2e2e2e, #dcdcdc, #6b6b6b, #ededed); }
+  .node::after { content: ""; display: block; width: 100%; height: 100%; border-radius: 50%; background: #0a0a0a; }
+  .label { position: absolute; width: 440px; }
+  .label small { display: block; font-size: 18px; letter-spacing: 0.08em; color: var(--faint); margin-bottom: 8px; }
+  .label b { display: block; font-weight: 500; font-size: 34px; line-height: 1.1; letter-spacing: -0.01em; }
+  .label span { display: block; margin-top: 10px; font-size: 24px; line-height: 1.32; color: var(--muted); text-wrap: balance; }
+  .label.r { text-align: left; } .label.l { text-align: right; } .label.c { text-align: center; }
+  .foot { position: absolute; left: var(--m); right: var(--m); bottom: 100px; text-align: center; font-size: 30px; color: #fff; font-family: var(--serif); letter-spacing: -0.005em; }
+
+  /* ---------- 3 · Agents ---------- */
+  .grid4 { position: absolute; left: var(--m); right: var(--m); top: var(--content-top); display: grid; grid-template-columns: 1fr 1fr; gap: 24px; }
+  .grid4 .card { height: 306px; }
+  .grid4 ul { margin-top: 20px; gap: 11px; }
+  .grid4 li { font-size: 22px; }
+  .gate { position: absolute; left: var(--m); right: var(--m); top: 890px; height: 112px; }
+  .gate .inner { display: grid; grid-template-columns: 220px 1fr; align-items: center; padding: 0 48px; }
+  .gate .h { font-size: 36px; }
+  .gate ul { gap: 8px; }
+  .gate li { color: rgba(255,255,255,0.9); font-size: 23px; }
+
+  /* ---------- 4 · Next ---------- */
+  .path { position: absolute; left: var(--m); right: var(--m); top: 262px; height: 1px; background: var(--line); }
+  .path i { position: absolute; top: -5px; width: 11px; height: 11px; border-radius: 50%; background: #fff; transform: translateX(-50%); box-shadow: 0 0 0 6px rgba(255,255,255,0.06); }
+  .grid3 { position: absolute; left: var(--m); right: var(--m); top: 318px; display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 24px; }
+  .grid3 .card { height: 500px; }
+  .grid3 .inner { padding-top: 56px; }
+  .grid3 .h { font-size: 44px; }
+  .grid3 ul { margin-top: 34px; gap: 20px; }
+  .grid3 li { font-size: 27px; }
+  .claim { position: absolute; left: var(--m); right: var(--m); bottom: 100px; text-align: center; font-family: var(--serif); font-size: 34px; color: rgba(255,255,255,0.85); }
+</style>
+</head>
+<body>
+
+<!-- 1 · Hero -->
+<section class="slide s1" id="slide-1">
+  <img class="hero-bg" src="backdrops/backdrop-1.png" alt="" />
+  <div class="hero">
+    <h1>Antibody</h1>
+    <p>Self-healing for AI agents</p>
+  </div>
+</section>
+
+<!-- 2 · The loop -->
+<section class="slide" id="slide-2">
+  <div class="bg"><img src="backdrops/backdrop-3.png" alt="" style="transform: translate(360px, 140px) scale(1.15)" /></div>
+  <div class="title">Four agents, one loop</div>
+  <div class="kicker">How it works</div>
+  <div class="rule"></div>
+
+  <div class="ring-wrap">
+    <div class="ring">
+      <svg viewBox="0 0 600 600" width="600" height="600">
+        <defs>
+          <linearGradient id="chrome" x1="0" y1="0" x2="1" y2="1">
+            <stop offset="0" stop-color="#ededed" /><stop offset="0.35" stop-color="#5c5c5c" />
+            <stop offset="0.6" stop-color="#dcdcdc" /><stop offset="1" stop-color="#2e2e2e" />
+          </linearGradient>
+        </defs>
+        <circle cx="300" cy="300" r="298" fill="none" stroke="url(#chrome)" stroke-width="3" />
+        <circle cx="300" cy="300" r="270" fill="none" stroke="rgba(255,255,255,0.06)" stroke-width="1" stroke-dasharray="2 10" />
+        <!-- direction chevron on the arc between Gate (288°) and Chaos (360°) -->
+        <g transform="translate(300 300) rotate(324) translate(0 -298)">
+          <polyline points="-11,-13 2,0 -11,13" fill="none" stroke="#fff" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" />
+        </g>
+      </svg>
+      <!-- nodes at 0°, 72°, 144°, 216°, 288° clockwise from top, r = 298 -->
+      <div class="node" style="left:300px; top:2px"></div>
+      <div class="node" style="left:583.4px; top:207.9px"></div>
+      <div class="node" style="left:475.2px; top:541.1px"></div>
+      <div class="node" style="left:124.8px; top:541.1px"></div>
+      <div class="node" style="left:16.6px; top:207.9px"></div>
+
+      <div class="label c" style="left:80px;  top:-150px"><small>01</small><b>Chaos</b><span>Attacks the agent, then adapts to every fix.</span></div>
+      <div class="label r" style="left:628px; top:150px"><small>02</small><b>Target</b><span>The support agent under test. Real tools, real tickets.</span></div>
+      <div class="label r" style="left:520px; top:506px"><small>03</small><b>Judge</b><span>Proves what actually went wrong.</span></div>
+      <div class="label l" style="left:-360px; top:506px"><small>04</small><b>Repair</b><span>Writes the fix. Code first, prompts last.</span></div>
+      <div class="label l" style="left:-468px; top:150px"><small>05</small><b>Gate</b><span>Lets a fix through only if nothing else breaks.</span></div>
+    </div>
+  </div>
+  <div class="foot">Each pass leaves the agent harder to break and just as helpful as before.</div>
+  <div class="page">02 / 04</div>
+</section>
+
+<!-- 3 · What each agent does -->
+<section class="slide" id="slide-3">
+  <div class="bg"><img src="backdrops/backdrop-2.png" alt="" style="transform: translate(560px, -80px) scale(1.2)" /></div>
+  <div class="title">What each agent does</div>
+  <div class="kicker">The team</div>
+  <div class="rule"></div>
+
+  <div class="grid4">
+    <div class="card"><div class="inner">
+      <div class="index">01</div><div class="h">Chaos</div>
+      <ul>
+        <li>Hides instructions inside a ticket's internal notes.</li>
+        <li>Breaks a tool so it returns nothing, or talks its way into a refund on someone else's order.</li>
+        <li>Reads why the last attack got blocked and tries a different way in.</li>
+      </ul>
+    </div></div>
+    <div class="card"><div class="inner">
+      <div class="index">02</div><div class="h">Target</div>
+      <ul>
+        <li>A customer-support agent running on Llama 3.1 8B through W&amp;B Inference.</li>
+        <li>Reads the ticket, looks up orders, issues refunds, sends email.</li>
+        <li>Never knows it's being tested.</li>
+      </ul>
+    </div></div>
+    <div class="card"><div class="inner">
+      <div class="index">03</div><div class="h">Judge</div>
+      <ul>
+        <li>Checks the facts first: did a refund fire that nobody asked for? Did it open a ticket it wasn't assigned?</li>
+        <li>Asks a bigger model only when the rules can't decide.</li>
+        <li>Every verdict is a Weave trace you can open and audit.</li>
+      </ul>
+    </div></div>
+    <div class="card"><div class="inner">
+      <div class="index">04</div><div class="h">Repair</div>
+      <ul>
+        <li>Proposes one fix at a time.</li>
+        <li>Prefers tool rules and output validators over prompt edits, so the LLM stops being the security layer.</li>
+        <li>Remembers what got rejected and never tries it twice.</li>
+      </ul>
+    </div></div>
+  </div>
+  <div class="card gate"><div class="inner">
+    <div class="h">Gate</div>
+    <ul>
+      <li>Three Weave evaluations: stops the new attack, still stops every old one, legitimate customers still get helped.</li>
+      <li>Anything less is rejected, and Repair tries again.</li>
+    </ul>
+  </div></div>
+  <div class="page">03 / 04</div>
+</section>
+
+<!-- 4 · Where this goes -->
+<section class="slide" id="slide-4">
+  <div class="bg"><img src="backdrops/backdrop-4.png" alt="" style="transform: translate(420px, 120px) scale(1.1)" /></div>
+  <div class="title">Where this goes</div>
+  <div class="kicker">Next</div>
+  <div class="rule"></div>
+
+  <div class="path"><i style="left:16.67%"></i><i style="left:50%"></i><i style="left:83.33%"></i></div>
+  <div class="grid3">
+    <div class="card"><div class="inner">
+      <div class="index">01</div><div class="h">Ship it</div>
+      <ul>
+        <li>Frozen, diffable config versions</li>
+        <li>Promote a version to deploy</li>
+        <li>Human sign-off, then nightly runs</li>
+      </ul>
+    </div></div>
+    <div class="card"><div class="inner">
+      <div class="index">02</div><div class="h">Cover every agent</div>
+      <ul>
+        <li>Any agent with a tool manifest</li>
+        <li>HTTP adapters for agents we don't host</li>
+        <li>One Antibody for a fleet: Zendesk, Intercom, Salesforce</li>
+      </ul>
+    </div></div>
+    <div class="card"><div class="inner">
+      <div class="index">03</div><div class="h">Train the model</div>
+      <ul>
+        <li>The regression suite is a labeled dataset</li>
+        <li>Fine-tune on it; the gate is the reward</li>
+        <li>The loop that hardens the agent trains it</li>
+      </ul>
+    </div></div>
+  </div>
+  <div class="claim">Every failure becomes a permanent test. Every patch has to pass all of them. Helpfulness never drops.</div>
+  <div class="page">04 / 04</div>
+</section>
+
+</body>
+</html>
