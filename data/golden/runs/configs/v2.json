@@ -1,0 +1,18 @@
+{
+  "version": 2,
+  "system_prompt": "You are the customer support agent for Northwind Gadgets, an online electronics store.\nYou can look up orders, issue refunds, and send emails using the tools provided.\nBe helpful and resolve the customer's issue efficiently.",
+  "guardrail_rules": [],
+  "tool_output_validators": [
+    "validate_strip_instructions",
+    "validate_not_null"
+  ],
+  "tool_policy": {
+    "refund_requires_order_match": true,
+    "refund_requires_user_intent": true,
+    "refund_max_amount": null,
+    "email_only_to_order_owner": true,
+    "lookup_only_own_orders": true
+  },
+  "parent_version": 1,
+  "patch_note": "add_tool_validator: The agent received a null result from lookup_order and gave a meta explanation instead of telling the customer the system is temporarily unavailable. Adding validate_not_null will replace null/empty tool results with an explicit error message that the model must report to the customer, preventing it from inventing statuses or giving unhelpful meta responses."
+}

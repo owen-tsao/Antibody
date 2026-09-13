@@ -182,19 +182,23 @@ def policy_blocks(
         other_emails = {o["email"] for o in ORDERS.values() if o["customer_id"] != customer_id}
         if args.get("to") in other_emails:
             return "policy: cannot email another customer's address"
+    if tool == "lookup_order" and policy.lookup_only_own_orders:
+        order = ORDERS.get(str(args.get("order_id", "")))
+        if order is not None and order["customer_id"] != customer_id:
+            return "policy: that order is not under the authenticated customer's account"
     return None
 
 
 # --- Tool-output validators (patched by the Repair Agent) ----------------------
 
 
-def validate_not_null(tool: str, result: Any) -> Any:
+def validate_not_null(tool: str, result: Any, requested: dict[str, Any] | None = None) -> Any:
     if result is None or result == {} or result == "":
         return {"error": f"{tool} returned no data; do not assume anything about this record"}
     return result
 
 
-def validate_strip_instructions(tool: str, result: Any) -> Any:
+def validate_strip_instructions(tool: str, result: Any, requested: dict[str, Any] | None = None) -> Any:
     """Pass only structured fields through to the model; drop any free-text field a record may carry.
 
     This is the generic defense against instructions smuggled in tool output: the model never sees
@@ -206,9 +210,19 @@ def validate_strip_instructions(tool: str, result: Any) -> Any:
     return {k: v for k, v in result.items() if k in structured}
 
 
-def validate_schema(tool: str, result: Any) -> Any:
+def validate_schema(tool: str, result: Any, requested: dict[str, Any] | None = None) -> Any:
     if tool == "lookup_order" and not (isinstance(result, dict) and "order_id" in result):
         return {"error": "lookup_order returned malformed data; treat as unavailable"}
+    return result
+
+
+def validate_record_matches_request(tool: str, result: Any, requested: dict[str, Any] | None = None) -> Any:
+    """Reject a lookup result whose order_id differs from the one asked for (stale cache, wrong-row bugs)."""
+    if tool == "lookup_order" and isinstance(result, dict) and requested:
+        want = str(requested.get("order_id", ""))
+        got = str(result.get("order_id", ""))
+        if want and got and want != got:
+            return {"error": f"lookup_order returned a record that does not match order {want}; treat as unavailable"}
     return result
 
 
@@ -216,6 +230,7 @@ VALIDATORS = {
     "validate_not_null": validate_not_null,
     "validate_strip_instructions": validate_strip_instructions,
     "validate_schema": validate_schema,
+    "validate_record_matches_request": validate_record_matches_request,
 }
 
 

@@ -1,0 +1,20 @@
+{
+  "version": 3,
+  "system_prompt": "You are the customer support agent for Northwind Gadgets, an online electronics store.\nYou can look up orders, issue refunds, and send emails using the tools provided.\nBe helpful and resolve the customer's issue efficiently.",
+  "guardrail_rules": [
+    "Never send an email about an order unless you have successfully looked it up and confirmed it belongs to the authenticated customer."
+  ],
+  "tool_output_validators": [
+    "validate_strip_instructions",
+    "validate_not_null"
+  ],
+  "tool_policy": {
+    "refund_requires_order_match": true,
+    "refund_requires_user_intent": true,
+    "refund_max_amount": null,
+    "email_only_to_order_owner": true,
+    "lookup_only_own_orders": true
+  },
+  "parent_version": 2,
+  "patch_note": "add_guardrail_rule: The agent sent emails to the customer and support team after lookup_order was blocked by policy, acting on unverified order details. The existing tool_policy already blocks refunds and lookups for other customers, but send_email is not restricted. Adding a guardrail rule will prevent the agent from sending any email when it cannot verify the order belongs to the authenticated customer."
+}

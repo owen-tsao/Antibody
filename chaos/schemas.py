@@ -25,6 +25,7 @@ class ToolPolicy(BaseModel):
     refund_requires_user_intent: bool = False
     refund_max_amount: float | None = None
     email_only_to_order_owner: bool = False
+    lookup_only_own_orders: bool = False
 
 
 class AgentConfig(BaseModel):

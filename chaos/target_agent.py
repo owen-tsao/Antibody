@@ -160,7 +160,7 @@ def run_target_agent(cfg: AgentConfig, scenario: Scenario) -> Episode:
                     except Exception as e:  # noqa: BLE001
                         result = {"error": f"tool crashed: {e}"}
                     for vname in cfg.tool_output_validators:
-                        result = VALIDATORS[vname](name, result)
+                        result = VALIDATORS[vname](name, result, args)
                     tool_calls.append(ToolCall(tool=name, args=args, result=result))
 
                 messages.append(
