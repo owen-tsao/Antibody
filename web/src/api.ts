@@ -214,14 +214,16 @@ export interface RecordingInfo {
 export interface ReplayInfo {
   active: boolean;
   recording: RecordingInfo | null;
-  /** Frozen by Back on Agents; resumes from the same position. */
+  /** Frozen by Back on Agents (resumes from the same position), or the tape has ended (see `ended`). */
   paused?: boolean;
+  /** The recording has played out. The session stays on its last frame until stopped; resume restarts it. */
+  ended?: boolean;
   recorded_at?: string;
   duration_s?: number;
   cycles?: number;
   speed?: number;
   started_at?: string;
-  /** Recording seconds played so far; may run past `duration_s` during the 5 s tail. */
+  /** Recording seconds played so far, capped at `duration_s`. */
   elapsed_s?: number;
 }
 

@@ -9,13 +9,16 @@ the clock (`speed`, default 1.0, for rehearsals) and `since`, which is rewritten
 row went live in this replay so the UI's elapsed timers count from now rather than from the
 original run hours ago (the recorded value survives as `recorded_since`).
 
-One module-level session; `start()` refuses while one is active. The session ends on its own
-`TAIL_S` after the last recorded row (the final idle stays on screen briefly, then the API goes
-back to serving live/golden files) or on `stop()`. `pause()` freezes it where it is (Back on the
-Agents page does this) so nothing advances off-screen; a paused replay never expires, keeps serving
-the same frozen row from `/api/status`, and `resume()` continues from that position. A replay never
-outranks a real run: api/main.py stops it the moment a live loop is seen (`replay_if_no_loop`) and
-before spawning one. Never writes under runs/.
+One module-level session; `start()` refuses while one is still playing. A replay never ends on its
+own: once the recording has played out (`ended`) the session stays, frozen on its final row with
+every golden cycle visible, until `stop()` or a fresh `start()` replaces it. This is deliberate. The
+API's read routes serve the live run's files whenever no replay is active, and those files usually
+disagree with the golden recording (a different number of cycles, a different config version); if
+the session expired on a timer, the screen would silently switch runs a few seconds after the
+replay finished. `pause()` freezes it where it is (Back on the Agents page does this) so nothing
+advances off-screen; `resume()` continues from that position, or restarts from the top when the
+recording has ended. A replay never outranks a real run: api/main.py stops it the moment a live
+loop is seen (`replay_if_no_loop`) and before spawning one. Never writes under runs/.
 
 `status_at` / `cycles_at` / `completed_cycle_at` are pure (elapsed -> value) so the mapping can be
 checked against the real log without a server:
@@ -38,9 +41,9 @@ GOLDEN_LOG = GOLDEN_DIR / "status_log.jsonl"
 GOLDEN_CYCLES = GOLDEN_DIR / "cycles.jsonl"
 GOLDEN_STATUS = GOLDEN_DIR / "runs" / "status.json"
 
-# How long the final idle row is served after the recording ends before the session clears itself.
-TAIL_S = 5.0
 MIN_SPEED, MAX_SPEED = 0.1, 50.0
+# Recording seconds short of the duration that still counts as ended (see Session.ended).
+END_EPS_S = 0.01
 
 
 @dataclass(frozen=True)
@@ -212,6 +215,9 @@ class Session:
 
     def resume(self) -> None:
         with self._guard:
+            if self.ended():
+                # The play control at the end of a tape starts it over.
+                self._reanchor(0.0, self.speed)
             if self.paused_at is not None:
                 self.paused_total += (datetime.now(timezone.utc) - self.paused_at).total_seconds()
                 self.paused_at = None
@@ -238,10 +244,12 @@ class Session:
     def seek(self, elapsed: float) -> None:
         self._reanchor(min(max(0.0, elapsed), self.recording.duration_s), self.speed)
 
-    def finished(self) -> bool:
-        # A paused replay never expires: its clock is stopped, and it must still be there to resume.
+    def ended(self) -> bool:
+        """The recording has played out. The session stays; the UI sees the final row and every cycle."""
         with self._guard:
-            return not self.paused() and self.elapsed() > self.recording.duration_s + TAIL_S * self.speed
+            # Tolerance: a seek to the very end re-anchors t0 through a microsecond-rounded timedelta,
+            # so a frozen clock can read a few µs short of the duration and play would not restart.
+            return self.elapsed() >= self.recording.duration_s - END_EPS_S
 
     def info(self) -> dict:
         rec = self.recording
@@ -251,8 +259,10 @@ class Session:
             "cycles": len(rec.cycles),
             "speed": self.speed,
             "started_at": self.t0.isoformat(),
-            "elapsed_s": round(self.elapsed(), 3),
-            "paused": self.paused(),
+            "elapsed_s": round(min(self.elapsed(), rec.duration_s), 3),
+            # An ended tape reads as paused at its last frame: the transport shows play, not pause.
+            "paused": self.paused() or self.ended(),
+            "ended": self.ended(),
         }
 
 
@@ -261,15 +271,8 @@ _lock = threading.Lock()
 
 
 def _current() -> Session | None:
-    """The live session, clearing it once the recording (plus tail) has played out."""
-    global _session
-    s = _session
-    if s is not None and s.finished():
-        with _lock:
-            if _session is s:
-                _session = None
-        return None
-    return s
+    """The session, if any. It never clears itself; see the module docstring for why."""
+    return _session
 
 
 def active() -> bool:
@@ -277,11 +280,11 @@ def active() -> bool:
 
 
 def start(speed: float = 1.0) -> dict:
-    """Begin a replay from t=0. Raises RuntimeError("active") if one is already playing."""
+    """Begin a replay from t=0. Raises RuntimeError("active") if one is still playing (an ended one is replaced)."""
     global _session
     speed = min(MAX_SPEED, max(MIN_SPEED, float(speed)))
     with _lock:
-        if _session is not None and not _session.finished():
+        if _session is not None and not _session.ended():
             raise RuntimeError("active")
         rec = recording()
         _session = Session(recording=rec, t0=datetime.now(timezone.utc), speed=speed)
@@ -345,7 +348,8 @@ def current_status() -> dict | None:
         "speed": s.speed,
         "elapsed_s": round(min(elapsed, s.recording.duration_s), 1),
         "duration_s": round(s.recording.duration_s, 1),
-        "paused": s.paused(),
+        "paused": s.paused() or s.ended(),
+        "ended": s.ended(),
     }
 
 

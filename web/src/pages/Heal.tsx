@@ -12,11 +12,13 @@ const quietLink =
   "rounded text-[11px] uppercase tracking-[0.14em] text-white/85 transition-colors hover:text-white focus-visible:outline-white disabled:cursor-wait";
 
 /**
- * The replay link's text. Paused (Back on Agents) → resume from that position
+ * The replay link's text. Ended (the tape played out and is frozen on its last frame) → play it again
+ * (`Replay again · 3×`); paused mid-way (Back on Agents) → resume from that position
  * (`Resume replay · 3× · 4:12 / 16:26`); no session with a known recording → what would play
  * (`Replay recorded run · 10:31 PM · 7 cycles`); /api/replay unreachable → the bare label.
  */
 function replayLabel(replay: ReplayInfo | null): string {
+  if (replay?.active && replay.ended) return `Replay again${replay.speed ? ` · ${replay.speed}×` : ""}`;
   if (replay?.active && replay.speed && replay.duration_s != null && replay.elapsed_s != null) {
     const elapsed = Math.min(replay.elapsed_s, replay.duration_s);
     return `Resume replay · ${replay.speed}× · ${fmtClock(elapsed)} / ${fmtClock(replay.duration_s)}`;
