@@ -132,9 +132,9 @@ export default function Results({ onAgents, onCycle }: { onAgents: () => void; o
   return (
     <main className="min-h-full pb-16">
       <BackLink onClick={onAgents} label="Back to cycles" />
-      <header className="mx-auto w-full max-w-6xl px-6 pb-3 pt-20 md:px-10 md:pt-24">
-        <h1 className="text-[40px] font-medium leading-none tracking-[-0.025em]">Results</h1>
-        <p className="tabular mt-3 text-[13px] text-[var(--muted)]">
+      <header className="mx-auto w-full max-w-6xl px-6 pb-1 pt-14 md:px-10 md:pt-16">
+        <h1 className="display text-[80px] leading-[0.9]">Results</h1>
+        <p className="tabular mt-4 text-[13px] text-[var(--muted)]">
           {story ? (
             story
           ) : cycles ? (

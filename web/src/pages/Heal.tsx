@@ -108,18 +108,18 @@ export default function Heal({
 
       {!loopRunning && (
         <motion.div {...fade(0.5)} className="mt-8 flex items-baseline gap-4">
-          <button type="button" disabled={busy} onClick={() => onStart("replay")} className={cn(quietLink, "tabular")} style={shadow}>
-            {replayLabel(replay)}
+          <button type="button" disabled={busy} onClick={() => onStart("replay")} className={cn(quietLink, "group tabular")} style={shadow}>
+            <span className="u-line">{replayLabel(replay)}</span>
           </button>
           {pausedReplay && onStopReplay && (
             <button
               type="button"
               disabled={busy}
               onClick={onStopReplay}
-              className={cn(quietLink, "text-white/60 underline decoration-white/30 underline-offset-2")}
+              className={cn(quietLink, "group text-white/60")}
               style={shadow}
             >
-              stop replay
+              <span className="u-line">stop replay</span>
             </button>
           )}
         </motion.div>

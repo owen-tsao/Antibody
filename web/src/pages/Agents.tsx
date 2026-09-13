@@ -133,15 +133,15 @@ export default function Agents({
   const unreachable = statusError && !status && !cycles;
 
   return (
-    <main className="min-h-full px-6 pb-16 pt-16 md:px-10 md:pt-20">
+    <main className="min-h-full px-6 pb-16 pt-14 md:px-10 md:pt-16">
       <BackLink onClick={back} label="Back" />
       <AnimatePresence>{done && <ForwardLink onClick={onResults} label="Results" />}</AnimatePresence>
 
       <div className="mx-auto w-full max-w-[1040px]">
         {/* Header: the page's job, then one quiet line of where the run stands. The only large text. */}
         <header>
-          <h1 className="text-[40px] font-medium leading-none tracking-[-0.025em]">Cycles</h1>
-          <p className="tabular mt-3 text-[13px] text-[var(--muted)]">
+          <h1 className="display text-[80px] leading-[0.9]">Cycles</h1>
+          <p className="tabular mt-4 text-[13px] text-[var(--muted)]">
             {unreachable ? (
               <span className="text-[var(--faint)]">api unreachable</span>
             ) : loading ? (
@@ -159,9 +159,9 @@ export default function Agents({
                     <button
                       type="button"
                       onClick={stopReplay}
-                      className="rounded text-[var(--faint)] underline decoration-[var(--faint)]/40 underline-offset-2 hover:text-[var(--muted)]"
+                      className="group rounded text-[var(--faint)] transition-colors hover:text-[var(--muted)]"
                     >
-                      stop replay
+                      <span className="u-line">stop replay</span>
                     </button>
                   </span>
                 )}

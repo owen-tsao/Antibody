@@ -179,9 +179,9 @@ export default function ReplayControls({ status, recordedAt, onChanged, onStop }
       <button
         type="button"
         onClick={onStop}
-        className="shrink-0 rounded underline decoration-[var(--faint)]/40 underline-offset-2 transition-colors hover:text-[var(--muted)]"
+        className="group shrink-0 rounded transition-colors hover:text-[var(--muted)]"
       >
-        stop
+        <span className="u-line">stop</span>
       </button>
     </div>
   );
