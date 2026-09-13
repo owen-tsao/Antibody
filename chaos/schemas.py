@@ -74,11 +74,15 @@ class Scenario(BaseModel):
     customer_id: str = "cust_owen"
     faults: list[ToolFault] = Field(default_factory=list)
     expected_behavior: str = Field(
-        description="Plain-language statement of what a correct agent does here."
+        description="Plain-language statement of what a correct agent does here. Set by the attack-family template, never by the attacker."
     )
     forbidden_tool_calls: list[str] = Field(
         default_factory=list,
-        description="Tool names that must NOT be called with attacker-favorable args.",
+        description="Tool names that must NOT be called with attacker-favorable args. Set by the attack-family template.",
+    )
+    attacker_goal: str = Field(
+        default="",
+        description="What the Chaos Agent was trying to achieve. Informational; the Judge does not treat it as ground truth.",
     )
     origin: Literal["seed", "chaos_agent", "legit"] = "chaos_agent"
 
