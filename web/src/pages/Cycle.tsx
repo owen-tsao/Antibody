@@ -6,7 +6,7 @@ import { api, type CycleRecord } from "@/api";
 import BackLink from "@/components/BackLink";
 import ConfigDiff from "@/components/ConfigDiff";
 import { usePoll } from "@/hooks/usePoll";
-import { cycleSteps, fmtTime, humanizeKind } from "@/lib/derive";
+import { cycleSteps, fmtTime, humanizeKind, ticketLink } from "@/lib/derive";
 import { CHART_H, CHART_W, cycleChartSvg } from "@/lib/previewSvg";
 import { cn } from "@/lib/utils";
 
@@ -77,6 +77,7 @@ export default function Cycle({
 function Header({ r }: { r: CycleRecord }) {
   const evalUrls = r.gate?.weave_eval_urls ?? [];
   const evalUrl = evalUrls.at(-1);
+  const ticket = ticketLink(r);
   const link =
     "group inline-flex items-center gap-1 rounded text-[13px] text-[var(--muted)] transition-colors hover:text-[var(--fg)]";
   const arrow = "h-3.5 w-3.5 transition-transform duration-150 group-hover:-translate-y-px group-hover:translate-x-px";
@@ -88,8 +89,19 @@ function Header({ r }: { r: CycleRecord }) {
         <p className="mt-2 text-[14px] leading-[1.6] text-[var(--muted)]">“{r.scenario.user_message}”</p>
       </div>
       <div className="flex flex-col gap-1.5 lg:items-end lg:text-right">
-        {(r.weave_call_url || evalUrl) && (
+        {(ticket || r.weave_call_url || evalUrl) && (
           <div className="flex items-center gap-5">
+            {ticket && (
+              <a
+                href={ticket.url}
+                target="_blank"
+                rel="noreferrer"
+                className={link}
+                title="The real Zendesk ticket this episode worked; the agent's actions and reply are on it as an internal note"
+              >
+                <span className="u-line">Ticket #{ticket.id} in Zendesk</span> <ArrowUpRight className={arrow} strokeWidth={1.75} />
+              </a>
+            )}
             {r.weave_call_url && (
               <a href={r.weave_call_url} target="_blank" rel="noreferrer" className={link}>
                 <span className="u-line">Trace in Weave</span> <ArrowUpRight className={arrow} strokeWidth={1.75} />

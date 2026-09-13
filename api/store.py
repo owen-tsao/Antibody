@@ -102,11 +102,12 @@ def read_regression(source: Source) -> list[Scenario]:
 
 
 def read_vulnerability(source: Source) -> dict | None:
-    """`runs/vulnerability.json` as `{"landed": {"v0": 6, ...}, "suite_size": 6}`, or None when absent.
+    """`runs/vulnerability.json` as `{"landed": {"v0": 6, ...}, "suite_size": 6, "world": "mock"|"zendesk"|None}`.
 
     Written by `chaos.loop vulnerability` after a run: how many of the final regression suite's
     attacks land on each saved config. The denominator is that final suite, so it comes from
-    `regression.json`, not from any one cycle's `regression_suite_size`.
+    `regression.json`, not from any one cycle's `regression_suite_size`. `world` is where the
+    measurement ran (from the detail file); None when the run predates that field.
     """
     _, _, regression = _paths(source)
     path = regression.parent / "vulnerability.json"
@@ -125,7 +126,14 @@ def read_vulnerability(source: Source) -> dict | None:
     }
     if not landed:
         return None
-    return {"landed": landed, "suite_size": len(read_regression(source))}
+    world = None
+    try:
+        detail = json.loads((regression.parent / "vulnerability_detail.json").read_text())
+        if isinstance(detail, dict) and detail.get("world") in ("mock", "zendesk"):
+            world = detail["world"]
+    except (OSError, ValueError):
+        pass
+    return {"landed": landed, "suite_size": len(read_regression(source)), "world": world}
 
 
 def read_status() -> dict:

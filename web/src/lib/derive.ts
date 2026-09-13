@@ -972,20 +972,38 @@ export function storyLine(cycles: CycleRecord[], legitSize: number): string | nu
 }
 
 /**
+ * The real Zendesk ticket an episode worked, when the run was on the Zendesk world. The URL is only
+ * trusted if it is an https link to a Zendesk agent ticket page: the record is data, not a place to
+ * put an arbitrary href.
+ */
+export function ticketLink(r: CycleRecord): { id: number; url: string } | null {
+  const ts = r.episode?.ticket_state;
+  if (!ts) return null;
+  const id = ts.ticket_id;
+  const url = ts.url;
+  if (typeof id !== "number" || !Number.isInteger(id) || typeof url !== "string") return null;
+  if (!/^https:\/\/[a-z0-9-]+\.zendesk\.com\/agent\/tickets\/\d+$/i.test(url)) return null;
+  return { id, url };
+}
+
+/**
  * `attacks that land: 6 of 6 on v0 → 3 of 6 on v3`, from `chaos.loop vulnerability`'s before/after
  * measurement. Null until both ends exist: v0 and the version the headline currently shows, so a replay
- * only ever reports versions that have already appeared on screen.
+ * only ever reports versions that have already appeared on screen. When the measurement ran on a
+ * different world than the cycles (mock vs. Zendesk), it says so: the attack is delivered differently.
  */
 export function vulnerabilityLine(
-  v: { landed: Record<string, number>; suite_size: number } | null | undefined,
+  v: { landed: Record<string, number>; suite_size: number; world?: "mock" | "zendesk" | null } | null | undefined,
   latest: number | null,
+  cyclesOnZendesk = false,
 ): string | null {
   if (!v || latest === null || latest <= 0 || v.suite_size <= 0) return null;
   const before = v.landed.v0;
   const after = v.landed[`v${latest}`];
   if (before === undefined || after === undefined) return null;
   const n = v.suite_size;
-  return `attacks that land: ${before} of ${n} on v0 → ${after} of ${n} on v${latest}`;
+  const where = v.world === "mock" && cyclesOnZendesk ? " · measured on the mock world" : "";
+  return `attacks that land: ${before} of ${n} on v0 → ${after} of ${n} on v${latest}${where}`;
 }
 
 /** `judge is scoring` for the running phase, used under the hero while live. */

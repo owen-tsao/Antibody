@@ -174,7 +174,7 @@ export interface State {
   /** Replay only: ISO time the recorded run started. */
   recorded_at?: string | null;
   /** How many of the final suite's attacks land on each config (`{ v0: 6, v3: 3 }`); null until measured. */
-  vulnerability?: { landed: Record<string, number>; suite_size: number } | null;
+  vulnerability?: { landed: Record<string, number>; suite_size: number; world?: "mock" | "zendesk" | null } | null;
 }
 
 export type Phase = "baseline" | "chaos" | "target" | "judge" | "repair" | "gate" | "idle";

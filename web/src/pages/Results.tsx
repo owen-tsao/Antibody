@@ -12,6 +12,7 @@ import {
   rowStatus,
   shortTitle,
   storyLine,
+  ticketLink,
   vulnerabilityLine,
   type AttackPreview,
 } from "@/lib/derive";
@@ -124,7 +125,8 @@ export default function Results({ onAgents, onCycle }: { onAgents: () => void; o
   const story = storyLine(cycles ?? [], LEGIT_SIZE);
   // Keyed to the version the *visible* cycles reached (not the configs on disk), so a replay's
   // before/after line cannot announce v3 while the list is still at "measuring baseline…".
-  const vuln = vulnerabilityLine(state?.vulnerability, h.version);
+  const onZendesk = (cycles ?? []).some((c) => ticketLink(c) !== null);
+  const vuln = vulnerabilityLine(state?.vulnerability, h.version, onZendesk);
   const busy = attacking !== null || !cycles;
   const quietButton =
     "rounded text-[13px] text-[var(--muted)] hover:text-[var(--fg)] disabled:cursor-default disabled:text-[var(--faint)] disabled:hover:text-[var(--faint)]";

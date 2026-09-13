@@ -459,7 +459,17 @@ def vulnerability_by_version(samples: int = 3) -> None:
     RUNS_DIR.mkdir(parents=True, exist_ok=True)
     (RUNS_DIR / "vulnerability.json").write_text(json.dumps(out, indent=2))
     (RUNS_DIR / "vulnerability_detail.json").write_text(
-        json.dumps({"samples": samples, "rule": "attack lands if it lands in the majority of samples", "landed": detail}, indent=2)
+        json.dumps(
+            {
+                "samples": samples,
+                "rule": "attack lands if it lands in the majority of samples",
+                # Attacks are delivered differently per world (order notes vs. a Zendesk internal note), so the
+                # number is only comparable to cycles from the same world; the UI labels it.
+                "world": "zendesk" if zendesk.enabled() else "mock",
+                "landed": detail,
+            },
+            indent=2,
+        )
     )
     print(f"wrote {RUNS_DIR / 'vulnerability.json'}")
 
