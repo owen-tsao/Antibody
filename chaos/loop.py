@@ -15,7 +15,8 @@ import weave
 
 from chaos.chaos_agent import generate_scenario
 from chaos.config import ENTITY_PROJECT, ROOT
-from chaos.gate import run_gate, run_suite
+from chaos.evals import TargetAgent, publish_dataset, run_evaluation
+from chaos.gate import run_gate
 from chaos.judge import judge_episode
 from chaos.repair_agent import apply_patch, propose_patch
 from chaos.scenarios import LEGIT_SCENARIOS, SEED_SCENARIOS
@@ -33,6 +34,13 @@ class LoopState:
         self.cycle = 0
         self.config_history: list[AgentConfig] = [self.cfg]
         self.baseline: dict[str, bool] = {}
+        self.legit_dataset = publish_dataset("legit-users", LEGIT_SCENARIOS)
+        self.regression_dataset: weave.Dataset | None = None
+
+    def capture_regression(self, scenario: Scenario) -> None:
+        """A new failure joins the permanent regression suite; re-publish it as a Weave Dataset version."""
+        self.regression_suite.append(scenario)
+        self.regression_dataset = publish_dataset("regression-suite", self.regression_suite)
 
     def refresh_baseline(self) -> None:
         """Record how production does on legit traffic and captured regressions: the bar a patch must not lower.
@@ -40,12 +48,14 @@ class LoopState:
         Regression scenarios were all failures when captured, so they start False and only flip to True
         once a patch that fixed them ships. The gate then protects them from being un-fixed.
         """
-        verdicts = run_suite(self.cfg, LEGIT_SCENARIOS)
-        self.baseline = {v.scenario_id: v.passed for v in verdicts}
+        run = run_evaluation(
+            TargetAgent(config=self.cfg), self.legit_dataset, "baseline-legit", f"baseline v{self.cfg.version} legit"
+        )
+        self.baseline.update({sid: v.passed for sid, v in run.verdicts.items()})
         for s in self.regression_suite:
             self.baseline.setdefault(s.id, False)
-        ok = sum(self.baseline[v.scenario_id] for v in verdicts)
-        print(f"  baseline: config v{self.cfg.version} passes {ok}/{len(verdicts)} legit-user scenarios")
+        ok = sum(v.passed for v in run.verdicts.values())
+        print(f"  baseline: config v{self.cfg.version} passes {ok}/{len(run.verdicts)} legit-user scenarios")
 
     def mark_fixed(self, scenario_id: str) -> None:
         self.baseline[scenario_id] = True
@@ -78,21 +88,31 @@ def run_cycle(state: LoopState, scenario: Scenario) -> CycleRecord:
     patch = None
     gate = None
     if not verdict.passed:
-        state.regression_suite.append(scenario)
+        state.capture_regression(scenario)
         rejected: list[str] = []
         base = state.cfg
         for attempt in range(1, MAX_REPAIR_ATTEMPTS + 1):
             patch = propose_patch(base, scenario, episode, verdict, rejected)
             candidate = apply_patch(base, patch)
+            candidate.version = state.cfg.version + 1
+            candidate.parent_version = state.cfg.version
             print(f"  repair attempt {attempt}: {patch.kind} — {patch.rationale[:120]}")
-            gate = run_gate(candidate, scenario, state.regression_suite[:-1], LEGIT_SCENARIOS, state.baseline)
+            # Regression dataset includes the new failure; the gate evaluates it separately, so pass the prior suite.
+            gate = run_gate(
+                candidate,
+                scenario,
+                state.regression_suite[:-1],
+                LEGIT_SCENARIOS,
+                state.baseline,
+                cycle=state.cycle,
+                from_version=state.cfg.version,
+                legit_dataset=state.legit_dataset,
+            )
             print(
                 f"  gate: {'ACCEPTED' if gate.accepted else 'REJECTED'} "
                 f"(fixes={gate.fixes_new_failure}, regression={gate.regression_pass_rate:.0%}, legit={gate.legit_pass_rate:.0%}) — {gate.reason}"
             )
             if gate.accepted:
-                candidate.version = state.cfg.version + 1
-                candidate.parent_version = state.cfg.version
                 state.cfg = candidate
                 state.config_history.append(candidate)
                 state.mark_fixed(scenario.id)
@@ -122,6 +142,7 @@ def run_cycle(state: LoopState, scenario: Scenario) -> CycleRecord:
 
 def main() -> None:
     import argparse
+    import logging
 
     parser = argparse.ArgumentParser(description="Run the Chaos Monkey self-healing loop")
     parser.add_argument("--chaos-cycles", type=int, default=3, help="how many novel scenarios the Chaos Agent should invent after the seeds")
@@ -129,6 +150,9 @@ def main() -> None:
     args = parser.parse_args()
 
     weave.init(ENTITY_PROJECT)
+    # Evaluation progress and summary output drown out the loop narrative.
+    for name in ("weave", "weave.evaluation.eval"):
+        logging.getLogger(name).setLevel(logging.WARNING)
     if CYCLES_PATH.exists():
         CYCLES_PATH.unlink()
     state = LoopState()

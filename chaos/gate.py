@@ -2,38 +2,23 @@
 
 A candidate config is accepted only if it
   (a) fixes the scenario that just broke,
-  (b) still passes every previously-captured regression scenario, and
+  (b) still passes every previously-captured regression scenario that production passes, and
   (c) does not make any legit-user scenario worse than the current production config
       (so the repair agent cannot "win" by refusing everything).
 
 "Regression" means worse than what is deployed today, not worse than perfect: the
 gate must not reject a good patch because of a pre-existing flaw it did not cause.
 
-Every check runs through Weave so the gate decision is auditable.
+Each gate run is three Weave Evaluations (gate-new, gate-regression, gate-legit) against
+the candidate as a versioned weave.Model, so every decision is inspectable in the Evals tab.
 """
 
 from __future__ import annotations
 
-from concurrent.futures import ThreadPoolExecutor
-
 import weave
 
-from chaos.judge import judge_episode
-from chaos.schemas import AgentConfig, GateResult, Scenario, Verdict
-from chaos.target_agent import run_target_agent
-
-
-@weave.op
-def evaluate_config_on(cfg: AgentConfig, scenario: Scenario) -> Verdict:
-    episode = run_target_agent(cfg, scenario)
-    return judge_episode(scenario, episode)
-
-
-def run_suite(cfg: AgentConfig, scenarios: list[Scenario]) -> list[Verdict]:
-    if not scenarios:
-        return []
-    with ThreadPoolExecutor(max_workers=min(6, len(scenarios))) as pool:
-        return list(pool.map(lambda s: evaluate_config_on(cfg, s), scenarios))
+from chaos.evals import TargetAgent, run_evaluation, scenario_rows
+from chaos.schemas import AgentConfig, GateResult, Scenario
 
 
 @weave.op
@@ -43,25 +28,31 @@ def run_gate(
     regression_suite: list[Scenario],
     legit_suite: list[Scenario],
     baseline: dict[str, bool],
+    *,
+    cycle: int,
+    from_version: int,
+    regression_dataset: weave.Dataset | None = None,
+    legit_dataset: weave.Dataset | None = None,
 ) -> GateResult:
-    """baseline maps scenario id -> whether the CURRENT production config passes it.
+    """baseline maps scenario id -> whether the CURRENT production config passes it."""
+    model = TargetAgent(config=candidate)
+    tag = f"cycle-{cycle:02d} v{from_version}->v{candidate.version}"
 
-    A candidate is only penalized for scenarios that production currently passes and it fails.
-    Pre-existing failures (or flaky scenarios production also fails) are not held against it.
-    """
-    new_verdict = evaluate_config_on(candidate, new_failure)
-    fixes = new_verdict.passed
+    new_run = run_evaluation(model, scenario_rows([new_failure]), "gate-new", f"{tag} new")
+    fixes = new_run.pass_rate == 1.0
 
-    reg_verdicts = run_suite(candidate, regression_suite)
-    legit_verdicts = run_suite(candidate, legit_suite)
+    reg_run = run_evaluation(
+        model, regression_dataset or scenario_rows(regression_suite), "gate-regression", f"{tag} regression"
+    ) if regression_suite else None
+    legit_run = run_evaluation(model, legit_dataset or scenario_rows(legit_suite), "gate-legit", f"{tag} legit")
 
-    reg_rate = (sum(v.passed for v in reg_verdicts) / len(reg_verdicts)) if reg_verdicts else 1.0
-    legit_rate = (sum(v.passed for v in legit_verdicts) / len(legit_verdicts)) if legit_verdicts else 1.0
+    reg_rate = reg_run.pass_rate if reg_run else 1.0
+    legit_rate = legit_run.pass_rate
 
-    newly_broken_legit = [v for v in legit_verdicts if not v.passed and baseline.get(v.scenario_id, True)]
-    reg_failures = [v for v in reg_verdicts if not v.passed and baseline.get(v.scenario_id, True)]
+    reg_failures = [sid for sid in (reg_run.failed_ids if reg_run else []) if baseline.get(sid, True)]
+    newly_broken_legit = [sid for sid in legit_run.failed_ids if baseline.get(sid, True)]
 
-    failed = [v.scenario_id for v in reg_failures + newly_broken_legit]
+    failed = list(reg_failures) + list(newly_broken_legit)
     if not fixes:
         failed.insert(0, new_failure.id)
 
@@ -69,13 +60,19 @@ def run_gate(
     if accepted:
         reason = "fixes the new failure, no regressions, legit users unaffected"
     elif not fixes:
-        reason = f"does not fix the new failure: {new_verdict.reason}"
+        v = new_run.verdicts.get(new_failure.id)
+        reason = f"does not fix the new failure: {v.reason if v else 'unknown'}"
     elif newly_broken_legit:
-        b = newly_broken_legit[0]
-        reason = f"breaks a legit user flow that worked before ({b.scenario_id}: {b.reason})"
+        v = legit_run.verdicts[newly_broken_legit[0]]
+        reason = f"breaks a legit user flow that worked before ({v.scenario_id}: {v.reason})"
     else:
-        b = reg_failures[0]
-        reason = f"reintroduces old failure ({b.scenario_id}: {b.reason})"
+        v = reg_run.verdicts[reg_failures[0]]  # type: ignore[union-attr]
+        reason = f"reintroduces old failure ({v.scenario_id}: {v.reason})"
+
+    if not accepted:
+        for run, kind in ((new_run, "new"), (reg_run, "regression"), (legit_run, "legit")):
+            if run is not None:
+                run.rename(f"{tag} {kind} REJECTED")
 
     return GateResult(
         accepted=accepted,
