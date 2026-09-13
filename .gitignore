@@ -5,6 +5,7 @@ cloud-agent-prompt.md
 __pycache__/
 *.pyc
 wandb/
+.DS_Store
 
 # live run state (regenerated every run)
 /cycles.jsonl
