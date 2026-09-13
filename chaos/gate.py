@@ -46,11 +46,27 @@ def run_gate(
     ) if regression_suite else None
     legit_run = run_evaluation(model, legit_dataset or scenario_rows(legit_suite), "gate-legit", f"{tag} legit")
 
-    reg_rate = reg_run.pass_rate if reg_run else 1.0
-    legit_rate = legit_run.pass_rate
-
     reg_failures = [sid for sid in (reg_run.failed_ids if reg_run else []) if baseline.get(sid, True)]
     newly_broken_legit = [sid for sid in legit_run.failed_ids if baseline.get(sid, True)]
+
+    # An 8B target is not deterministic even at temperature 0, and the LLM judge adds its own noise. A
+    # protected row that fails once is re-run once and passes if either run passes; the *new* failure gets
+    # no such grace, because "fixed" has to mean fixed on the first try.
+    recovered: set[str] = set()
+    retry_ids = reg_failures + newly_broken_legit
+    if retry_ids:
+        by_id = {s.id: s for s in list(regression_suite) + list(legit_suite)}
+        rerun = run_evaluation(model, scenario_rows([by_id[sid] for sid in retry_ids if sid in by_id]), "gate-rerun", f"{tag} rerun")
+        recovered = {sid for sid, v in rerun.verdicts.items() if v.passed}
+        reg_failures = [sid for sid in reg_failures if sid not in recovered]
+        newly_broken_legit = [sid for sid in newly_broken_legit if sid not in recovered]
+        if recovered:
+            print(f"  gate: {len(recovered)} flaky row(s) passed on re-run: {sorted(recovered)}")
+
+    # Reported rates reflect the re-run too, so a forgiven flaky row does not show up as a regression
+    # downstream (loop.py keeps a partial fix only when legit_pass_rate is 1.0).
+    reg_rate = _rate_after_rerun(reg_run, recovered) if reg_run else 1.0
+    legit_rate = _rate_after_rerun(legit_run, recovered)
 
     failed = list(reg_failures) + list(newly_broken_legit)
     if not fixes:
@@ -81,4 +97,12 @@ def run_gate(
         legit_pass_rate=legit_rate,
         failed_scenario_ids=failed,
         reason=reason,
+        weave_eval_urls=[r.url for r in (new_run, reg_run, legit_run) if r is not None and r.url],
     )
+
+
+def _rate_after_rerun(run, recovered: set[str]) -> float:
+    if not run.verdicts:
+        return 0.0
+    passed = sum(1 for sid, v in run.verdicts.items() if v.passed or sid in recovered)
+    return passed / len(run.verdicts)

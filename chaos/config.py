@@ -36,4 +36,6 @@ def get_client() -> OpenAI:
     key = os.environ.get("WANDB_API_KEY")
     if not key:
         raise SystemExit("WANDB_API_KEY not set (put it in .env)")
-    return OpenAI(base_url=INFERENCE_URL, api_key=key, project=ENTITY_PROJECT)
+    # The SDK default is a 10-minute timeout: one hung request would freeze the loop (and the UI's
+    # orbs) for that long. 90 s covers the slowest DeepSeek repair call seen so far with room to spare.
+    return OpenAI(base_url=INFERENCE_URL, api_key=key, project=ENTITY_PROJECT, timeout=90.0, max_retries=2)

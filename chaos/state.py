@@ -40,7 +40,7 @@ def load_config(version: int) -> AgentConfig:
 def latest_version() -> int | None:
     if not CONFIGS_DIR.exists():
         return None
-    versions = [int(p.stem[1:]) for p in CONFIGS_DIR.glob("v*.json")]
+    versions = [int(p.stem[1:]) for p in CONFIGS_DIR.glob("v*.json") if p.stem[1:].isdigit()]
     return max(versions) if versions else None
 
 
@@ -65,6 +65,30 @@ def reset() -> None:
     print("reset: removed runs/ and cycles.jsonl")
 
 
+ARCHIVE_DIR = RUNS_DIR / "archive"
+
+
+def archive_previous_run() -> Path | None:
+    """Move the previous run's configs, suite, cycle log and phase log out of the way before a fresh run.
+
+    A fresh run starts at v0 and cycle 1 again. Writing its v1, v2, ... over the previous run's files would
+    silently change what every earlier cycle record points at, so the old run is kept whole under
+    runs/archive/<timestamp>/ instead. Returns the archive path, or None if there was nothing to move.
+    """
+    from datetime import datetime, timezone
+
+    # status.json goes too: a fresh run must not begin with the previous run's last phase on screen.
+    movable = [CONFIGS_DIR, REGRESSION_PATH, CYCLES_PATH, RUNS_DIR / "status.json", RUNS_DIR / "status_log.jsonl", RUNS_DIR / "vulnerability.json", RUNS_DIR / "vulnerability_detail.json"]
+    present = [p for p in movable if p.exists()]
+    if not present:
+        return None
+    dest = ARCHIVE_DIR / datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
+    dest.mkdir(parents=True)
+    for p in present:
+        shutil.move(str(p), str(dest / p.name))
+    return dest
+
+
 def snapshot_golden() -> None:
     """Copy the current run into data/golden/ so a known-good run is committed for demo fallback."""
     if GOLDEN_DIR.exists():
@@ -73,5 +97,9 @@ def snapshot_golden() -> None:
     if CYCLES_PATH.exists():
         shutil.copy(CYCLES_PATH, GOLDEN_DIR / "cycles.jsonl")
     if RUNS_DIR.exists():
-        shutil.copytree(RUNS_DIR, GOLDEN_DIR / "runs")
+        shutil.copytree(RUNS_DIR, GOLDEN_DIR / "runs", ignore=shutil.ignore_patterns("archive", "loop.log"))
+        # The recorded phase transitions are what replay plays back; the frontend reads them at top level.
+        log = RUNS_DIR / "status_log.jsonl"
+        if log.exists():
+            shutil.copy(log, GOLDEN_DIR / "status_log.jsonl")
     print(f"golden: snapshot written to {GOLDEN_DIR}")
