@@ -159,9 +159,25 @@ export interface LoopStarted {
 }
 
 export interface Manifest {
-  target: { name: string; model: string; model_short: string };
+  target: {
+    name: string;
+    model: string;
+    model_short: string;
+    /** How the loop reaches the target (plan 01 Step 5): "builtin", or "http" for an external agent. Absent until that lands. */
+    transport?: string;
+  };
   tools: { name: string; description: string; side_effect: boolean; free_text_fields: string[] }[];
   families: { kind: ScenarioKind; title: string; seed_id: string | null }[];
+}
+
+/** GET /api/health (plan 03 Step 1). Never carries the key itself, only whether one is set. */
+export interface Health {
+  ok: boolean;
+  has_api_key: boolean;
+  version?: string;
+  live_exists?: boolean;
+  golden_exists?: boolean;
+  weave?: unknown;
 }
 
 export interface State {
@@ -301,9 +317,12 @@ export const api = {
   config: (v: number) => get<AgentConfig>(`/api/configs/${v}`),
   configs: () => get<Pick<AgentConfig, "version" | "parent_version" | "patch_note">[]>("/api/configs"),
   manifest: () => get<Manifest>("/api/manifest"),
+  health: () => get<Health>("/api/health"),
   loop: () => get<LoopState>("/api/loop"),
   loopStart: (body: LoopStartBody) => post<LoopStarted>("/api/loop/start", body),
   loopStop: () => post<LoopState>("/api/loop/stop"),
+  /** Where "open log" points: the last `tail` lines of runs/loop.log, as JSON. */
+  loopLogUrl: (tail = 200) => `/api/loop/log?tail=${tail}`,
   /** Play the golden run into /api/status and /api/cycles (409 if a loop or another replay is running). */
   replayStart: (speed = 1) => post<ReplayStarted>(`/api/replay/start?speed=${speed}`),
   replayStop: () => post<{ stopped: boolean }>("/api/replay/stop"),

@@ -2,6 +2,7 @@ import { AnimatePresence, motion, useReducedMotion } from "framer-motion";
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 
 import { api, type Status } from "@/api";
+import ApiDown from "@/components/ApiDown";
 import BackLink, { ForwardLink } from "@/components/BackLink";
 import CyclesBox from "@/components/CyclesBox";
 import ErrorBoundary from "@/components/ErrorBoundary";
@@ -51,6 +52,18 @@ const ORB_COLORS: Record<Agent, [string, string]> = {
 // A phase change is what the dwell protects; a new `since` or `attempt` inside the same phase is not.
 const phaseKey = (s: Status | null) => s?.phase ?? "idle";
 
+/**
+ * "target: openai-agents via HTTP" / "target: built-in", from the manifest's `target`. Null until the
+ * backend reports a `transport` (plan 01 Step 5): without it there is no honest way to say how the
+ * agent is reached, so the line is not drawn rather than guessed.
+ */
+function targetLine(t: { name: string; transport?: string } | undefined): string | null {
+  if (!t?.transport) return null;
+  const transport = t.transport.toLowerCase();
+  if (transport === "builtin" || transport === "built-in") return "target: built-in";
+  return `target: ${t.name} via ${transport === "http" ? "HTTP" : t.transport}`;
+}
+
 export default function Agents({
   replayNote = null,
   onBack,
@@ -83,6 +96,43 @@ export default function Agents({
     refreshStatus();
     refreshCycles();
   }, [refreshStatus, refreshCycles]);
+
+  // /api/loop is the process truth: whether a run we own is alive (→ "stop run"), or how it ended
+  // (→ "the loop stopped (exit N)"). The 2 s cadence while running keeps "stop run" from lingering
+  // after the process is gone; idle it only needs to notice a Heal press made elsewhere.
+  const { data: loop, refresh: refreshLoop } = usePoll(api.loop, running ? 2_000 : 5_000);
+  const [stopping, setStopping] = useState(false);
+  const stopRun = () => {
+    if (stopping) return;
+    setStopping(true);
+    api
+      .loopStop()
+      .catch(() => undefined)
+      .finally(() => {
+        setStopping(false);
+        refreshLoop();
+        refreshStatus();
+      });
+  };
+  // Both are static facts about this API; fetched once, quietly ignored if the route is not there
+  // yet (health lands with plan 03, `target.transport` with plan 01). Neither is a poll: nothing
+  // about them changes while the page is open.
+  const [hasKey, setHasKey] = useState<boolean | null>(null);
+  const [target, setTarget] = useState<string | null>(null);
+  useEffect(() => {
+    let alive = true;
+    api
+      .health()
+      .then((h) => alive && setHasKey(h.has_api_key))
+      .catch(() => undefined);
+    api
+      .manifest()
+      .then((m) => alive && setTarget(targetLine(m.target)))
+      .catch(() => undefined);
+    return () => {
+      alive = false;
+    };
+  }, []);
 
   // Each orb lerps toward whatever its ref holds on every frame (orb.tsx useFrame), so updating the
   // refs is enough for a smooth fade at 1 s polling and through the dwell hold. Done in an effect
@@ -131,6 +181,21 @@ export default function Agents({
 
   const loading = !status && !statusError && !cycles && !cyclesError;
   const unreachable = statusError && !status && !cycles;
+  const retry = () => {
+    refreshStatus();
+    refreshCycles();
+    refreshLoop();
+  };
+
+  // "stop run" only for a process this API spawned: an external loop (found via pgrep) is someone
+  // else's terminal and the API refuses to kill it anyway.
+  const owned = !!loop?.running && !loop.external;
+  // A positive exit code is the loop dying on its own (weave.init without a key, a traceback).
+  // Negative is a signal, which is what "stop run" sends — not a failure to announce.
+  const crashed = !!loop && !loop.running && loop.exit_code !== null && loop.exit_code > 0 && !replay;
+  // The key gap only matters when the user asked for a live run and the loop is not (or no longer)
+  // alive — a Replay on screen needs no key and gets no warning.
+  const noKey = hasKey === false && !replay && !loop?.running;
 
   return (
     <main className="min-h-full px-6 pb-16 pt-14 md:px-10 md:pt-16">
@@ -143,16 +208,43 @@ export default function Agents({
           <h1 className="display text-[80px] leading-[0.9]">Cycles</h1>
           <p className="tabular mt-4 text-[13px] text-[var(--muted)]">
             {unreachable ? (
-              <span className="text-[var(--faint)]">api unreachable</span>
+              <ApiDown onRetry={retry} />
             ) : loading ? (
               <span className="text-[var(--faint)]">loading…</span>
             ) : (
               <>
-                {running
-                  ? `cycle ${status?.cycle ?? "—"} · ${verb}`
-                  : sum.cycles > 0
-                    ? `run complete · ${sum.cycles} ${sum.cycles === 1 ? "cycle" : "cycles"} · config v${sum.version ?? 0}`
-                    : "no cycles yet"}
+                {running ? (
+                  `cycle ${status?.cycle ?? "—"} · ${verb}`
+                ) : crashed ? (
+                  <>
+                    {`the loop stopped (exit ${loop.exit_code}) — `}
+                    <a
+                      href={api.loopLogUrl()}
+                      target="_blank"
+                      rel="noreferrer"
+                      className="group rounded transition-colors hover:text-[var(--fg)]"
+                    >
+                      <span className="u-line">open log</span>
+                    </a>
+                  </>
+                ) : sum.cycles > 0 ? (
+                  `run complete · ${sum.cycles} ${sum.cycles === 1 ? "cycle" : "cycles"} · config v${sum.version ?? 0}`
+                ) : (
+                  "no cycles yet"
+                )}
+                {owned && (
+                  <span className="text-[var(--faint)]">
+                    {" · "}
+                    <button
+                      type="button"
+                      onClick={stopRun}
+                      disabled={stopping}
+                      className="group rounded text-[var(--faint)] transition-colors hover:text-[var(--muted)] disabled:cursor-default"
+                    >
+                      <span className="u-line">{stopping ? "stopping…" : "stop run"}</span>
+                    </button>
+                  </span>
+                )}
                 {replay && !transport && (
                   <span className="text-[var(--faint)]">
                     {` · replay${recordedAt ? ` · recorded ${fmtTime(recordedAt)}` : ""} · `}
@@ -169,6 +261,13 @@ export default function Agents({
               </>
             )}
           </p>
+          {/* One line, only when it applies: a live run was asked for and the API has no key to
+              run it. Replay needs none, so a replay on screen gets no warning. */}
+          {!unreachable && !loading && noKey && (
+            <p className="tabular mt-1 text-[13px] text-[var(--muted)]">
+              Set <span className="code text-[var(--fg)]">WANDB_API_KEY</span> to run live; Replay works without it.
+            </p>
+          )}
           {/* The replay is a recording being played, so it gets a player: pause, speed, seek, clock.
               The line above stays about the agents; this strip is about the tape. */}
           {transport && tape && (
@@ -229,6 +328,11 @@ export default function Agents({
               );
             })}
           </div>
+          {/* Which agent the four above are working on. Nothing until the manifest says how the
+              target is reached (plan 01 Step 5); a guessed label would be a claim we cannot back. */}
+          {target && !unreachable && (
+            <p className="tabular mt-8 text-center text-[12px] text-[var(--faint)]">{target}</p>
+          )}
         </section>
 
         <section className="mt-10">
@@ -239,15 +343,17 @@ export default function Agents({
             >
               <CyclesBox views={views} />
             </ErrorBoundary>
-          ) : (
+          ) : unreachable ? null : (
             <p className="text-[13px] text-[var(--faint)]">
-              {cyclesError && !cycles
-                ? "api unreachable"
-                : !cycles
-                  ? "loading…"
-                  : running
-                    ? "measuring baseline…"
-                    : "no cycles yet"}
+              {cyclesError && !cycles ? (
+                <ApiDown onRetry={retry} />
+              ) : !cycles ? (
+                "loading…"
+              ) : running ? (
+                "measuring baseline…"
+              ) : (
+                "no cycles yet"
+              )}
             </p>
           )}
         </section>

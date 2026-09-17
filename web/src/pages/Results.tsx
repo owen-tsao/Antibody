@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import { api, ApiError } from "@/api";
+import ApiDown from "@/components/ApiDown";
 import BackLink from "@/components/BackLink";
 import { previewListItem } from "@/components/PreviewRow";
 import InteractiveListPreview, { type InteractiveListItem } from "@/components/ui/interactive-list-preview";
@@ -35,10 +36,18 @@ const DEMO_SEED_TITLE = "Injected instructions in order notes trigger a refund o
 export const ATTACK_TIMEOUT_MS = 20_000;
 
 export default function Results({ onAgents, onCycle }: { onAgents: () => void; onCycle: (cycle: number) => void }) {
-  const { data: state } = usePoll(api.state, 10_000);
+  const { data: state, refresh: refreshState } = usePoll(api.state, 10_000);
   // §3: cycles every 2 s while the loop runs (a new record should land within a beat), 10 s otherwise.
   // A replay lands records on the recording's schedule, so it gets the same cadence.
-  const { data: cycles, error } = usePoll(api.cycles, state?.loop.running || state?.source === "replay" ? 2_000 : 10_000);
+  const {
+    data: cycles,
+    error,
+    refresh: refreshCycles,
+  } = usePoll(api.cycles, state?.loop.running || state?.source === "replay" ? 2_000 : 10_000);
+  const retry = () => {
+    refreshState();
+    refreshCycles();
+  };
   const [previews, setPreviews] = useState<AttackPreview[]>([]);
   const [attacking, setAttacking] = useState<number | null>(null);
   // Latest cycles for the timeout fallback: an attack awaits for seconds, and the poll may refresh meanwhile.
@@ -141,8 +150,10 @@ export default function Results({ onAgents, onCycle }: { onAgents: () => void; o
             story
           ) : cycles ? (
             "measuring baseline…"
+          ) : error ? (
+            <ApiDown onRetry={retry} />
           ) : (
-            <span className="text-[var(--faint)]">{error ? "api unreachable" : "loading…"}</span>
+            <span className="text-[var(--faint)]">loading…</span>
           )}
           {state && state.source !== "live" && <span className="text-[var(--faint)]"> · {state.source} run</span>}
         </p>

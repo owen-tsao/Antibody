@@ -3,6 +3,7 @@ import { ArrowUpRight } from "lucide-react";
 import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
 
 import { api, type CycleRecord } from "@/api";
+import ApiDown from "@/components/ApiDown";
 import BackLink from "@/components/BackLink";
 import ConfigDiff from "@/components/ConfigDiff";
 import { usePoll } from "@/hooks/usePoll";
@@ -25,7 +26,7 @@ export default function Cycle({
   onBack: () => void;
   onCycle: (n: number) => void;
 }) {
-  const { data: cycles, error } = usePoll(api.cycles, 10_000);
+  const { data: cycles, error, refresh } = usePoll(api.cycles, 10_000);
   const reduced = useReducedMotion();
   const r = cycles?.find((c) => c.cycle === n);
 
@@ -43,7 +44,7 @@ export default function Cycle({
         transition={{ duration: 0.3, ease: [0.2, 0.65, 0.3, 0.9] }}
       >
         {!cycles ? (
-          <p className="text-[13px] text-[var(--faint)]">{error ? "api unreachable" : "loading…"}</p>
+          <p className="text-[13px] text-[var(--faint)]">{error ? <ApiDown onRetry={refresh} /> : "loading…"}</p>
         ) : !r ? (
           <p className="text-[13px] text-[var(--faint)]">cycle {n} has no record</p>
         ) : (
