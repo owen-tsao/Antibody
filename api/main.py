@@ -1,11 +1,17 @@
 """Antibody API. Run: uv run uvicorn api.main:app --port 8000  (no --reload: a reload forgets the loop it spawned)
 
-The Vite dev server proxies /api to this. Read routes serve the loop's files with a golden
+The Vite dev server proxies /api to this in development; in production the same process also
+serves the built dashboard from web/dist (mounted at "/" after every /api route, only when the
+directory exists), so `make demo` is one server. Read routes serve the loop's files with a golden
 fallback (api.store); /api/loop/* spawns and controls the loop as a subprocess (api.loop_ctl);
 /api/manifest describes the target for the Intro line; /api/attack runs one seed scenario in-process
 as a preview (api.attack); /api/replay/* plays the recorded golden run into /api/status and
-/api/cycles on its original schedule (api.replay). /api/loop/reset is planned (docs/FRONTEND.md §3) and
+/api/cycles on its original schedule (api.replay); /api/health is what the Makefile waits on and
+where the UI learns whether a key is set. /api/loop/reset is planned (docs/FRONTEND.md §3) and
 does not exist yet.
+
+Without WANDB_API_KEY the API is Replay-only: /api/attack and POST /api/loop/start answer 503
+instead of spawning work that would die on `get_client()`.
 
 Precedence for status, state and cycles is live > replay > file: a running loop always owns the
 screen, so a replay is ignored *and stopped* the moment one is seen (`replay_if_no_loop`), and
@@ -28,10 +34,15 @@ from contextlib import asynccontextmanager
 from typing import Literal
 
 from fastapi import FastAPI, HTTPException, Query
+from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
 from api import attack, loop_ctl, manifest, replay, store
 from api.store import Source
+from chaos.state import GOLDEN_DIR, ROOT
+
+WEB_DIST = ROOT / "web" / "dist"
+NO_KEY_MESSAGE = "WANDB_API_KEY missing; add it to .env to run live (Replay works without one)"
 
 # uvicorn only installs handlers for its own loggers; logging under its name is the one way a
 # line reliably reaches the terminal the server was started from.
@@ -40,6 +51,9 @@ _log = logging.getLogger("uvicorn.error")
 
 @asynccontextmanager
 async def _lifespan(_: FastAPI):
+    # api.attack logs under its own name, which uvicorn does not route to the terminal; say it here.
+    if attack.missing_api_key():
+        _log.info("no WANDB_API_KEY: Replay only (live runs and seed attacks answer 503)")
     attack.warm_weave()
     yield
 
@@ -83,6 +97,19 @@ def _read_source(requested: Source) -> Source:
     if replay_if_no_loop():
         return "golden"
     return _resolve(requested)
+
+
+@app.get("/api/health")
+def get_health() -> dict:
+    """Liveness + what this install can do. Reports whether a key is set, never the key itself."""
+    return {
+        "ok": True,
+        "version": app.version,
+        "live_exists": store.live_exists(),
+        "golden_exists": (GOLDEN_DIR / "cycles.jsonl").exists(),
+        "has_api_key": not attack.missing_api_key(),
+        "weave": attack.weave_status(),
+    }
 
 
 @app.get("/api/state")
@@ -195,6 +222,8 @@ class LoopStartBody(BaseModel):
 
 @app.post("/api/loop/start", status_code=201)
 def loop_start(body: LoopStartBody) -> dict:
+    if attack.missing_api_key():
+        raise HTTPException(503, NO_KEY_MESSAGE)
     if body.mode == "until_quiet":
         raise HTTPException(400, "until_quiet requires backend ask #5 (--until-quiet); not available yet")
     # Heal always means "start a real run": a replay that was playing is the fallback, not a reason
@@ -297,8 +326,10 @@ class AttackBody(BaseModel):
 
 @app.post("/api/attack")
 def attack_preview(body: AttackBody) -> dict:
-    if not attack.tracing_disabled() and attack.missing_api_key():
-        raise HTTPException(503, "WANDB_API_KEY missing; set it in .env or ANTIBODY_NO_WEAVE=1")
+    # Unconditional: the target and judge call the inference endpoint with this key, so the attack
+    # cannot run without it even when tracing is off (it used to fall through to a SystemExit → 500).
+    if attack.missing_api_key():
+        raise HTTPException(503, NO_KEY_MESSAGE)
     scenario = attack.find_scenario(body.scenario_id)
     if scenario is None:
         raise HTTPException(404, f"unknown seed scenario {body.scenario_id!r}")
@@ -322,3 +353,11 @@ def attack_preview(body: AttackBody) -> dict:
 @app.get("/api/loop/log")
 def loop_log(tail: int = Query(200, ge=1, le=5000)) -> dict:
     return {"lines": loop_ctl.log_tail(tail)}
+
+
+# --- Built dashboard -------------------------------------------------------------------
+# Must stay last: Starlette matches in registration order, so every /api route above wins over the
+# catch-all mount. `html=True` serves index.html for "/"; the app routes by query string, so no SPA
+# fallback is needed. Skipped when web/dist is absent (dev via Vite, or a clone that never built).
+if WEB_DIST.is_dir():
+    app.mount("/", StaticFiles(directory=WEB_DIST, html=True), name="web")

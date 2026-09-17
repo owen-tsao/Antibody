@@ -10,5 +10,7 @@ wandb/
 # live run state (regenerated every run)
 /cycles.jsonl
 /runs/
+# past runs, moved here before each fresh run; never deleted by `reset`
+/history/
 
 # data/golden/ is committed on purpose: a known-good run for demo fallback

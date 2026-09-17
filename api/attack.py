@@ -10,8 +10,10 @@ Weave is initialised lazily on the first attack rather than at import, so `uvico
 and importing `api.main` has no side effects. To keep `weave.init`'s network round-trip (which can hang
 on bad Wi-Fi) off the demo's critical path, `api.main` warms it from a daemon thread at startup via
 `warm_weave()`; a failure there is logged once and the first attack simply retries. Set
-`ANTIBODY_NO_WEAVE=1` to skip tracing entirely (the attack runs untraced). The loop subprocess has its
-own `weave.init`; the two never share memory (docs/FRONTEND.md §8).
+`ANTIBODY_NO_WEAVE=1` to skip tracing entirely (the attack runs untraced). Without `WANDB_API_KEY`
+the warm-up is skipped and `/api/attack` answers 503 up front: the key is what the target and judge
+call the inference endpoint with, so the attack cannot run without it whether or not it is traced.
+The loop subprocess has its own `weave.init`; the two never share memory (docs/FRONTEND.md §8).
 
 One attack at a time: the target harness keeps per-thread fault state, and the demo only ever presses
 one button at a time. A second concurrent request gets 409 instead of queueing behind the first.
@@ -65,6 +67,15 @@ def missing_api_key() -> bool:
     return not os.environ.get("WANDB_API_KEY")
 
 
+def weave_status() -> str:
+    """For /api/health: `disabled` (ANTIBODY_NO_WEAVE), `no_key`, `ready`, or `warming`."""
+    if tracing_disabled():
+        return "disabled"
+    if missing_api_key():
+        return "no_key"
+    return "ready" if _weave_ready else "warming"
+
+
 def _ensure_weave() -> None:
     global _weave_ready
     if _weave_ready or tracing_disabled():
@@ -84,6 +95,9 @@ def warm_weave() -> None:
     """Start `weave.init` in the background. Never blocks, never raises."""
     if tracing_disabled():
         log.info("ANTIBODY_NO_WEAVE set; attacks run untraced")
+        return
+    if missing_api_key():
+        log.info("no WANDB_API_KEY: Replay only")
         return
 
     def _go() -> None:

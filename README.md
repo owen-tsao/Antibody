@@ -34,7 +34,7 @@ For a short run that still tells the whole story (one seed attack breaks v0, get
 uv run python -m chaos.loop run --seeds 1 --chaos-cycles 1 --repair-attempts 2
 ```
 
-Each fresh run moves the previous run's files to `runs/archive/<timestamp>/` rather than overwriting them, so earlier cycle records keep pointing at the configs they were made with.
+Each fresh run moves the previous run's files to `history/<timestamp>/` rather than overwriting them, so earlier cycle records keep pointing at the configs they were made with. `history/` sits outside `runs/`, so `reset` can never delete it (older checkouts that archived under `runs/archive/` are migrated automatically).
 
 Other commands: `reset` (wipe run state), `golden` (snapshot the run into `data/golden/` for demo fallback), `vulnerability` (how many of the final attacks land on each config version; each attack is run three times per version and counts only if it lands in the majority, because a single sample of a small model is too noisy to chart), `cleanup` (solve every ticket the harness created). `ANTIBODY_NO_ZENDESK=1` forces the mock world.
 
@@ -58,7 +58,7 @@ Every episode is its own Zendesk ticket you can open: the attacker's planted not
 | `api/` | FastAPI adapter the dashboard talks to: reads run files, starts/stops the loop, replays the golden run. |
 | `web/` | The dashboard (Vite + React). |
 | `data/golden/` | A committed known-good run: cycle records, configs v0…vN, and the phase log the replay plays. |
-| `runs/` (gitignored) | The current run's files; every fresh run archives the previous one under `runs/archive/`. |
+| `runs/` (gitignored) | The current run's files; every fresh run moves the previous one to `history/` (also gitignored). |
 | `scripts/` | `dev.sh` (both servers), the Zendesk OAuth helper, and the spikes that de-risked W&B Inference and Zendesk before anything was built. |
 | `docs/` | `PLAN.md` (build plan and decisions), `REVIEW.md` (pre-build review), `FRONTEND.md` (UI spec and API contract), `HANDOFF.md`, and the HTML mockups. |
 
