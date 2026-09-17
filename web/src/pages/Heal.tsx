@@ -1,9 +1,12 @@
-import { motion, useReducedMotion } from "framer-motion";
+import { AnimatePresence, motion, useReducedMotion } from "framer-motion";
+import { useState } from "react";
 
 import type { ReplayInfo } from "@/api";
 import BackLink from "@/components/BackLink";
 import OrbButton from "@/components/OrbButton";
+import SettingsDrawer from "@/components/SettingsDrawer";
 import { fmtClock, fmtTimeShort } from "@/lib/derive";
+import { settingsSummary, type RunSettings } from "@/lib/settings";
 import { cn } from "@/lib/utils";
 import type { StartMode } from "@/pages/Intro";
 
@@ -29,16 +32,20 @@ function replayLabel(replay: ReplayInfo | null): string {
   return "Replay recorded run";
 }
 
-// Second screen after the intro. One decision: press Heal. The run length is fixed for the demo
-// (App.tsx DEMO_CHAOS_CYCLES; docs/FRONTEND.md §4.1), so nothing is configurable here. The quiet replay
-// link is the demo fallback (§7) and stays visible so it can be reached without a menu. With no live
-// loop the screen has exactly two states: no replay session, or a replay paused by Back on Agents
-// (resume or stop it here). Heal always starts a real run and discards a paused replay; while a real
-// loop runs the replay links are hidden (the API would answer 409).
+// Second screen after the intro. One decision: press Heal. The quiet "settings" link opens a drawer
+// with the run's shape (seeds, chaos cycles, repair attempts, second pass, world — each a flag the CLI
+// already has); the parent owns those values and sends them with the start request. The quiet replay
+// link is the demo fallback (docs/FRONTEND.md §7) and stays visible so it can be reached without a menu.
+// With no live loop the screen has exactly two states: no replay session, or a replay paused by Back on
+// Agents (resume or stop it here). Heal always starts a real run and discards a paused replay; while a
+// real loop runs the replay and settings links are hidden (the API would answer 409; settings only
+// shape the next run).
 export default function Heal({
   onStart,
   onBack,
   onStopReplay,
+  settings,
+  onSettingsChange,
   loopRunning = false,
   replay = null,
   error = null,
@@ -48,6 +55,9 @@ export default function Heal({
   onBack: () => void;
   /** "stop replay" beside the resume link; the parent re-reads /api/replay afterwards. */
   onStopReplay?: () => void;
+  /** What the next Heal press will send; edited in the settings drawer. */
+  settings: RunSettings;
+  onSettingsChange: (next: RunSettings) => void;
   /** A loop already exists (spawned here or found by pgrep in this checkout): Heal just navigates instead of starting another. */
   loopRunning?: boolean;
   /** GET /api/replay, polled by the parent while this screen is shown; null when it failed. `active` here means paused. */
@@ -58,6 +68,7 @@ export default function Heal({
   busy?: boolean;
 }) {
   const reduced = useReducedMotion();
+  const [settingsOpen, setSettingsOpen] = useState(false);
   const fade = (delay: number) => ({
     initial: { opacity: 0, y: reduced ? 0 : 10 },
     animate: { opacity: 1, y: 0 },
@@ -65,6 +76,8 @@ export default function Heal({
   });
 
   const label = loopRunning ? "View agents" : busy ? "Starting…" : "Heal";
+  // Only the settings that differ from the defaults, so the orb says "Heal" until someone changes one.
+  const summary = label === "Heal" ? settingsSummary(settings) : [];
   // A session exists and is not ours to keep: Back paused it (App.tsx pauses a stray playing one on mount).
   const pausedReplay = !loopRunning && replay?.active === true;
 
@@ -89,6 +102,7 @@ export default function Heal({
           onClick={() => onStart("live")}
           disabled={busy}
           aria-busy={busy || undefined}
+          aria-label={summary.length ? ["Heal", ...summary].join(" · ") : undefined}
           title={pausedReplay ? "discards the paused replay and starts a real run" : undefined}
           className={cn(
             "h-32 w-32 font-normal tracking-[-0.01em] disabled:cursor-wait disabled:hover:bg-white disabled:hover:text-black",
@@ -96,7 +110,29 @@ export default function Heal({
           )}
           style={{ fontFamily: "var(--font-display)" }}
         >
-          {label}
+          {summary.length ? (
+            // "Heal · 1 seed · 2 cycles", set as the word and a small line under it so it fits the disc.
+            <span className="flex flex-col items-center leading-none">
+              <span>{label}</span>
+              <span
+                className="tabular mt-1.5 max-w-[104px] text-[10px] leading-[1.3] tracking-[0.02em]"
+                style={{ fontFamily: "var(--font-sans)" }}
+                aria-hidden
+              >
+                {summary.map((part, i) => (
+                  // Lines break only between items, and the dot stays with the item before it.
+                  <span key={part}>
+                    <span className="whitespace-nowrap">
+                      {part}
+                      {i < summary.length - 1 && "\u00a0·"}
+                    </span>{" "}
+                  </span>
+                ))}
+              </span>
+            </span>
+          ) : (
+            label
+          )}
         </OrbButton>
       </motion.div>
 
@@ -122,8 +158,25 @@ export default function Heal({
               <span className="u-line">stop replay</span>
             </button>
           )}
+          <button
+            type="button"
+            disabled={busy}
+            onClick={() => setSettingsOpen(true)}
+            aria-haspopup="dialog"
+            aria-expanded={settingsOpen}
+            className={cn(quietLink, "group text-white/60")}
+            style={shadow}
+          >
+            <span className="u-line">settings</span>
+          </button>
         </motion.div>
       )}
+
+      <AnimatePresence>
+        {settingsOpen && (
+          <SettingsDrawer settings={settings} onChange={onSettingsChange} onClose={() => setSettingsOpen(false)} />
+        )}
+      </AnimatePresence>
     </section>
   );
 }

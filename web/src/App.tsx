@@ -3,6 +3,7 @@ import { lazy, Suspense, useEffect, useState } from "react";
 import { api, ApiError, type LoopState, type ReplayInfo } from "@/api";
 import ErrorBoundary from "@/components/ErrorBoundary";
 import SplashBackdrop from "@/components/ui/splash-backdrop";
+import { loadSettings, saveSettings, toStartBody, type RunSettings } from "@/lib/settings";
 import Intro, { type StartMode } from "@/pages/Intro";
 import Heal from "@/pages/Heal";
 import Agents from "@/pages/Agents";
@@ -10,12 +11,6 @@ import Results from "@/pages/Results";
 import Cycle from "@/pages/Cycle";
 
 export type Page = "intro" | "heal" | "agents" | "results" | "cycle";
-
-// How many novel attacks a Heal press asks the loop for (`--chaos-cycles`). 1 for the demo: the two seed
-// attacks already tell the break → repair → block story, and each extra Chaos cycle costs ~2 min of
-// gates on stage (the 3-cycle run measured 15 min end to end). The stepper and the "until N in a row
-// are blocked" rule are deferred, not rejected; the backend contract (`mode`, `chaos_cycles`) is unchanged.
-const DEMO_CHAOS_CYCLES = 1;
 
 // Replay is the demo fallback for a slow live loop, so it must not be equally slow: at 1× the
 // recording's 47 s gates look frozen. 3× plays the 7-cycle golden run in ~5.5 min with a visible
@@ -59,6 +54,13 @@ export default function App() {
   // Set when Replay could not start because a live loop is running; Agents shows the live run with
   // this note instead of a "replay · recorded" label that would be false.
   const [replayNote, setReplayNote] = useState<string | null>(null);
+  // The shape of the next run, edited in Heal's settings drawer. Read from localStorage once; written
+  // on every change (not on mount) so an untouched browser keeps no key and a cleared one means defaults.
+  const [settings, setSettings] = useState<RunSettings>(loadSettings);
+  const changeSettings = (next: RunSettings) => {
+    setSettings(next);
+    saveSettings(next);
+  };
 
   const refreshHeal = () => {
     api.loop().then(setLoop).catch(() => setLoop(null));
@@ -125,7 +127,10 @@ export default function App() {
       // Heal always means a real run. The API also discards a (paused) replay on start; doing it here
       // first keeps the UI honest if the start then fails (no "Resume replay" over a run that never began).
       if (replay?.active) await api.replayStop().catch(() => undefined);
-      await api.loopStart({ mode: "fixed", chaos_cycles: DEMO_CHAOS_CYCLES });
+      // TODO(A1): pass `toStartBody(settings)` on its own once api.ts's LoopStartBody carries the A1 fields.
+      // `mode` is a dead field A1 removes; until then the settings ride along and today's API ignores
+      // the ones it does not know (Pydantic drops unknown keys) — and rejects `chaos_cycles: 0` (ge=1).
+      await api.loopStart({ mode: "fixed", ...toStartBody(settings) });
       setPage("agents");
     } catch (e) {
       // 409 = a loop is already running (possibly one the API did not spawn); watching it is the
@@ -176,6 +181,8 @@ export default function App() {
           onBack={() => setPage("intro")}
           onStart={start}
           onStopReplay={stopReplay}
+          settings={settings}
+          onSettingsChange={changeSettings}
           loopRunning={loop?.running ?? false}
           replay={replay}
           error={startError}

@@ -1,0 +1,141 @@
+// Run settings for the Heal screen (docs/plans/02-run-settings-and-history.md, A2). Every field maps
+// to a flag `chaos.loop run` already has; the API contract is A1's `LoopStartBody`. No flag, no field.
+
+export type World = "auto" | "mock";
+
+export interface RunSettings {
+  /** `--seeds N`; null = all seeds (the CLI default). */
+  seeds: number | null;
+  /** `--chaos-cycles N`. */
+  chaosCycles: number;
+  /** `--repair-attempts N`. */
+  repairAttempts: number;
+  /** false → `--no-second-pass`. */
+  secondPass: boolean;
+  /** "mock" → `ANTIBODY_NO_ZENDESK=1` in the loop's environment. */
+  world: World;
+}
+
+/** The A1 request body for POST /api/loop/start. `target` is not here on purpose: it is an env decision. */
+export interface RunStartBody {
+  chaos_cycles: number;
+  seeds: number | null;
+  repair_attempts: number;
+  second_pass: boolean;
+  world: World;
+}
+
+// Bounds are A1's `Field(ge=, le=)`; `SEEDS.max` is the API's cap when the manifest cannot say how many
+// seeds exist (it can, and the drawer uses that smaller number).
+export const CHAOS_CYCLES = { min: 0, max: 10 } as const;
+export const SEEDS = { min: 0, max: 10 } as const;
+export const REPAIR_ATTEMPTS = { min: 1, max: 5 } as const;
+
+/** Mirrors the CLI's own defaults (chaos/loop.py) and A1's Pydantic defaults. */
+export const DEFAULT_SETTINGS: RunSettings = {
+  seeds: null,
+  chaosCycles: 3,
+  repairAttempts: 3,
+  secondPass: true,
+  world: "auto",
+};
+
+export const SETTINGS_KEY = "antibody.settings.v1";
+
+// The one constant behind "about N minutes". Measured on the golden run recorded 2026-09-13: six cycles
+// (two seeds, chaos, one second-pass retry) in 452 s of `data/golden/status_log.jsonl` (`t_rel` of its
+// last row) → 75 s per cycle. Repair attempts and the second pass only cost time when attacks land, so
+// they are not in the estimate; it is a floor, and says so with "about".
+export const MINUTES_PER_CYCLE = 1.25;
+
+function clampInt(v: unknown, min: number, max: number, fallback: number): number {
+  if (typeof v !== "number" || !Number.isInteger(v)) return fallback;
+  return Math.min(max, Math.max(min, v));
+}
+
+/** Coerce anything (a parsed localStorage value, an old schema) into a valid RunSettings. Unknown keys are dropped. */
+export function normalizeSettings(raw: unknown): RunSettings {
+  if (!raw || typeof raw !== "object") return { ...DEFAULT_SETTINGS };
+  const r = raw as Record<string, unknown>;
+  return {
+    seeds: r.seeds === null ? null : clampInt(r.seeds, SEEDS.min, SEEDS.max, DEFAULT_SETTINGS.seeds ?? 0),
+    chaosCycles: clampInt(r.chaosCycles, CHAOS_CYCLES.min, CHAOS_CYCLES.max, DEFAULT_SETTINGS.chaosCycles),
+    repairAttempts: clampInt(r.repairAttempts, REPAIR_ATTEMPTS.min, REPAIR_ATTEMPTS.max, DEFAULT_SETTINGS.repairAttempts),
+    secondPass: typeof r.secondPass === "boolean" ? r.secondPass : DEFAULT_SETTINGS.secondPass,
+    world: r.world === "mock" ? "mock" : "auto",
+  };
+}
+
+export function loadSettings(): RunSettings {
+  try {
+    const text = window.localStorage.getItem(SETTINGS_KEY);
+    return text ? normalizeSettings(JSON.parse(text)) : { ...DEFAULT_SETTINGS };
+  } catch {
+    // Private mode, quota, or a hand-edited value that is not JSON: run with the defaults.
+    return { ...DEFAULT_SETTINGS };
+  }
+}
+
+export function saveSettings(s: RunSettings): void {
+  try {
+    window.localStorage.setItem(SETTINGS_KEY, JSON.stringify(s));
+  } catch {
+    // Storage unavailable: the settings still apply to this page load.
+  }
+}
+
+export function isDefaultSettings(s: RunSettings): boolean {
+  return (
+    s.seeds === DEFAULT_SETTINGS.seeds &&
+    s.chaosCycles === DEFAULT_SETTINGS.chaosCycles &&
+    s.repairAttempts === DEFAULT_SETTINGS.repairAttempts &&
+    s.secondPass === DEFAULT_SETTINGS.secondPass &&
+    s.world === DEFAULT_SETTINGS.world
+  );
+}
+
+export function toStartBody(s: RunSettings): RunStartBody {
+  return {
+    chaos_cycles: s.chaosCycles,
+    seeds: s.seeds,
+    repair_attempts: s.repairAttempts,
+    second_pass: s.secondPass,
+    world: s.world,
+  };
+}
+
+function plural(n: number, one: string, many = `${one}s`): string {
+  return `${n} ${n === 1 ? one : many}`;
+}
+
+/**
+ * The parts of the Heal label that differ from the defaults, in field order: `["1 seed", "2 cycles"]`.
+ * Empty when nothing differs, so the orb just says "Heal".
+ */
+export function settingsSummary(s: RunSettings): string[] {
+  const parts: string[] = [];
+  if (s.seeds !== DEFAULT_SETTINGS.seeds) parts.push(s.seeds === 0 ? "no seeds" : plural(s.seeds ?? 0, "seed"));
+  if (s.chaosCycles !== DEFAULT_SETTINGS.chaosCycles) parts.push(s.chaosCycles === 0 ? "no chaos" : plural(s.chaosCycles, "cycle"));
+  if (s.repairAttempts !== DEFAULT_SETTINGS.repairAttempts) parts.push(plural(s.repairAttempts, "repair"));
+  if (s.secondPass !== DEFAULT_SETTINGS.secondPass) parts.push(s.secondPass ? "second pass" : "no second pass");
+  if (s.world !== DEFAULT_SETTINGS.world) parts.push(s.world);
+  return parts;
+}
+
+/**
+ * Cycles the run will attempt: seeds (all → `seedCount`, or the API cap when unknown; `--seeds N` past the
+ * count just runs them all) plus chaos cycles. 0 means A1 answers 400 "nothing to run".
+ */
+export function plannedCycles(s: RunSettings, seedCount: number | null): number {
+  const available = seedCount ?? SEEDS.max;
+  const seeds = s.seeds === null ? available : Math.min(s.seeds, available);
+  return seeds + s.chaosCycles;
+}
+
+/** "about 4 minutes" / "about a minute" / "nothing to run". */
+export function estimateLabel(s: RunSettings, seedCount: number | null): string {
+  const cycles = plannedCycles(s, seedCount);
+  if (cycles === 0) return "nothing to run";
+  const minutes = Math.round(cycles * MINUTES_PER_CYCLE);
+  return minutes <= 1 ? "about a minute" : `about ${minutes} minutes`;
+}
