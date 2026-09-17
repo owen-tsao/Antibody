@@ -85,8 +85,9 @@ def _migrate_legacy_archive() -> int:
         HISTORY_DIR.mkdir(parents=True, exist_ok=True)
         shutil.move(str(child), str(dest))
         moved += 1
-    if not any(_LEGACY_ARCHIVE_DIR.iterdir()):
-        _LEGACY_ARCHIVE_DIR.rmdir()
+    # Stray files (Finder's .DS_Store) must not make an emptied archive look like an unmigrated one.
+    if not any(child.is_dir() for child in _LEGACY_ARCHIVE_DIR.iterdir()):
+        shutil.rmtree(_LEGACY_ARCHIVE_DIR)
     if moved:
         print(f"history: moved {moved} archived run(s) from {_LEGACY_ARCHIVE_DIR} to {HISTORY_DIR}")
     return moved
