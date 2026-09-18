@@ -115,13 +115,13 @@ def test_add_rejects_empty_name(world: dict[str, Path]) -> None:
         agents.add_agent("   ", "http://127.0.0.1:9999")
 
 
-def test_dedupe_is_by_canonical_target(world: dict[str, Path]) -> None:
+def test_dedupe_is_by_canonical_target_among_stored_rows(world: dict[str, Path]) -> None:
     agents.add_agent("a", "http://127.0.0.1:9999")
     with pytest.raises(agents.Duplicate):
         agents.add_agent("b", "http://127.0.0.1:9999/")
-    # The example agent's URL is taken too: connecting it by hand would be a second row for the same thing.
-    with pytest.raises(agents.Duplicate):
-        agents.add_agent("c", "http://127.0.0.1:8790")
+    # The example agent's URL may be connected under a name of your own; the join then prefers that row.
+    mine = agents.add_agent("c", "http://127.0.0.1:8790")
+    assert agents.agent_for_target("http://127.0.0.1:8790") == {"id": mine["id"], "name": "c"}
 
 
 def test_delete_removes_only_stored_rows(world: dict[str, Path]) -> None:

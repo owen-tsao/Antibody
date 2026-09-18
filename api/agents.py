@@ -168,8 +168,9 @@ def add_agent(name: str, url: str) -> dict:
         raise ValueError(f"name is longer than {MAX_NAME_CHARS} characters")
     url = _validate_url(url)
     target = canonical(url)
-    for existing in list_agents(probe=False):
-        if existing["url"] is not None and canonical(existing["url"]) == target:
+    # Dedupe among stored rows only: the example agent's URL may be connected under a name of your own.
+    for existing in _read():
+        if canonical(existing["url"]) == target:
             raise Duplicate(f"{url} is already connected as {existing['name']!r} (id {existing['id']})")
     row = {
         "id": secrets.token_urlsafe(8),
@@ -212,7 +213,8 @@ def agent_for_target(raw: str | None) -> dict | None:
     """`{id, name}` of the agent whose canonical target matches `raw` (a `run.json.target`, stored verbatim), or None.
 
     Both sides are normalised, so the README's bare `http://127.0.0.1:8790` and the loop's `http:http://…`
-    join to the same row. A malformed target string joins nothing rather than raising.
+    join to the same row. A row the user named wins over the synthetic `example` row for the same URL. A
+    malformed target string joins nothing rather than raising.
     """
     if not raw:
         raw = BuiltinTarget.name
@@ -220,7 +222,8 @@ def agent_for_target(raw: str | None) -> dict | None:
         wanted = canonical(raw)
     except ValueError:
         return None
-    for agent in list_agents(probe=False):
+    rows = list_agents(probe=False)
+    for agent in [*rows[2:], *rows[:2]]:
         mine = canonical(agent["url"]) if agent["url"] else BuiltinTarget.name
         if mine == wanted:
             return {"id": agent["id"], "name": agent["name"]}
