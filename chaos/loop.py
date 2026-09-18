@@ -7,6 +7,9 @@ A rejected patch is not final. Within a cycle the Repair Agent gets a few attemp
 reason fed back; at the end of the run a second pass revisits every failure that stayed unfixed, with
 the evolved config and the full repair memory. If the gate still says no, the record says unfixed.
 
+By default the run invents exactly `--chaos-cycles` novel attacks after the seeds. With `--until-quiet N`
+it stops inventing them as soon as N in a row were blocked, and `--chaos-cycles` is only the cap.
+
 Every cycle is appended to cycles.jsonl for the dashboard and to Weave for audit.
 """
 
@@ -279,7 +282,14 @@ def main() -> None:
     sub = parser.add_subparsers(dest="command")
 
     run_p = sub.add_parser("run", help="run the loop (default)")
-    run_p.add_argument("--chaos-cycles", type=int, default=3, help="novel scenarios the Chaos Agent should invent after the seeds")
+    run_p.add_argument(
+        "--chaos-cycles", type=int, default=3,
+        help="novel scenarios the Chaos Agent should invent after the seeds (with --until-quiet: at most this many)",
+    )
+    run_p.add_argument(
+        "--until-quiet", type=int, default=None, metavar="N",
+        help="stop inventing scenarios once N chaos attacks in a row were blocked; --chaos-cycles becomes the cap",
+    )
     run_p.add_argument("--no-seeds", action="store_true", help="skip the hand-written seed scenarios")
     run_p.add_argument(
         "--seeds", type=int, default=None, metavar="N",
@@ -310,6 +320,8 @@ def main() -> None:
     args = parser.parse_args()
     if args.command is None:
         args = parser.parse_args(["run"])
+    if args.command == "run" and args.until_quiet is not None and args.until_quiet < 1:
+        parser.error("--until-quiet must be at least 1")
 
     if args.command == "reset":
         reset()
@@ -383,7 +395,10 @@ def _run_loop(state: LoopState, args) -> None:
             history.append(sc)
             outcomes.append(_describe(rec))
 
-    for _ in range(args.chaos_cycles):
+    # Only cycles appended from here on are evidence for --until-quiet: the seeds above are hand-written,
+    # and on a --resume run state.records already holds the previous process's cycles.
+    chaos_start = len(state.records)
+    for done in range(1, args.chaos_cycles + 1):
         print("\n  chaos agent is studying the current defenses...")
         set_phase(state.cycle + 1, "chaos")
         stats = family_stats(state.records)
@@ -393,6 +408,13 @@ def _run_loop(state: LoopState, args) -> None:
         rec = run_cycle(state, sc)
         history.append(sc)
         outcomes.append(_describe(rec))
+        if args.until_quiet is None:
+            continue
+        if _quiet_streak_reached(state.records, args.until_quiet, chaos_start):
+            print(f"\n  quiet: {args.until_quiet} chaos attack(s) in a row were blocked; stopping after {done} of up to {args.chaos_cycles}")
+            break
+        if done == args.chaos_cycles:
+            print(f"\n  cap: {args.chaos_cycles} chaos cycles reached before {args.until_quiet} quiet in a row")
 
     if not args.no_second_pass:
         _second_pass(state)
@@ -407,6 +429,17 @@ def _run_loop(state: LoopState, args) -> None:
     print(f"\nFinal config v{state.cfg.version}: {state.cfg.patch_note}")
     print(f"Regression suite size: {len(state.regression_suite)}")
     print(f"Cycle log: {CYCLES_PATH}")
+
+
+def _quiet_streak_reached(records: list[CycleRecord], n: int, start_index: int) -> bool:
+    """The --until-quiet stopping rule: the last `n` records from `start_index` on were all blocked attacks.
+
+    `start_index` is where this process's chaos-generated cycles begin in `records`; anything before it
+    (seeds, an earlier process's cycles on --resume) says nothing about how the current config holds up
+    against novel attacks. Fewer than `n` fresh records is never a streak.
+    """
+    fresh = records[start_index:]
+    return len(fresh) >= n and not any(r.attack_succeeded for r in fresh[-n:])
 
 
 def _second_pass(state: LoopState) -> None:

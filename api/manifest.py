@@ -1,4 +1,5 @@
-"""`/api/manifest`: the one quiet line under the Start button (docs/FRONTEND.md §3, §4.1).
+"""`/api/manifest`: the one quiet line under the Start button (docs/FRONTEND.md §3, §4.1), plus the
+run-settings defaults the settings drawer starts from (docs/plans/02, A1).
 
 Built from `chaos.tools.TOOL_SPECS` and `chaos.scenarios` at first request, not at import.
 `chaos.tools` does `import weave` (library import only; `weave.init` lives in api.attack, warmed in a
@@ -12,6 +13,8 @@ effects; `lookup_order` carries free-text fields (`notes`, `status`) an attacker
 from __future__ import annotations
 
 from functools import lru_cache
+
+from api.loop_ctl import LoopStartBody
 
 TARGET_NAME = "Northwind support agent"
 
@@ -57,4 +60,5 @@ def build() -> dict:
         "target": {"name": TARGET_NAME, "model": TARGET_MODEL, "model_short": _short_model(TARGET_MODEL)},
         "tools": tools,
         "families": families,
+        "defaults": LoopStartBody().model_dump(),
     }

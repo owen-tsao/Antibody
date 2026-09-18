@@ -3,8 +3,9 @@
 The Vite dev server proxies /api to this in development; in production the same process also
 serves the built dashboard from web/dist (mounted at "/" after every /api route, only when the
 directory exists), so `make demo` is one server. Read routes serve the loop's files with a golden
-fallback (api.store); /api/loop/* spawns and controls the loop as a subprocess (api.loop_ctl);
-/api/manifest describes the target for the Intro line; /api/attack runs one seed scenario in-process
+fallback (api.store); /api/loop/* spawns and controls the loop as a subprocess with the settings in
+the request body (api.loop_ctl); /api/manifest describes the target for the Intro line and carries
+the settings defaults; /api/attack runs one seed scenario in-process
 as a preview (api.attack); /api/replay/* plays the recorded golden run into /api/status and
 /api/cycles on its original schedule (api.replay); /api/health is what the Makefile waits on and
 where the UI learns whether a key is set. /api/loop/reset is planned (docs/FRONTEND.md §3) and
@@ -38,6 +39,7 @@ from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
 from api import attack, loop_ctl, manifest, replay, store
+from api.loop_ctl import LoopStartBody
 from api.store import Source
 from chaos.state import GOLDEN_DIR, ROOT
 
@@ -211,27 +213,23 @@ def get_manifest() -> dict:
 # --- Loop control ---------------------------------------------------------------
 
 
-class LoopStartBody(BaseModel):
-    mode: loop_ctl.Mode = "fixed"
-    chaos_cycles: int = Field(3, ge=1, le=10)
-    # Accepted so the UI can send its full stopping-rule state; only meaningful once
-    # `--until-quiet` exists in chaos.loop (docs/FRONTEND.md §9 ask #5).
-    quiet_streak: int | None = Field(None, ge=1, le=10)
-    max_cycles: int | None = Field(None, ge=1, le=50)
-
-
 @app.post("/api/loop/start", status_code=201)
 def loop_start(body: LoopStartBody) -> dict:
+    """Spawn `chaos.loop run` with the body's settings (`loop_ctl.LoopStartBody` is the contract).
+
+    Checks run client-error first: a body that describes no work is 400 whether or not a key is set,
+    so the drawer's "nothing to run" reads the same on a keyless install.
+    """
+    if body.nothing_to_run():
+        raise HTTPException(400, "nothing to run: no seeds and no chaos cycles")
     if attack.missing_api_key():
         raise HTTPException(503, NO_KEY_MESSAGE)
-    if body.mode == "until_quiet":
-        raise HTTPException(400, "until_quiet requires backend ask #5 (--until-quiet); not available yet")
     # Heal always means "start a real run": a replay that was playing is the fallback, not a reason
     # to keep showing recorded data, so it is cleared before the loop is spawned.
     if replay.stop().get("stopped"):
         _log.info("replay stopped: a live loop is being started")
     try:
-        return loop_ctl.start(body.mode, body.chaos_cycles)
+        return loop_ctl.start(body)
     except RuntimeError:
         raise HTTPException(409, {"message": "loop already running", **loop_ctl.state()})
 

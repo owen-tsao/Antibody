@@ -3,7 +3,14 @@
 The API never runs the loop in-process: the loop calls `weave.init` and holds tracing state,
 and it can run for minutes. It is started exactly the way the CLI is used by hand:
 
-    PYTHONUNBUFFERED=1 uv run python -m chaos.loop run --chaos-cycles N
+    PYTHONUNBUFFERED=1 uv run python -m chaos.loop run --chaos-cycles 3 --repair-attempts 3 [...]
+
+`LoopStartBody` is the settings contract (docs/plans/02, A1): every field is one `chaos.loop run`
+flag, so the UI cannot offer a knob the loop does not have; `world: "mock"` becomes
+`ANTIBODY_NO_ZENDESK=1` in the child's environment only. `start()` writes the exact command to
+`runs/loop.log` as a `$ ...` line, env overrides first, so the log reads like a terminal session and
+the line can be pasted back into one. `last_settings()` parses that line back out, which is how
+`GET /api/loop` still reports the settings of the last run after the API itself has restarted.
 
 `uv run` is the repo's canonical invocation (PLAN.md, docs/FRONTEND.md §3, the golden-run terminal);
 when `uv` is not on the API process's PATH we fall back to `sys.executable -m chaos.loop`, which
@@ -28,7 +35,8 @@ process counts, as before.
 
 Testing without spending tokens: set `ANTIBODY_LOOP_CMD` in the uvicorn environment to a
 shell-style command string (e.g. `ANTIBODY_LOOP_CMD="sleep 30"`) and the API spawns that
-instead of the loop. The 409 / stop / log paths behave identically.
+instead of the loop. The 409 / stop / log paths behave identically; `settings` is null because the
+`$` line is not a loop command.
 
 Test-only override: `ANTIBODY_IGNORE_EXTERNAL_LOOP=1` disables the pgrep fallback, so a scratch
 API on another port does not see (and is not blocked by) a real run started elsewhere. It only
@@ -50,11 +58,35 @@ from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import Literal
 
+from pydantic import BaseModel, Field
+
 from chaos.state import ROOT, RUNS_DIR
 
 LOG_PATH = RUNS_DIR / "loop.log"
 
-Mode = Literal["fixed", "until_quiet"]
+World = Literal["auto", "mock"]
+
+
+class LoopStartBody(BaseModel):
+    """Run settings: the body of POST /api/loop/start and, as defaults, part of GET /api/manifest.
+
+    Every field is one `chaos.loop run` flag (see `_flags`); no flag, no field. `target` is deliberately
+    absent: which agent the loop attacks is an environment decision (plan 01) the UI shows read-only.
+    Unknown keys are ignored rather than rejected, so a UI still sending the retired `mode` works.
+    """
+
+    chaos_cycles: int = Field(3, ge=0, le=10)
+    # None = all seeds; 0 = `--no-seeds`.
+    seeds: int | None = Field(None, ge=0, le=10)
+    repair_attempts: int = Field(3, ge=1, le=5)
+    second_pass: bool = True
+    resume: bool = False
+    # Stop once N consecutive chaos-generated attacks were blocked; `chaos_cycles` becomes the cap.
+    until_quiet: int | None = Field(None, ge=1, le=10)
+    world: World = "auto"
+
+    def nothing_to_run(self) -> bool:
+        return self.chaos_cycles == 0 and self.seeds == 0
 
 
 def ignore_external() -> bool:
@@ -65,8 +97,6 @@ def ignore_external() -> bool:
 class LoopHandle:
     proc: subprocess.Popen
     started_at: str
-    mode: Mode
-    chaos_cycles: int
 
     def running(self) -> bool:
         return self.proc.poll() is None
@@ -77,8 +107,7 @@ class LoopHandle:
             "pid": self.proc.pid,
             "started_at": self.started_at,
             "exit_code": self.proc.returncode,
-            "mode": self.mode,
-            "chaos_cycles": self.chaos_cycles,
+            "settings": last_settings(),
             "external": False,
         }
 
@@ -92,8 +121,7 @@ IDLE = {
     "pid": None,
     "started_at": None,
     "exit_code": None,
-    "mode": None,
-    "chaos_cycles": None,
+    "settings": None,
     "external": False,
 }
 
@@ -166,42 +194,147 @@ def external_pid() -> int | None:
 
 
 def state() -> dict:
+    """`{running, pid, started_at, exit_code, settings, external}`.
+
+    `settings` are those of the last run this API spawned (parsed from loop.log, so they survive an API
+    restart). They are null for an external loop: a terminal-started run left no `$` line, and echoing
+    the previous API-started run's settings under it would be a lie.
+    """
     if _handle is not None and _handle.running():
         return _handle.snapshot()
     pid = external_pid()
     if pid is not None:
         return {**IDLE, "running": True, "pid": pid, "external": True}
-    return _handle.snapshot() if _handle is not None else dict(IDLE)
+    if _handle is not None:
+        return _handle.snapshot()
+    return {**IDLE, "settings": last_settings()}
 
 
 def is_running() -> bool:
     return state()["running"]
 
 
-def _command(chaos_cycles: int) -> list[str]:
+def _flags(body: LoopStartBody) -> list[str]:
+    """The `chaos.loop run` flags for a body. Numbers are always spelled out so the `$` line is self-describing."""
+    flags = ["--chaos-cycles", str(body.chaos_cycles), "--repair-attempts", str(body.repair_attempts)]
+    if body.seeds == 0:
+        flags.append("--no-seeds")
+    elif body.seeds is not None:
+        flags += ["--seeds", str(body.seeds)]
+    if not body.second_pass:
+        flags.append("--no-second-pass")
+    if body.resume:
+        flags.append("--resume")
+    if body.until_quiet is not None:
+        flags += ["--until-quiet", str(body.until_quiet)]
+    return flags
+
+
+def _env_overrides(body: LoopStartBody) -> dict[str, str]:
+    """Variables the child gets on top of the API's own environment. `auto` inherits whatever is set."""
+    return {"ANTIBODY_NO_ZENDESK": "1"} if body.world == "mock" else {}
+
+
+def _command(body: LoopStartBody) -> list[str]:
     override = os.environ.get("ANTIBODY_LOOP_CMD")
     if override:
         return shlex.split(override)
-    tail = ["-m", "chaos.loop", "run", "--chaos-cycles", str(chaos_cycles)]
+    tail = ["-m", "chaos.loop", "run", *_flags(body)]
     if shutil.which("uv"):
         return ["uv", "run", "python", *tail]
     return [sys.executable, *tail]
 
 
-def start(mode: Mode, chaos_cycles: int) -> dict:
+def _shell_line(cmd: list[str], overrides: dict[str, str]) -> str:
+    """`$ KEY=VAL cmd ...`: what a person would have typed to start this run."""
+    return "$ " + " ".join([*(f"{k}={v}" for k, v in overrides.items()), shlex.join(cmd)])
+
+
+def _settings_from_line(line: str) -> dict | None:
+    """Inverse of `_flags` + `_env_overrides` for one `$` line; None when it is not a `chaos.loop run`.
+
+    Flags this body does not cover (`--from-version` from a terminal run) are skipped, not an error.
+    """
+    try:
+        argv = shlex.split(line[2:])
+        run_at = argv.index("run", argv.index("chaos.loop"))
+    except ValueError:
+        return None
+    out = LoopStartBody().model_dump()
+    out["world"] = "mock" if "ANTIBODY_NO_ZENDESK=1" in argv[:run_at] else "auto"
+    tokens = iter(argv[run_at + 1 :])
+    try:
+        for tok in tokens:
+            if tok == "--chaos-cycles":
+                out["chaos_cycles"] = int(next(tokens))
+            elif tok == "--seeds":
+                out["seeds"] = int(next(tokens))
+            elif tok == "--no-seeds":
+                out["seeds"] = 0
+            elif tok == "--repair-attempts":
+                out["repair_attempts"] = int(next(tokens))
+            elif tok == "--no-second-pass":
+                out["second_pass"] = False
+            elif tok == "--resume":
+                out["resume"] = True
+            elif tok == "--until-quiet":
+                out["until_quiet"] = int(next(tokens))
+    except (StopIteration, ValueError):
+        return None
+    return out
+
+
+_SCAN_CHUNK = 64 * 1024
+_SCAN_LIMIT = 2 * 1024 * 1024
+
+
+def _last_command_line() -> str | None:
+    """The most recent `$` line in loop.log, read backwards from the end so a long log costs one chunk.
+
+    Gives up after `_SCAN_LIMIT`: a log written entirely before `$` lines existed would otherwise be
+    read whole on every poll.
+    """
+    if not LOG_PATH.exists():
+        return None
+    with LOG_PATH.open("rb") as f:
+        end = f.seek(0, os.SEEK_END)
+        buf = b""
+        while end > 0 and len(buf) < _SCAN_LIMIT:
+            start = max(0, end - _SCAN_CHUNK)
+            f.seek(start)
+            buf = f.read(end - start) + buf
+            end = start
+            lines = buf.split(b"\n")
+            # The first piece is a partial line until the file start has been reached.
+            complete = lines if start == 0 else lines[1:]
+            for raw in reversed(complete):
+                if raw.startswith(b"$ "):
+                    return raw.decode(errors="replace").rstrip("\r")
+    return None
+
+
+def last_settings() -> dict | None:
+    """Settings of the last loop this API spawned, from the log rather than memory so they outlive a restart."""
+    line = _last_command_line()
+    return _settings_from_line(line) if line else None
+
+
+def start(body: LoopStartBody) -> dict:
     """Spawn the loop. Raises RuntimeError("running") if one we started is still alive."""
     global _handle
-    if mode != "fixed":
-        raise ValueError(mode)
     with _start_lock:
         if is_running():
             raise RuntimeError("running")
 
         RUNS_DIR.mkdir(parents=True, exist_ok=True)
-        env = {**os.environ, "PYTHONUNBUFFERED": "1"}
+        cmd = _command(body)
+        overrides = _env_overrides(body)
+        env = {**os.environ, "PYTHONUNBUFFERED": "1", **overrides}
         with LOG_PATH.open("ab") as log:
+            log.write((_shell_line(cmd, overrides) + "\n").encode())
+            log.flush()
             proc = subprocess.Popen(
-                _command(chaos_cycles),
+                cmd,
                 cwd=ROOT,
                 env=env,
                 stdout=log,
@@ -209,18 +342,8 @@ def start(mode: Mode, chaos_cycles: int) -> dict:
                 stdin=subprocess.DEVNULL,
                 start_new_session=True,
             )
-        _handle = LoopHandle(
-            proc=proc,
-            started_at=datetime.now(timezone.utc).isoformat(),
-            mode=mode,
-            chaos_cycles=chaos_cycles,
-        )
-    return {
-        "pid": proc.pid,
-        "started_at": _handle.started_at,
-        "mode": mode,
-        "chaos_cycles": chaos_cycles,
-    }
+        _handle = LoopHandle(proc=proc, started_at=datetime.now(timezone.utc).isoformat())
+    return {"pid": proc.pid, "started_at": _handle.started_at, "settings": body.model_dump()}
 
 
 def _killpg(pid: int, sig: int) -> None:
