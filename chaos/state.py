@@ -86,8 +86,11 @@ def latest_version() -> int | None:
 
 
 def save_regression(scenarios: list[Scenario]) -> None:
+    """Write the suite whole via rename: the API reads it on a poll, and rollback writes it while the API serves."""
     RUNS_DIR.mkdir(parents=True, exist_ok=True)
-    REGRESSION_PATH.write_text(json.dumps([s.model_dump() for s in scenarios], indent=2))
+    tmp = REGRESSION_PATH.with_suffix(".json.tmp")
+    tmp.write_text(json.dumps([s.model_dump() for s in scenarios], indent=2))
+    os.replace(tmp, REGRESSION_PATH)
 
 
 def load_regression() -> list[Scenario]:

@@ -7,9 +7,10 @@ fallback (api.store) from one of three sources, `live`, `golden` or `run:<id>` (
 history/); /api/runs lists those runs with their manifests. /api/loop/* spawns and controls the loop
 as a subprocess with the settings in the request body (api.loop_ctl); /api/manifest describes the
 target for the Intro line and carries the settings defaults; /api/attack runs one seed scenario
-in-process as a preview (api.attack); /api/replay/* plays the recorded golden run into /api/status and
-/api/cycles on its original schedule (api.replay); /api/health is what the Makefile waits on and
-where the UI learns whether a key is set. /api/loop/reset is planned (docs/FRONTEND.md §3) and
+in-process as a preview (api.attack); /api/replay/* plays a recorded run (golden, or any past run)
+into /api/status and /api/cycles on its original schedule (api.replay); /api/rollback copies a past
+run's config version in as the next live version (api.rollback); /api/health is what the Makefile waits
+on and where the UI learns whether a key is set. /api/loop/reset is planned (docs/FRONTEND.md §3) and
 does not exist yet.
 
 Without WANDB_API_KEY the API is Replay-only: /api/attack and POST /api/loop/start answer 503
@@ -18,11 +19,13 @@ instead of spawning work that would die on `get_client()`.
 Precedence for status, state and cycles is live > replay > file: a running loop always owns the
 screen, so a replay is ignored *and stopped* the moment one is seen (`replay_if_no_loop`), and
 `POST /api/loop/start` stops an active replay before spawning. Only with no loop alive does an
-active replay win over the files; during it configs/regression come from golden.
+active replay win over the files; during it configs/regression come from the run being replayed
+(golden, or the history run named by `recording=run:<id>`).
 
 Importing this module has no side effects. Startup kicks off `weave.init` in a daemon thread
 (network, never blocking) so the first /api/attack does not pay for it; `ANTIBODY_NO_WEAVE=1`
-skips that. The API writes under runs/ only `loop.log` and `loop_settings.json` (api.loop_ctl).
+skips that. The API writes under runs/ only `loop.log` and `loop_settings.json` (api.loop_ctl) and,
+on `POST /api/rollback`, the next `configs/v{n}.json` plus the merged `regression.json` (api.rollback).
 
 Test-only override: `ANTIBODY_IGNORE_EXTERNAL_LOOP=1` makes the replay-start guard (and
 loop_ctl's pgrep fallback) ignore loops this API did not spawn, so a scratch server on another port
@@ -42,7 +45,7 @@ from fastapi.responses import JSONResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
-from api import attack, loop_ctl, manifest, replay, store
+from api import attack, loop_ctl, manifest, replay, rollback, store
 from api.loop_ctl import LoopStartBody
 from api.store import Source
 from chaos.state import ROOT, latest_version
@@ -124,13 +127,16 @@ def _source(raw: str) -> Source:
 
 
 def _read_source(requested: Source) -> Source:
-    """Where read routes get their files: golden during a replay (never the live run's), else as asked.
+    """Where read routes get their files: the replayed run's during a replay (never the live run's), else as asked.
 
-    Only `live` is overridden. A past run asked for by name is exactly that run whether or not a tape
-    is playing; the replay owns the screen, not the history.
+    Only `live` is overridden, to whichever tape is playing (golden, or a `run:<id>`). A past run asked
+    for by name is exactly that run whether or not a tape is playing; the replay owns the screen, not
+    the history.
     """
-    if replay_if_no_loop() and requested == "live":
-        return "golden"
+    if requested == "live" and replay_if_no_loop():
+        playing = replay.current_source()
+        if playing is not None:
+            return playing
     return _resolve(requested)
 
 
@@ -156,7 +162,8 @@ def get_state(source: str = Query("live")) -> dict:
     replaying = src == "live" and replay_if_no_loop()
     replayed = replay.current_cycles() if replaying else None
     replaying = replayed is not None
-    src = "golden" if replaying else _resolve(src)
+    # Versions and the vulnerability file come from the tape's own run (golden, or the replayed history run).
+    src = (replay.current_source() or replay.GOLDEN) if replaying else _resolve(src)
     cycles = replayed if replaying else store.read_cycles(src)
     versions = store.config_versions(src)
 
@@ -182,6 +189,7 @@ def get_state(source: str = Query("live")) -> dict:
         "vulnerability": store.read_vulnerability(src),
     }
     if replaying:
+        # The tape's start time, not golden's: a replayed history run is labelled with its own date.
         out["recorded_at"] = replay.info().get("recorded_at")
     return out
 
@@ -343,22 +351,59 @@ def loop_stop() -> dict:
         raise HTTPException(404, "no loop started by this API is running")
 
 
-# --- Replay of the recorded golden run (docs/FRONTEND.md §3, slice 7) ----------------------------------
+# --- Rollback (docs/plans/02, B1) ---------------------------------------------------------------------
+
+
+class RollbackBody(BaseModel):
+    # A runs-list id: a history folder name or `golden`. `live` is a 400 (that is `--from-version`).
+    run: str
+    version: int = Field(..., ge=0)
+
+
+@app.post("/api/rollback")
+def rollback_to(body: RollbackBody) -> dict:
+    """Copy `run`'s `v{version}` in as the next live config version and merge its regression suite into
+    the live one (api.rollback). 200 `{config: AgentConfig, newer_tests}`; 400 for `live` or a malformed
+    run id; 404 unknown run or version; 409 while a loop runs or when the run targeted another agent."""
+    try:
+        return rollback.rollback(body.run, body.version)
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+    except LookupError as e:
+        raise HTTPException(404, str(e))
+    except rollback.RollbackRefused as e:
+        raise HTTPException(409, str(e))
+
+
+# --- Replay of a recorded run (docs/FRONTEND.md §3, slice 7; any past run since plan 02 B1) ------------
 
 
 @app.post("/api/replay/start", status_code=201)
-def replay_start(speed: float = Query(1.0, ge=replay.MIN_SPEED, le=replay.MAX_SPEED)) -> dict:
-    """Start playing the golden run from t=0. `speed` > 1 is for rehearsals (3× fits a 16-min run in 5)."""
+def replay_start(
+    speed: float = Query(1.0, ge=replay.MIN_SPEED, le=replay.MAX_SPEED),
+    recording: str = Query(replay.GOLDEN),
+) -> dict:
+    """Start playing a recording from t=0: the golden run by default, or a past run as `recording=run:<id>`.
+
+    `speed` > 1 is for rehearsals (3× fits a 16-min run in 5). `live` is not a tape: the live run is
+    what a replay stands in for, so asking to replay it is a 400. A history folder that has no
+    `status_log.jsonl` or `cycles.jsonl` is a run, but not a recording: 400 too.
+    """
+    if recording == "live":
+        raise HTTPException(400, "recording must be golden or run:<id>; the live run is not a tape")
+    source = _source(recording)
     live = loop_ctl.state()
     # Test-only escape hatch (module docstring): a scratch server may replay next to a foreign run.
     if live["running"] and not (live.get("external") and loop_ctl.ignore_external()):
         raise HTTPException(409, {"message": "a live loop is running", "reason": "loop_running", **live})
     try:
-        return replay.start(speed)
+        return replay.start(speed, source)
     except RuntimeError:
         raise HTTPException(409, {"message": "a replay is already active", "reason": "replay_active", **replay.info()})
     except FileNotFoundError as e:
-        raise HTTPException(503, f"no golden recording to replay: {e}")
+        if source == replay.GOLDEN:
+            raise HTTPException(503, f"no golden recording to replay: {e}")
+        raise HTTPException(400, f"{recording} cannot be replayed: {e}")
 
 
 @app.post("/api/replay/stop")
@@ -404,7 +449,9 @@ def replay_seek(t: float = Query(..., ge=0.0)) -> dict:
 
 @app.get("/api/replay")
 def replay_state() -> dict:
-    """`{active, paused, recording: {recorded_at, cycles, duration_s} | null, ...session fields while active}`."""
+    """`{active, paused, recording: {source, id, recorded_at, cycles, duration_s} | null, ...session fields while active}`.
+
+    `recording` is the tape that is playing, or the golden run a default start would play when idle."""
     return replay.info()
 
 

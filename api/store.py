@@ -32,10 +32,10 @@ RUN_PREFIX = "run:"
 # (`continuation-2026-09-13`). No dots, no slashes, so `..` and paths can never match.
 RUN_ID = re.compile(r"^[A-Za-z0-9T_-]+$")
 
-# Every reader here must tolerate the loop writing underneath it. `cycles.jsonl` and
-# `status.json` are safe by construction (append / atomic rename); `save_config` and
-# `save_regression` in chaos.state truncate-then-write, so a read in that window sees an
-# empty file. pydantic's ValidationError and json's JSONDecodeError are both ValueErrors.
+# Every reader here must tolerate the loop writing underneath it. `cycles.jsonl`, `status.json`
+# and `regression.json` are safe by construction (append / atomic rename); `save_config` in
+# chaos.state truncates-then-writes, so a read in that window sees an empty file. pydantic's
+# ValidationError and json's JSONDecodeError are both ValueErrors.
 
 
 class RunPaths(NamedTuple):
@@ -44,6 +44,7 @@ class RunPaths(NamedTuple):
     regression: Path
     status_log: Path
     manifest: Path
+    status: Path
 
 
 def run_dir(run_id: str) -> Path:
@@ -74,8 +75,11 @@ def parse_source(raw: str) -> Source:
     raise ValueError(f"source must be live, golden or run:<id>, not {raw!r}")
 
 
-def _paths(source: Source) -> RunPaths:
-    """Where a source keeps its files. Golden nests `runs/`; live and history folders do not."""
+def run_paths(source: Source) -> RunPaths:
+    """Where a source keeps its files. Golden nests `runs/`; live and history folders do not.
+
+    The one place the two folder shapes are known: every reader here and the replay loader go through it.
+    """
     if source == "golden":
         return RunPaths(
             cycles=GOLDEN_DIR / "cycles.jsonl",
@@ -83,12 +87,20 @@ def _paths(source: Source) -> RunPaths:
             regression=GOLDEN_DIR / "runs" / "regression.json",
             status_log=GOLDEN_DIR / "status_log.jsonl",
             manifest=GOLDEN_DIR / "runs" / "run.json",
+            status=GOLDEN_DIR / "runs" / "status.json",
         )
     if source == "live":
-        return RunPaths(CYCLES_PATH, CONFIGS_DIR, REGRESSION_PATH, STATUS_LOG_PATH, RUN_MANIFEST_PATH)
+        return RunPaths(CYCLES_PATH, CONFIGS_DIR, REGRESSION_PATH, STATUS_LOG_PATH, RUN_MANIFEST_PATH, STATUS_PATH)
     if source.startswith(RUN_PREFIX):
         d = run_dir(source[len(RUN_PREFIX) :])
-        return RunPaths(d / "cycles.jsonl", d / "configs", d / "regression.json", d / "status_log.jsonl", d / "run.json")
+        return RunPaths(
+            cycles=d / "cycles.jsonl",
+            configs=d / "configs",
+            regression=d / "regression.json",
+            status_log=d / "status_log.jsonl",
+            manifest=d / "run.json",
+            status=d / "status.json",
+        )
     raise ValueError(f"unknown source {source!r}")
 
 
@@ -103,7 +115,7 @@ def resolve_source(requested: Source) -> Source:
 
 
 def read_cycles(source: Source) -> list[CycleRecord]:
-    path = _paths(source).cycles
+    path = run_paths(source).cycles
     if not path.exists():
         return []
     out: list[CycleRecord] = []
@@ -125,7 +137,7 @@ def read_cycles(source: Source) -> list[CycleRecord]:
 
 
 def config_versions(source: Source) -> list[int]:
-    configs = _paths(source).configs
+    configs = run_paths(source).configs
     if not configs.exists():
         return []
     # Only `v<int>.json` counts; a stray `v3 copy.json` must not take every read route down.
@@ -134,7 +146,7 @@ def config_versions(source: Source) -> list[int]:
 
 def read_config(source: Source, version: int) -> AgentConfig | None:
     """The saved config, or None when absent or caught mid-write (callers treat both as 'not there')."""
-    path = _paths(source).configs / f"v{version}.json"
+    path = run_paths(source).configs / f"v{version}.json"
     if not path.exists():
         return None
     try:
@@ -144,7 +156,7 @@ def read_config(source: Source, version: int) -> AgentConfig | None:
 
 
 def read_regression(source: Source) -> list[Scenario]:
-    path = _paths(source).regression
+    path = run_paths(source).regression
     if not path.exists():
         return []
     try:
@@ -161,7 +173,7 @@ def read_vulnerability(source: Source) -> dict | None:
     `regression.json`, not from any one cycle's `regression_suite_size`. `world` is where the
     measurement ran (from the detail file); None when the run predates that field.
     """
-    regression = _paths(source).regression
+    regression = run_paths(source).regression
     path = regression.parent / "vulnerability.json"
     if not path.exists():
         return None
@@ -251,7 +263,7 @@ def run_manifest(source: Source) -> dict | None:
     `target: "builtin"` and `synthesized: true` so the UI can say it is guessing. None when the source
     has none of its files at all.
     """
-    paths = _paths(source)
+    paths = run_paths(source)
     stored = _manifest_file(paths.manifest)
     cycles = read_cycles(source)
     versions = config_versions(source)

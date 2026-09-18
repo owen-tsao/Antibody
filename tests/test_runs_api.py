@@ -7,37 +7,21 @@ for the run only. Fixtures are built from the committed golden run, so no infere
 from __future__ import annotations
 
 import json
-import shutil
 from pathlib import Path
 
 import pytest
+from conftest import GOLDEN_CYCLES, flat_run
 from fastapi.testclient import TestClient
 
 from api import store
 from chaos import state
-from chaos.state import GOLDEN_DIR
-
-GOLDEN_CYCLES = 6
-
-
-def _flat_run(dest: Path, *, cycles: bool = True, manifest: dict | None = None) -> Path:
-    """A history folder in the loop's flat archive shape, copied from the golden run."""
-    dest.mkdir(parents=True)
-    shutil.copytree(GOLDEN_DIR / "runs" / "configs", dest / "configs")
-    shutil.copy(GOLDEN_DIR / "runs" / "regression.json", dest / "regression.json")
-    shutil.copy(GOLDEN_DIR / "status_log.jsonl", dest / "status_log.jsonl")
-    if cycles:
-        shutil.copy(GOLDEN_DIR / "cycles.jsonl", dest / "cycles.jsonl")
-    if manifest is not None:
-        (dest / "run.json").write_text(json.dumps(manifest))
-    return dest
 
 
 @pytest.fixture
 def history(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
     root = tmp_path / "history"
-    _flat_run(root / "20260913T174437Z")
-    _flat_run(
+    flat_run(root / "20260913T174437Z")
+    flat_run(
         root / "manifested-run_2",
         manifest={
             "world": "zendesk",
@@ -49,18 +33,10 @@ def history(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
             "final_version": 42,
         },
     )
-    _flat_run(root / "aborted-before-cycle-1", cycles=False)
+    flat_run(root / "aborted-before-cycle-1", cycles=False)
     (root / "bad.name").mkdir()
     monkeypatch.setattr(store, "HISTORY_DIR", root)
     return root
-
-
-@pytest.fixture
-def client() -> TestClient:
-    from api.main import app
-
-    # No context manager: the lifespan would start the weave warm-up thread.
-    return TestClient(app)
 
 
 # --- id validation ---------------------------------------------------------------------------------
@@ -97,7 +73,7 @@ def test_run_dir_refuses_symlink_out_of_history(history: Path, tmp_path: Path) -
 
 
 def test_run_paths_stay_inside_history(history: Path) -> None:
-    paths = store._paths("run:20260913T174437Z")
+    paths = store.run_paths("run:20260913T174437Z")
     for p in paths:
         assert p.resolve().is_relative_to(history.resolve())
     # Flat shape: configs and regression sit next to cycles, not under runs/.

@@ -1,24 +1,26 @@
-"""Replay the recorded golden run into the UI at its original pace (docs/FRONTEND.md §3, slice 7).
+"""Replay a recorded run into the UI at its original pace (docs/FRONTEND.md §3, slice 7).
 
-The demo's fallback when the live loop is slow: instead of a real run, the API plays
-`data/golden/status_log.jsonl` (every phase transition, with `t_rel` seconds since that loop
-started) into `/api/status`, and lets `data/golden/cycles.jsonl` rows appear in `/api/cycles`
-exactly when the recording finished them. Nothing is invented: every status the UI sees is a row
-the loop actually wrote, in order, and every cycle is the recorded record. The only liberties are
-the clock (`speed`, default 1.0, for rehearsals) and `since`, which is rewritten to the moment the
-row went live in this replay so the UI's elapsed timers count from now rather than from the
-original run hours ago (the recorded value survives as `recorded_since`).
+The demo's fallback when the live loop is slow: instead of a real run, the API plays a recording's
+`status_log.jsonl` (every phase transition, with `t_rel` seconds since that loop started) into
+`/api/status`, and lets its `cycles.jsonl` rows appear in `/api/cycles` exactly when the recording
+finished them. The recording is the committed golden run (`data/golden/`) by default, or any past run
+under history/ (`run:<id>`, plan 02 B1); `api.store.run_paths` knows where each keeps its files.
+Nothing is invented: every status the UI sees is a row the loop actually wrote, in order, and every
+cycle is the recorded record. The only liberties are the clock (`speed`, default 1.0, for rehearsals)
+and `since`, which is rewritten to the moment the row went live in this replay so the UI's elapsed
+timers count from now rather than from the original run hours ago (the recorded value survives as
+`recorded_since`).
 
 One module-level session; `start()` refuses while one is still playing. A replay never ends on its
 own: once the recording has played out (`ended`) the session stays, frozen on its final row with
-every golden cycle visible, until `stop()` or a fresh `start()` replaces it. This is deliberate. The
+every recorded cycle visible, until `stop()` or a fresh `start()` replaces it. This is deliberate. The
 API's read routes serve the live run's files whenever no replay is active, and those files usually
-disagree with the golden recording (a different number of cycles, a different config version); if
+disagree with the recording (a different number of cycles, a different config version); if
 the session expired on a timer, the screen would silently switch runs a few seconds after the
 replay finished. `pause()` freezes it where it is (Back on the Agents page does this) so nothing
 advances off-screen; `resume()` continues from that position, or restarts from the top when the
 recording has ended. A replay never outranks a real run: api/main.py stops it the moment a live
-loop is seen (`replay_if_no_loop`) and before spawning one. Never writes under runs/.
+loop is seen (`replay_if_no_loop`) and before spawning one. This module never writes under runs/.
 
 `status_at` / `cycles_at` / `completed_cycle_at` are pure (elapsed -> value) so the mapping can be
 checked against the real log without a server:
@@ -33,13 +35,16 @@ import threading
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
 from functools import lru_cache
+from pathlib import Path
 
+from api import store
 from chaos.schemas import CycleRecord
-from chaos.state import GOLDEN_DIR
 
-GOLDEN_LOG = GOLDEN_DIR / "status_log.jsonl"
-GOLDEN_CYCLES = GOLDEN_DIR / "cycles.jsonl"
-GOLDEN_STATUS = GOLDEN_DIR / "runs" / "status.json"
+GOLDEN = "golden"
+_GOLDEN_PATHS = store.run_paths(GOLDEN)
+# What Replay actually needs from the committed run (GET /api/health reports whether both exist).
+GOLDEN_LOG = _GOLDEN_PATHS.status_log
+GOLDEN_CYCLES = _GOLDEN_PATHS.cycles
 
 MIN_SPEED, MAX_SPEED = 0.1, 50.0
 # Recording seconds short of the duration that still counts as ended (see Session.ended).
@@ -48,15 +53,36 @@ END_EPS_S = 0.01
 
 @dataclass(frozen=True)
 class Recording:
+    source: str  # `golden` or `run:<id>`: which tape this is
     rows: list[dict]  # status_log rows, sorted by t_rel, each with a numeric t_rel
-    cycles: list[CycleRecord]  # golden cycles, sorted by cycle number
-    recorded_at: str  # ISO time the golden run started
+    cycles: list[CycleRecord]  # the run's cycles, sorted by cycle number
+    recorded_at: str  # ISO time the recorded run started
     duration_s: float  # t_rel of the last row
 
+    @property
+    def id(self) -> str:
+        return self.source.removeprefix(store.RUN_PREFIX)
 
-def load_recording() -> Recording:
+    def meta(self) -> dict:
+        """`{source, id, recorded_at, cycles, duration_s}`: the tape described, for labels."""
+        return {
+            "source": self.source,
+            "id": self.id,
+            "recorded_at": self.recorded_at,
+            "cycles": len(self.cycles),
+            "duration_s": round(self.duration_s, 1),
+        }
+
+
+def load_recording(paths: store.RunPaths, source: str = GOLDEN) -> Recording:
+    """Parse one run's phase log and cycles. FileNotFoundError when either file is missing or the log
+    has no replayable rows: a folder that lacks them is not a tape, whatever else it holds."""
+    if not paths.status_log.exists():
+        raise FileNotFoundError(f"{source} has no status_log.jsonl to replay")
+    if not paths.cycles.exists():
+        raise FileNotFoundError(f"{source} has no cycles.jsonl to replay")
     rows: list[dict] = []
-    for line in GOLDEN_LOG.read_text().splitlines():
+    for line in paths.status_log.read_text().splitlines():
         line = line.strip()
         if not line:
             continue
@@ -68,58 +94,61 @@ def load_recording() -> Recording:
             rows.append(row)
     rows.sort(key=lambda r: r["t_rel"])
     if not rows:
-        raise FileNotFoundError(f"{GOLDEN_LOG} has no replayable rows")
+        raise FileNotFoundError(f"{paths.status_log} has no replayable rows")
 
     cycles: list[CycleRecord] = []
-    if GOLDEN_CYCLES.exists():
-        for line in GOLDEN_CYCLES.read_text().splitlines():
-            line = line.strip()
-            if not line:
-                continue
-            try:
-                cycles.append(CycleRecord.model_validate_json(line))
-            except ValueError:
-                continue
+    for line in paths.cycles.read_text().splitlines():
+        line = line.strip()
+        if not line:
+            continue
+        try:
+            cycles.append(CycleRecord.model_validate_json(line))
+        except ValueError:
+            continue
     cycles.sort(key=lambda c: c.cycle)
 
     # The first row is the run's `start_run` idle, written at t_rel≈0: its `since` is when the run began.
-    recorded_at = rows[0].get("since") or _golden_status_since() or datetime.now(timezone.utc).isoformat()
-    return Recording(rows=rows, cycles=cycles, recorded_at=recorded_at, duration_s=float(rows[-1]["t_rel"]))
+    recorded_at = rows[0].get("since") or _status_since(paths.status) or datetime.now(timezone.utc).isoformat()
+    return Recording(
+        source=source, rows=rows, cycles=cycles, recorded_at=recorded_at, duration_s=float(rows[-1]["t_rel"])
+    )
 
 
-def _golden_status_since() -> str | None:
+def _status_since(path: Path) -> str | None:
     try:
-        return json.loads(GOLDEN_STATUS.read_text()).get("since")
+        return json.loads(path.read_text()).get("since")
     except (OSError, ValueError, AttributeError):
         return None
 
 
-def _golden_mtimes() -> tuple[float, float]:
-    """Cache key for the recording: the golden files' mtimes, so a regenerated recording reloads."""
+def _mtimes(paths: store.RunPaths) -> tuple[float, float]:
+    """Cache key for one recording: its two files' mtimes, so a regenerated tape reloads."""
     try:
-        cycles_mtime = GOLDEN_CYCLES.stat().st_mtime if GOLDEN_CYCLES.exists() else 0.0
-        return GOLDEN_LOG.stat().st_mtime, cycles_mtime
+        cycles_mtime = paths.cycles.stat().st_mtime if paths.cycles.exists() else 0.0
+        return paths.status_log.stat().st_mtime, cycles_mtime
     except OSError:
         return 0.0, 0.0
 
 
-@lru_cache(maxsize=2)
-def _recording_for(_key: tuple[float, float]) -> Recording:
-    return load_recording()
+@lru_cache(maxsize=8)
+def _recording_for(source: str, _key: tuple[float, float]) -> Recording:
+    return load_recording(store.run_paths(source), source)
 
 
-def recording() -> Recording:
-    """The golden recording, parsed once per file version (GET /api/replay asks on every Heal poll)."""
-    return _recording_for(_golden_mtimes())
+def recording(source: str = GOLDEN) -> Recording:
+    """A recording, parsed once per file version (GET /api/replay asks on every Heal poll).
+
+    `source` is `golden` or a `run:<id>` that already passed `store.parse_source`.
+    """
+    return _recording_for(source, _mtimes(store.run_paths(source)))
 
 
-def recording_meta() -> dict | None:
-    """`{recorded_at, cycles, duration_s}` for the Heal link, or None when there is nothing to replay."""
+def recording_meta(source: str = GOLDEN) -> dict | None:
+    """`Recording.meta()` for the Heal link, or None when there is nothing to replay."""
     try:
-        rec = recording()
-    except (OSError, ValueError):
+        return recording(source).meta()
+    except (OSError, ValueError, LookupError):
         return None
-    return {"recorded_at": rec.recorded_at, "cycles": len(rec.cycles), "duration_s": round(rec.duration_s, 1)}
 
 
 # --- Pure mapping: elapsed seconds -> what the UI should see -----------------------------------
@@ -279,16 +308,17 @@ def active() -> bool:
     return _current() is not None
 
 
-def start(speed: float = 1.0) -> dict:
-    """Begin a replay from t=0. Raises RuntimeError("active") if one is still playing (an ended one is replaced)."""
+def start(speed: float = 1.0, source: str = GOLDEN) -> dict:
+    """Begin a replay of `source` from t=0. Raises RuntimeError("active") if one is still playing (an
+    ended one is replaced) and FileNotFoundError when the source is not a replayable tape."""
     global _session
     speed = min(MAX_SPEED, max(MIN_SPEED, float(speed)))
     with _lock:
         if _session is not None and not _session.ended():
             raise RuntimeError("active")
-        rec = recording()
+        rec = recording(source)
         _session = Session(recording=rec, t0=datetime.now(timezone.utc), speed=speed)
-        return _session.info()
+        return info()
 
 
 def stop() -> dict:
@@ -360,9 +390,20 @@ def current_cycles() -> list[CycleRecord] | None:
     return cycles_at(s.recording, s.elapsed())
 
 
-def info() -> dict:
-    """GET /api/replay. Always carries `recording` (what a replay would play, or None if there is no
-    golden log) so the Heal screen can label its link before anything is playing; while active the
-    session's speed/elapsed/started_at ride along too."""
+def current_source() -> str | None:
+    """The source (`golden` or `run:<id>`) whose files the active replay stands in for; None when idle.
+
+    api.main serves configs/regression from here while a tape plays, so a replayed history run shows
+    its own versions rather than golden's.
+    """
     s = _current()
-    return {"active": s is not None, "recording": recording_meta(), **(s.info() if s else {})}
+    return s.recording.source if s is not None else None
+
+
+def info() -> dict:
+    """GET /api/replay. Always carries `recording`: the tape that is playing, or, when idle, the golden
+    run a default start would play (None if there is no golden log), so the Heal screen can label its
+    link before anything is playing; while active the session's speed/elapsed/started_at ride along too."""
+    s = _current()
+    meta = s.recording.meta() if s is not None else recording_meta()
+    return {"active": s is not None, "recording": meta, **(s.info() if s else {})}
