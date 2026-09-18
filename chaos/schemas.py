@@ -15,7 +15,6 @@ from pydantic import BaseModel, Field
 # Agent configuration (the thing the Repair Agent patches)
 # ---------------------------------------------------------------------------
 
-ToolName = Literal["lookup_order", "issue_refund", "send_email", "read_ticket", "set_ticket_status"]
 # Faults tamper with the MOCKED world only. The ticket is the real world: the attack surface there is what
 # the attacker writes on it (message, planted note), not a tampered read. Faulting read_ticket would also let
 # the attacker forge "customer" comments that the refund-intent policy trusts, with no patch able to fix it.

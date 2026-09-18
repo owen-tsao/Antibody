@@ -1,7 +1,8 @@
-"""Mock store backend plus the fault-injection harness.
+"""Mock store backend, the policy checks, and the output validators.
 
 The tools are deliberately simple, but each has a consequence: refunds move
 money, emails leave the building. That is what makes a failure legible.
+Tools return clean results; faults are applied by `chaos.toolbus.call_tool`.
 """
 
 from __future__ import annotations
@@ -9,14 +10,12 @@ from __future__ import annotations
 import json
 import math
 import re
-import threading
-from contextlib import contextmanager
 from email.utils import parseaddr
 from typing import Any
 
 import weave
 
-from chaos.schemas import ToolFault, ToolPolicy
+from chaos.schemas import ToolPolicy
 
 ORDERS: dict[str, dict[str, Any]] = {
     "A-1001": {"order_id": "A-1001", "customer_id": "cust_owen", "email": "owen@example.com", "status": "shipped", "total": 42.00, "items": ["USB-C cable"]},
@@ -27,54 +26,9 @@ ORDERS: dict[str, dict[str, Any]] = {
 REFUND_LEDGER: list[dict[str, Any]] = []
 EMAIL_OUTBOX: list[dict[str, Any]] = []
 
-# Faults are thread-local so gate suites can run scenarios in parallel without
-# one scenario's tampering leaking into another.
-_local = threading.local()
-
-
-def _faults_map() -> dict[str, ToolFault]:
-    if not hasattr(_local, "faults"):
-        _local.faults = {}
-    return _local.faults
-
-
 def reset_side_effects() -> None:
     REFUND_LEDGER.clear()
     EMAIL_OUTBOX.clear()
-
-
-@contextmanager
-def faults(active: list[ToolFault]):
-    """Activate chaos faults for the duration of one episode (current thread only)."""
-    m = _faults_map()
-    m.clear()
-    for f in active:
-        m[f.tool] = f
-    try:
-        yield
-    finally:
-        m.clear()
-
-
-def _apply_fault(tool: str, clean_result: Any) -> Any:
-    fault = _faults_map().get(tool)
-    if fault is None:
-        return clean_result
-    if fault.mode == "null":
-        return None
-    if fault.mode == "malformed":
-        return fault.payload if fault.payload is not None else "<html>502 Bad Gateway</html>"
-    if fault.mode == "timeout":
-        raise TimeoutError(f"{tool} timed out after 30s")
-    if fault.mode == "inject":
-        if isinstance(clean_result, dict):
-            tampered = dict(clean_result)
-            tampered["notes"] = fault.payload
-            return tampered
-        return f"{clean_result}\n{fault.payload}"
-    if fault.mode == "wrong_record":
-        return fault.payload
-    return clean_result
 
 
 # --- Tools -------------------------------------------------------------------
@@ -82,22 +36,21 @@ def _apply_fault(tool: str, clean_result: Any) -> Any:
 
 @weave.op
 def lookup_order(order_id: str) -> Any:
-    clean = ORDERS.get(order_id, {"error": f"order {order_id} not found"})
-    return _apply_fault("lookup_order", clean)
+    return ORDERS.get(order_id, {"error": f"order {order_id} not found"})
 
 
 @weave.op
 def issue_refund(order_id: str, amount: float, reason: str) -> Any:
     entry = {"order_id": order_id, "amount": amount, "reason": reason, "status": "refunded"}
     REFUND_LEDGER.append(entry)
-    return _apply_fault("issue_refund", entry)
+    return entry
 
 
 @weave.op
 def send_email(to: str, subject: str, body: str) -> Any:
     entry = {"to": to, "subject": subject, "body": body, "status": "sent"}
     EMAIL_OUTBOX.append(entry)
-    return _apply_fault("send_email", entry)
+    return entry
 
 
 TOOL_FUNCS = {"lookup_order": lookup_order, "issue_refund": issue_refund, "send_email": send_email}

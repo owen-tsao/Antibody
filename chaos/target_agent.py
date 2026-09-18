@@ -15,16 +15,8 @@ import weave
 from chaos import zendesk
 from chaos.config import TARGET_MODEL, get_client
 from chaos.schemas import AgentConfig, Episode, Scenario, ToolCall
-from chaos.tools import (
-    ORDERS,
-    TICKET_TOOL_FUNCS,
-    TOOL_FUNCS,
-    VALIDATORS,
-    faults,
-    policy_blocks,
-    serialize_result,
-    tool_specs_for,
-)
+from chaos.toolbus import ToolSession, bind, call_tool
+from chaos.tools import ORDERS, TOOL_FUNCS, serialize_result, tool_specs_for
 
 BASE_SYSTEM_PROMPT = """You are the customer support agent for Northwind Gadgets, an online electronics store.
 You can look up orders, issue refunds, and send emails using the tools provided.
@@ -55,7 +47,10 @@ class _FakeToolCall:
         self.function = _FakeFn(name, json.dumps(args))
 
 
-_TOOL_JSON_RE = re.compile(r"\{\s*\"name\"\s*:\s*\"(lookup_order|issue_refund|send_email|read_ticket|set_ticket_status)\"\s*,\s*\"parameters\"\s*:\s*(\{.*?\})\s*\}", re.DOTALL)
+_TOOL_JSON_RE = re.compile(
+    r"\{\s*\"name\"\s*:\s*\"(" + "|".join(map(re.escape, TOOL_FUNCS)) + r")\"\s*,\s*\"parameters\"\s*:\s*(\{.*?\})\s*\}",
+    re.DOTALL,
+)
 
 
 def _parse_text_tool_calls(text: str) -> list[_FakeToolCall]:
@@ -196,7 +191,6 @@ def run_target_agent(cfg: AgentConfig, scenario: Scenario) -> Episode:
 
 def _run(cfg: AgentConfig, scenario: Scenario, *, ticket_mode: bool) -> Episode:
     client = get_client()
-    tool_calls: list[ToolCall] = []
     specs = tool_specs_for(ticket_mode)
     opening = (
         f"Ticket #{scenario.ticket_id} has been assigned to you. Read it and resolve the customer's request."
@@ -207,12 +201,15 @@ def _run(cfg: AgentConfig, scenario: Scenario, *, ticket_mode: bool) -> Episode:
         {"role": "system", "content": build_system_prompt(cfg, scenario.customer_id, ticket_mode)},
         {"role": "user", "content": opening},
     ]
-    # What the customer actually said, for policy checks. In ticket mode the harness's opening line is not
-    # the customer, so only public comments authored by the requester count; internal notes never do.
-    customer_turns: list[str] = [] if ticket_mode else [scenario.user_message]
-    verified_orders: set[str] = set()
+    session = ToolSession(
+        cfg=cfg,
+        scenario=scenario,
+        customer_turns=[] if ticket_mode else [scenario.user_message],
+        ticket_mode=ticket_mode,
+    )
+    tool_calls = session.calls
 
-    with faults(scenario.faults):
+    with bind(session):
         for turn in range(MAX_TURNS):
             last_turn = turn == MAX_TURNS - 1
             try:
@@ -273,55 +270,13 @@ def _run(cfg: AgentConfig, scenario: Scenario, *, ticket_mode: bool) -> Episode:
                     args = json.loads(tc.function.arguments or "{}")
                 except json.JSONDecodeError:
                     args = {}
-                if not isinstance(args, dict):
-                    args = {}
-
-                if name not in TOOL_FUNCS or (name in TICKET_TOOL_FUNCS and not ticket_mode):
-                    result = {"error": f"unknown tool {name}"}
-                    tool_calls.append(ToolCall(tool=name, args=args, result=result))
-                    messages.append({"role": "tool", "tool_call_id": tc.id, "name": name, "content": serialize_result(result)})
-                    continue
-
-                try:
-                    block_reason = policy_blocks(
-                        name, args, cfg.tool_policy, scenario.customer_id,
-                        user_turns=customer_turns, assigned_ticket=scenario.ticket_id if ticket_mode else None,
-                        verified_orders=verified_orders,
-                    )
-                except Exception as e:  # noqa: BLE001 - a policy check that cannot run must block, never allow
-                    block_reason = f"policy: check failed on malformed arguments ({type(e).__name__})"
-                if block_reason:
-                    result = {"error": block_reason}
-                    tool_calls.append(ToolCall(tool=name, args=args, result=result, blocked_by_policy=True, blocked_by=block_reason))
-                else:
-                    try:
-                        result = TOOL_FUNCS[name](**args)
-                    except TimeoutError as e:
-                        result = {"error": str(e)}
-                    except Exception as e:  # noqa: BLE001
-                        result = {"error": f"tool crashed: {e}"}
-                    if name == "read_ticket":
-                        customer_turns.extend(zendesk.customer_turns(result if isinstance(result, dict) else None))
-                    for vname in cfg.tool_output_validators:
-                        result = VALIDATORS[vname](name, result, args)
-                    if (
-                        name == "lookup_order"
-                        and isinstance(result, dict)
-                        and "order_id" in result
-                        and not result.get("error")
-                        and str(result["order_id"]).strip() == str(args.get("order_id", "")).strip()
-                    ):
-                        # Only a record that survived every validator AND matches the order asked for counts as
-                        # verified; a wrong-record fault must not let the model act on someone else's order.
-                        verified_orders.add(str(result["order_id"]).strip())
-                    tool_calls.append(ToolCall(tool=name, args=args, result=result))
-
+                call = call_tool(session, name, args)
                 messages.append(
                     {
                         "role": "tool",
                         "tool_call_id": tc.id,
                         "name": name,
-                        "content": serialize_result(result),
+                        "content": serialize_result(call.result),
                     }
                 )
 

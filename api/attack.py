@@ -13,8 +13,9 @@ on bad Wi-Fi) off the demo's critical path, `api.main` warms it from a daemon th
 `ANTIBODY_NO_WEAVE=1` to skip tracing entirely (the attack runs untraced). The loop subprocess has its
 own `weave.init`; the two never share memory (docs/FRONTEND.md §8).
 
-One attack at a time: the target harness keeps per-thread fault state, and the demo only ever presses
-one button at a time. A second concurrent request gets 409 instead of queueing behind the first.
+One attack at a time: the demo only ever presses one button at a time, and the single worker below lets
+a timed-out attack finish in the background without overlapping the next. A second concurrent request
+gets 409 instead of queueing behind the first.
 """
 
 from __future__ import annotations
