@@ -15,8 +15,8 @@ from pathlib import Path
 
 import pytest
 
-from chaos.schemas import AgentConfig, CycleRecord, Scenario
-from chaos.tools import TOOL_FUNCS, reset_side_effects
+from chaos.schemas import AgentConfig, CycleRecord, Scenario, ToolFault
+from chaos.tools import TOOL_FUNCS, VALIDATORS, reset_side_effects
 from chaos.toolbus import ToolSession, call_tool
 
 GOLDEN = Path(__file__).resolve().parent.parent / "data" / "golden"
@@ -37,7 +37,12 @@ def _session(record: CycleRecord) -> ToolSession:
 
 
 def _stub_ticket_tools(monkeypatch: pytest.MonkeyPatch, record: CycleRecord) -> None:
-    """Answer read_ticket / set_ticket_status from the tape, in call order, without touching Zendesk."""
+    """Answer read_ticket / set_ticket_status from the tape, in call order, without touching Zendesk.
+
+    Limitation: results are replayed in the order the tool was called, ignoring arguments. Every golden
+    episode touches exactly one ticket, so order and arguments agree; an episode that read two different
+    tickets would need the stub keyed by `(tool, ticket_id)` instead.
+    """
     recorded = {
         name: iter([tc.result for tc in record.episode.tool_calls if tc.tool == name and not tc.blocked_by_policy])
         for name in ("read_ticket", "set_ticket_status")
@@ -114,3 +119,40 @@ def test_validator_runs_after_fault_and_withholds_verification() -> None:
     assert session.verified_orders == set()
     email = call_tool(session, "send_email", {"to": "owen@example.com", "subject": "s", "body": "b"})
     assert email.blocked_by_policy
+
+
+def test_last_fault_for_a_tool_wins() -> None:
+    """The Chaos Agent can legally name one tool twice; the pre-seam fault map kept the last, so must the bus."""
+    scenario = next(r for r in RECORDS if r.scenario.id == "seed-injection-refund").scenario.model_copy(
+        update={
+            "faults": [
+                ToolFault(tool="lookup_order", mode="inject", payload="first"),
+                ToolFault(tool="lookup_order", mode="inject", payload="second"),
+            ]
+        }
+    )
+    session = ToolSession(cfg=_config(0), scenario=scenario, customer_turns=[scenario.user_message])
+
+    lookup = call_tool(session, "lookup_order", {"order_id": "A-1001"})
+    assert lookup.result["notes"] == "second"
+    assert session.verified_orders == {"A-1001"}, "an inject fault leaves the record itself intact"
+
+
+def test_crashing_validator_still_records_the_call(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A validator that raises must not escape `call_tool` (soon an HTTP boundary) or lose the call from the record."""
+
+    def explode(tool, result, requested=None):
+        raise RuntimeError("boom")
+
+    monkeypatch.setitem(VALIDATORS, "validate_not_null", explode)
+    cfg = _config(2)  # validate_not_null + actions_require_verified_lookup
+    scenario = next(r for r in RECORDS if r.scenario.id == "seed-injection-refund").scenario
+    session = ToolSession(cfg=cfg, scenario=scenario, customer_turns=[scenario.user_message])
+
+    lookup = call_tool(session, "lookup_order", {"order_id": "A-1001"})
+    assert lookup.result == {"error": "validator validate_not_null crashed: boom"}
+    assert not lookup.blocked_by_policy
+    assert session.calls == [lookup]
+    assert session.verified_orders == set(), "a record no validator vouched for must not verify the order"
+    refund = call_tool(session, "issue_refund", {"order_id": "A-1001", "amount": 1.0, "reason": "r"})
+    assert refund.blocked_by_policy

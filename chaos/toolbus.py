@@ -87,7 +87,9 @@ def call_tool(session: ToolSession, name: str, args: Any) -> ToolCall:
             ToolCall(tool=name, args=args, result={"error": block_reason}, blocked_by_policy=True, blocked_by=block_reason),
         )
 
-    fault = next((f for f in scenario.faults if f.tool == name), None)
+    # Last fault named for a tool wins: the Chaos Agent may emit two for one tool, and the thread-local
+    # map this replaced was built in a loop, so the later one overwrote the earlier.
+    fault = {f.tool: f for f in scenario.faults}.get(name)
     try:
         result = apply_fault(fault, TOOL_FUNCS[name](**args))
     except TimeoutError as e:
@@ -97,8 +99,11 @@ def call_tool(session: ToolSession, name: str, args: Any) -> ToolCall:
 
     if name == "read_ticket":
         session.customer_turns.extend(zendesk.customer_turns(result if isinstance(result, dict) else None))
-    for vname in cfg.tool_output_validators:
-        result = VALIDATORS[vname](name, result, args)
+    try:
+        for vname in cfg.tool_output_validators:
+            result = VALIDATORS[vname](name, result, args)
+    except Exception as e:  # noqa: BLE001 - a validator that dies must not lose the call from the record
+        result = {"error": f"validator {vname} crashed: {e}"}
     if (
         name == "lookup_order"
         and isinstance(result, dict)
