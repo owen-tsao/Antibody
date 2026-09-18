@@ -7,6 +7,7 @@ runs/ is ever written; the history folder is a copy of the golden run in the fla
 from __future__ import annotations
 
 import json
+import threading
 from pathlib import Path
 
 import pytest
@@ -136,13 +137,98 @@ def test_rollback_merges_suite_live_wins_and_counts_newer(world: dict[str, Path]
     assert next(s for s in suite if s["id"] == clash)["title"] == "the live copy"
     # Live entries keep their order at the front; the run's new ones follow.
     assert ids[:3] == [clash, "newer-1", "newer-2"]
-    assert not (world["runs"] / "regression.json.tmp").exists()
+    assert not list(world["runs"].glob(".regression-*"))
 
 
 def test_rollback_to_golden(world: dict[str, Path], client: TestClient) -> None:
     r = client.post("/api/rollback", json={"run": "golden", "version": 3})
     assert r.status_code == 200
     assert r.json()["config"]["patch_note"] == "rollback to run golden v3"
+
+
+# --- concurrency ------------------------------------------------------------------------------------------
+
+
+def test_concurrent_rollbacks_get_distinct_versions(world: dict[str, Path], client: TestClient) -> None:
+    """Six clicks at once: six versions, none overwritten, no 500, and a suite that still parses."""
+    n = 6
+    state.save_regression([_scenario("live-only")])
+    gate = threading.Barrier(n)
+    results: list[tuple[int, dict | str]] = []
+
+    def go(i: int) -> None:
+        gate.wait()
+        r = client.post("/api/rollback", json={"run": RUN, "version": i % 4})
+        results.append((r.status_code, r.json() if r.status_code == 200 else r.text))
+
+    threads = [threading.Thread(target=go, args=(i,)) for i in range(n)]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join(timeout=30)
+    codes = sorted(c for c, _ in results)
+    assert codes == [200] * n, results
+    versions = sorted(doc["config"]["version"] for _, doc in results)
+    assert versions == list(range(n))
+    assert _live_versions(world["runs"]) == list(range(n))
+    # Each file is the config it says it is.
+    for v in range(n):
+        assert state.load_config(v).version == v
+    suite_ids = _live_suite_ids(world["runs"])
+    assert suite_ids == _run_suite_ids(world["history"]) | {"live-only"}
+    assert not list(world["runs"].glob(".regression-*"))
+
+
+def test_rollback_shares_the_loop_start_lock(world: dict[str, Path], client: TestClient) -> None:
+    """While a start holds the lock, a rollback waits rather than writing configs/ under the spawning loop."""
+    assert loop_ctl.runs_lock.acquire(timeout=1)
+    done = threading.Event()
+    out: list[int] = []
+
+    def go() -> None:
+        out.append(client.post("/api/rollback", json={"run": RUN, "version": 1}).status_code)
+        done.set()
+
+    try:
+        threading.Thread(target=go).start()
+        assert not done.wait(0.3)
+        assert not (world["runs"] / "configs").exists()
+    finally:
+        loop_ctl.runs_lock.release()
+    assert done.wait(10) and out == [200]
+
+
+def test_taken_version_slot_is_a_409_not_an_overwrite(world: dict[str, Path], client: TestClient, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Belt to the lock's braces: a stale version pick must fail loudly instead of replacing a file."""
+    state.save_config(AgentConfig(version=0, system_prompt="the real v0"))
+    monkeypatch.setattr(state, "latest_version", lambda: None)
+    r = client.post("/api/rollback", json={"run": RUN, "version": 1})
+    assert r.status_code == 409 and "already exists" in r.json()["detail"] and "retry" in r.json()["detail"]
+    assert state.load_config(0).system_prompt == "the real v0"
+    assert not (world["runs"] / "regression.json").exists()
+
+
+def test_save_config_exclusive_refuses_to_overwrite(world: dict[str, Path]) -> None:
+    state.save_config(AgentConfig(version=0, system_prompt="a"), exclusive=True)
+    with pytest.raises(FileExistsError):
+        state.save_config(AgentConfig(version=0, system_prompt="b"), exclusive=True)
+    # The loop's plain save still overwrites on purpose.
+    state.save_config(AgentConfig(version=0, system_prompt="c"))
+    assert state.load_config(0).system_prompt == "c"
+
+
+# --- the live suite ---------------------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize("torn", ['[{"id": "x"', "null", '[{"kind": "no id"}]', "42"])
+def test_unreadable_live_suite_is_a_409_not_a_500_or_a_silent_drop(world: dict[str, Path], client: TestClient, torn: str) -> None:
+    world["runs"].mkdir()
+    (world["runs"] / "regression.json").write_text(torn)
+    r = client.post("/api/rollback", json={"run": RUN, "version": 1})
+    assert r.status_code == 409, r.text
+    assert "regression.json is unreadable" in r.json()["detail"]
+    assert not (world["runs"] / "configs").exists()
+    assert (world["runs"] / "regression.json").read_text() == torn
 
 
 # --- refusals -------------------------------------------------------------------------------------------------
@@ -171,6 +257,7 @@ def test_rollback_refused_across_targets(world: dict[str, Path], client: TestCli
     [
         ({"run": "live", "version": 0}, 400),
         ({"run": "../etc", "version": 0}, 400),
+        ({"run": "A" * 300, "version": 0}, 400),
         ({"run": "nope", "version": 0}, 404),
         ({"run": RUN, "version": 99}, 404),
         ({"run": RUN, "version": -1}, 422),

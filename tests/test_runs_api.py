@@ -13,12 +13,19 @@ import pytest
 from conftest import GOLDEN_CYCLES, flat_run
 from fastapi.testclient import TestClient
 
-from api import store
+from api import loop_ctl, store
 from chaos import state
+
+LONG_ID = "A" * 300
 
 
 @pytest.fixture
 def history(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
+    """A history folder of known runs, plus a live runs/ that is empty and a loop that is idle.
+
+    The live paths and `loop_ctl.state` are patched so no test here reads the developer's real runs/ or
+    runs `pgrep`/`lsof`: what `/api/state` and `/api/runs` return must not depend on the checkout.
+    """
     root = tmp_path / "history"
     flat_run(root / "20260913T174437Z")
     flat_run(
@@ -36,16 +43,28 @@ def history(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
     flat_run(root / "aborted-before-cycle-1", cycles=False)
     (root / "bad.name").mkdir()
     monkeypatch.setattr(store, "HISTORY_DIR", root)
+    runs = tmp_path / "runs"
+    monkeypatch.setattr(store, "CYCLES_PATH", runs / "cycles.jsonl")
+    monkeypatch.setattr(store, "CONFIGS_DIR", runs / "configs")
+    monkeypatch.setattr(store, "REGRESSION_PATH", runs / "regression.json")
+    monkeypatch.setattr(store, "RUN_MANIFEST_PATH", runs / "run.json")
+    monkeypatch.setattr(store, "STATUS_LOG_PATH", runs / "status_log.jsonl")
+    monkeypatch.setattr(store, "STATUS_PATH", runs / "status.json")
+    monkeypatch.setattr(loop_ctl, "state", lambda: {**loop_ctl.IDLE})
     return root
 
 
 # --- id validation ---------------------------------------------------------------------------------
 
 
-@pytest.mark.parametrize("bad", ["../../etc", "a/b", "x.y", "", ".", "..", "a b", "run:x"])
+@pytest.mark.parametrize("bad", ["../../etc", "a/b", "x.y", "", ".", "..", "a b", "run:x", LONG_ID])
 def test_parse_source_rejects_malformed_ids(history: Path, bad: str) -> None:
     with pytest.raises(ValueError):
         store.parse_source(f"run:{bad}")
+
+
+def test_run_id_accepts_names_up_to_the_cap() -> None:
+    assert store.RUN_ID.fullmatch("A" * 128) and not store.RUN_ID.fullmatch("A" * 129)
 
 
 def test_parse_source_rejects_unknown_source_words(history: Path) -> None:
@@ -114,6 +133,31 @@ def test_history_hides_empty_and_unreachable_runs(history: Path) -> None:
     assert "aborted-before-cycle-1" not in ids
     assert "bad.name" not in ids
     assert set(ids) == {"20260913T174437Z", "manifested-run_2"}
+
+
+def test_history_list_survives_planted_symlinks(history: Path, tmp_path: Path, client: TestClient) -> None:
+    """A symlink out of history/ (which `run_dir` refuses) or to a sibling run must not 500 the list or duplicate a row."""
+    outside = flat_run(tmp_path / "outside" / "elsewhere")
+    (history / "escape").symlink_to(outside)
+    (history / "alias").symlink_to(history / "20260913T174437Z")
+    ids = [m["id"] for m in store.history_runs()]
+    assert ids.count("20260913T174437Z") == 1
+    assert set(ids) == {"20260913T174437Z", "manifested-run_2"}
+    r = client.get("/api/runs")
+    assert r.status_code == 200
+    assert {row["id"] for row in r.json()} == {"20260913T174437Z", "manifested-run_2", "golden"}
+
+
+def test_history_list_skips_a_folder_that_vanishes_mid_read(history: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    real = store.run_manifest
+
+    def flaky(source: str):
+        if source.endswith("manifested-run_2"):
+            raise OSError("gone")
+        return real(source)
+
+    monkeypatch.setattr(store, "run_manifest", flaky)
+    assert [m["id"] for m in store.history_runs()] == ["20260913T174437Z"]
 
 
 def test_newest_first_puts_undated_runs_last() -> None:
@@ -186,10 +230,20 @@ def test_run_detail_has_configs(client: TestClient, history: Path) -> None:
 @pytest.mark.parametrize(
     ("run_id", "code"),
     # An encoded slash never reaches the handler: the router decodes it and finds no route.
-    [("nope", 404), ("bad.name", 400), ("a%2Fb", 404)],
+    [("nope", 404), ("bad.name", 400), ("a%2Fb", 404), (LONG_ID, 400)],
 )
 def test_run_detail_errors(client: TestClient, history: Path, run_id: str, code: int) -> None:
     assert client.get(f"/api/runs/{run_id}").status_code == code
+
+
+def test_live_row_reads_the_patched_runs_dir(client: TestClient, history: Path, tmp_path: Path) -> None:
+    """The list shows the live run only once it has a cycle, and it reads the runs/ this test controls."""
+    assert not any(r["current"] for r in client.get("/api/runs").json())
+    live = tmp_path / "runs"
+    live.mkdir()
+    (live / "cycles.jsonl").write_text((history / "20260913T174437Z" / "cycles.jsonl").read_text())
+    rows = client.get("/api/runs").json()
+    assert rows[0]["current"] is True and rows[0]["id"] == "live" and rows[0]["cycles"] == GOLDEN_CYCLES
 
 
 @pytest.mark.parametrize("route", ["/api/cycles", "/api/configs", "/api/configs/0", "/api/regression", "/api/state"])
@@ -205,7 +259,7 @@ def test_read_routes_accept_run_source(client: TestClient, history: Path, route:
 @pytest.mark.parametrize("route", ["/api/cycles", "/api/configs", "/api/configs/0", "/api/regression", "/api/state"])
 @pytest.mark.parametrize(
     ("source", "code"),
-    [("run:../../etc", 400), ("run:nope", 404), ("run:bad.name", 400), ("run:", 400), ("bogus", 400)],
+    [("run:../../etc", 400), ("run:nope", 404), ("run:bad.name", 400), ("run:", 400), ("bogus", 400), (f"run:{LONG_ID}", 400)],
 )
 def test_read_routes_reject_bad_sources(client: TestClient, history: Path, route: str, source: str, code: int) -> None:
     assert client.get(route, params={"source": source}).status_code == code
@@ -213,5 +267,6 @@ def test_read_routes_reject_bad_sources(client: TestClient, history: Path, route
 
 def test_live_and_golden_sources_unchanged(client: TestClient, history: Path) -> None:
     assert client.get("/api/cycles", params={"source": "golden"}).status_code == 200
+    # The patched live runs/ is empty, so `live` falls back to golden (nothing depends on the checkout).
     live = client.get("/api/state", params={"source": "live"}).json()
-    assert live["source"] in ("live", "golden", "replay")
+    assert live["source"] == "golden" and live["loop"]["running"] is False

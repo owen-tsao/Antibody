@@ -117,7 +117,7 @@ def test_idle_info_describes_golden(client: TestClient, history: Path) -> None:
 
 @pytest.mark.parametrize(
     ("recording", "code"),
-    [("run:nope", 404), ("run:no-log", 400), ("run:no-cycles", 400), ("run:../x", 400), ("live", 400), ("bogus", 400)],
+    [("run:nope", 404), ("run:no-log", 400), ("run:no-cycles", 400), ("run:../x", 400), ("live", 400), ("bogus", 400), ("run:" + "A" * 300, 400)],
 )
 def test_start_rejects_bad_recordings(client: TestClient, history: Path, recording: str, code: int) -> None:
     r = client.post("/api/replay/start", params={"recording": recording})

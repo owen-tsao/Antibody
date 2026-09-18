@@ -4,7 +4,7 @@ Layout:
     runs/configs/v{n}.json   every accepted AgentConfig, one file per version
     runs/regression.json     the captured regression suite (scenarios)
     runs/run.json            what only the loop process knows about this run (world, target, flags)
-    runs/loop_settings.json  the request body the API spawned this run with (absent for a terminal run)
+    runs/loop_settings.json  the request body the API last spawned a run with (absent for a terminal-only install)
     cycles.jsonl             append-only cycle log read by the dashboard
     history/<timestamp>/     every previous run, moved there whole before a fresh run starts
     data/golden/             a committed clean run used as the demo fallback
@@ -20,9 +20,11 @@ repo or history/ with it — `ANTIBODY_RUNS_DIR=.` from the repo root, or a hist
 
 from __future__ import annotations
 
+import contextlib
 import json
 import os
 import shutil
+import tempfile
 from pathlib import Path
 
 from chaos.config import ROOT
@@ -34,9 +36,12 @@ CONFIGS_DIR = RUNS_DIR / "configs"
 REGRESSION_PATH = RUNS_DIR / "regression.json"
 CYCLES_PATH = RUNS_DIR / "cycles.jsonl" if _runs_override else ROOT / "cycles.jsonl"
 # Two start-of-run documents with different authors, kept apart on purpose. `run.json` is written by
-# the loop process and holds what only it knows (world, target, argv). `loop_settings.json` is written
-# by the API (api.loop_ctl) when *it* spawns a run and holds the request body it was given; a
-# terminal-started run never has one. Both move to history/ with the run and go with `reset`.
+# the loop process and holds what only it knows (world, target, argv); it moves to history/ with the
+# run. `loop_settings.json` is written by the API (api.loop_ctl) *after* it spawns a run and holds the
+# request body it was given. It is deliberately not archived: the API writes it seconds before the
+# child's `archive_previous_run` runs, so moving it would file it under the *previous* run and leave
+# the current one with nothing. It stays until the next `start()` overwrites it or `reset` deletes it;
+# the flags in `run.json` are what tells the API whether it still describes the run on disk.
 RUN_MANIFEST_PATH = RUNS_DIR / "run.json"
 LOOP_SETTINGS_PATH = RUNS_DIR / "loop_settings.json"
 _history_override = os.environ.get("ANTIBODY_HISTORY_DIR")
@@ -64,10 +69,21 @@ def _refuse_unsafe_layout() -> None:
 _refuse_unsafe_layout()
 
 
-def save_config(cfg: AgentConfig) -> Path:
+def save_config(cfg: AgentConfig, *, exclusive: bool = False) -> Path:
+    """Write `configs/v{n}.json`. With `exclusive`, an existing file is an error (FileExistsError), not overwritten.
+
+    The loop owns the version sequence while it runs and may rewrite a version on purpose. The API's
+    rollback does not: two concurrent rollbacks that both computed the same next version must not
+    silently collapse into one file, so it asks for `exclusive` and turns the failure into a retry.
+    """
     CONFIGS_DIR.mkdir(parents=True, exist_ok=True)
     path = CONFIGS_DIR / f"v{cfg.version}.json"
-    path.write_text(cfg.model_dump_json(indent=2))
+    text = cfg.model_dump_json(indent=2)
+    if exclusive:
+        with open(path, "x") as f:
+            f.write(text)
+    else:
+        path.write_text(text)
     return path
 
 
@@ -86,11 +102,21 @@ def latest_version() -> int | None:
 
 
 def save_regression(scenarios: list[Scenario]) -> None:
-    """Write the suite whole via rename: the API reads it on a poll, and rollback writes it while the API serves."""
+    """Write the suite whole via rename: the API reads it on a poll, and rollback writes it while the API serves.
+
+    The temp file gets a unique name (`mkstemp`) rather than a fixed `.tmp`, so two writers landing at
+    once cannot truncate each other's half-written file or lose the race on `os.replace`.
+    """
     RUNS_DIR.mkdir(parents=True, exist_ok=True)
-    tmp = REGRESSION_PATH.with_suffix(".json.tmp")
-    tmp.write_text(json.dumps([s.model_dump() for s in scenarios], indent=2))
-    os.replace(tmp, REGRESSION_PATH)
+    fd, tmp = tempfile.mkstemp(dir=REGRESSION_PATH.parent, prefix=".regression-", suffix=".tmp")
+    try:
+        with os.fdopen(fd, "w") as f:
+            f.write(json.dumps([s.model_dump() for s in scenarios], indent=2))
+        os.replace(tmp, REGRESSION_PATH)
+    except BaseException:
+        with contextlib.suppress(OSError):
+            os.unlink(tmp)
+        raise
 
 
 def load_regression() -> list[Scenario]:
@@ -142,9 +168,10 @@ def _move_dir_complete(src: Path, dest: Path) -> None:
     source is left untouched. Same-filesystem moves are a rename and never partial.
     """
     staging = dest.parent / f".incoming-{dest.name}"
-    if staging.is_symlink() or staging.exists():
-        # A previous attempt died mid-copy. `src` still exists (we are moving it), so the leftover
-        # cannot be the only copy of anything.
+    if (staging.is_symlink() or staging.exists()) and (src.is_symlink() or src.exists()):
+        # A previous attempt died mid-copy. `src` is still there, so the leftover cannot be the only
+        # copy of anything. (A leftover *without* a src is a finished move that never got its final
+        # name; `_finalize_staged` handles those and this function is never asked to overwrite one.)
         _remove(staging)
     try:
         os.rename(src, staging)
@@ -160,6 +187,32 @@ def _move_dir_complete(src: Path, dest: Path) -> None:
     os.replace(staging, dest)
 
 
+def _finalize_staged(legacy_src_dir: Path) -> int:
+    """Give orphaned `history/.incoming-<name>` folders their final name. Returns how many.
+
+    `_move_dir_complete` renames `src` to the staging name first and to `dest` second; a crash between
+    the two leaves a complete run under the staging name and no `src`. Left alone it would be invisible
+    to `GET /api/runs` and deleted by the next same-named migration attempt. It is finalized only when
+    `dest` does not exist and `src` is gone (the rename happened, so staging holds everything). A staging
+    folder whose `src` still exists is a half-copy and is left for `_move_dir_complete` to redo.
+    """
+    if not HISTORY_DIR.is_dir():
+        return 0
+    finalized = 0
+    for staging in sorted(HISTORY_DIR.glob(".incoming-*")):
+        name = staging.name.removeprefix(".incoming-")
+        dest = HISTORY_DIR / name
+        src = legacy_src_dir / name
+        if staging.is_symlink() or not staging.is_dir() or not name:
+            continue
+        if dest.is_symlink() or dest.exists() or src.is_symlink() or src.exists():
+            continue
+        os.replace(staging, dest)
+        print(f"history: recovered {dest} from an interrupted move")
+        finalized += 1
+    return finalized
+
+
 def _migrate_legacy_archive() -> int:
     """Move `runs/archive/*` (the pre-history/ location) into HISTORY_DIR. Returns how many moved.
 
@@ -167,7 +220,9 @@ def _migrate_legacy_archive() -> int:
     every past run. Folders whose name already exists in history/ are left in place rather than merged.
     The emptied archive/ is removed only when nothing but file-manager droppings (`_STRAY_FILES`)
     remain; anything else is reported and left for a person. Symlinks are never followed or removed.
+    Any move that was interrupted last time is finished first (`_finalize_staged`).
     """
+    _finalize_staged(_LEGACY_ARCHIVE_DIR)
     if _LEGACY_ARCHIVE_DIR.is_symlink():
         print(f"history: {_LEGACY_ARCHIVE_DIR} is a symlink; not migrating through it")
         return 0
@@ -194,8 +249,31 @@ def _migrate_legacy_archive() -> int:
     return moved
 
 
+# What a directory the loop or the API has written to always holds at least one of. A non-empty
+# RUNS_DIR with none of these is somebody's folder, not ours, and `reset` refuses to rmtree it.
+_RUNS_DIR_MARKERS = ("configs", "status.json", "run.json", "loop.log", "archive")
+
+
+def _looks_like_runs_dir(path: Path) -> bool:
+    """True for an empty or absent directory too: there is nothing to protect there."""
+    if not path.is_dir():
+        return True
+    entries = [p.name for p in path.iterdir() if p.name not in _STRAY_FILES]
+    return not entries or any(name in entries for name in _RUNS_DIR_MARKERS)
+
+
 def reset() -> None:
-    """Wipe the current run's state. Explicit command; never happens implicitly on start. history/ is untouched."""
+    """Wipe the current run's state. Explicit command; never happens implicitly on start. history/ is untouched.
+
+    Refuses (SystemExit) when RUNS_DIR is a populated directory that carries none of the loop's or
+    the API's files: `ANTIBODY_RUNS_DIR=~/Documents` passes the import-time layout guard, and this is
+    the one command that would empty it.
+    """
+    if not _looks_like_runs_dir(RUNS_DIR):
+        raise SystemExit(
+            f"reset: refusing to remove {RUNS_DIR}: it does not look like an Antibody runs dir "
+            f"(none of {', '.join(_RUNS_DIR_MARKERS)} found). Check ANTIBODY_RUNS_DIR."
+        )
     _migrate_legacy_archive()
     removed: list[str] = []
     if CYCLES_PATH.exists():
@@ -231,7 +309,6 @@ def archive_previous_run() -> Path | None:
         REGRESSION_PATH,
         CYCLES_PATH,
         RUN_MANIFEST_PATH,
-        LOOP_SETTINGS_PATH,
         RUNS_DIR / "status.json",
         RUNS_DIR / "status_log.jsonl",
         RUNS_DIR / "vulnerability.json",

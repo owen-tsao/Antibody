@@ -29,8 +29,9 @@ from chaos.status import STATUS_LOG_PATH, STATUS_PATH
 Source = Literal["live", "golden"] | str
 RUN_PREFIX = "run:"
 # History folder names: the loop's UTC stamps (`20260913T174437Z`) and hand-named copies
-# (`continuation-2026-09-13`). No dots, no slashes, so `..` and paths can never match.
-RUN_ID = re.compile(r"^[A-Za-z0-9T_-]+$")
+# (`continuation-2026-09-13`). No dots, no slashes, so `..` and paths can never match. Capped well
+# under NAME_MAX so `resolve()` can never fail with ENAMETOOLONG on a URL nobody could have a folder for.
+RUN_ID = re.compile(r"^[A-Za-z0-9T_-]{1,128}$")
 
 # Every reader here must tolerate the loop writing underneath it. `cycles.jsonl`, `status.json`
 # and `regression.json` are safe by construction (append / atomic rename); `save_config` in
@@ -299,15 +300,20 @@ def history_runs() -> list[dict]:
     """Manifests of every past run under HISTORY_DIR that has at least one cycle, newest start first.
 
     A folder with no cycles (a run aborted before cycle 1) is skipped: there is nothing to open. Folders
-    whose names would not survive `parse_source` are skipped too, since no URL could ever reach them.
+    whose names would not survive `parse_source` are skipped too, since no URL could ever reach them,
+    and so are symlinks (`run_dir` refuses them; one planted in history/ must not take the list down)
+    and folders that vanish or turn unreadable between listing and reading.
     """
     if not HISTORY_DIR.is_dir():
         return []
     out: list[dict] = []
     for child in HISTORY_DIR.iterdir():
-        if not child.is_dir() or not RUN_ID.fullmatch(child.name):
+        if child.is_symlink() or not child.is_dir() or not RUN_ID.fullmatch(child.name):
             continue
-        manifest = run_manifest(f"{RUN_PREFIX}{child.name}")
+        try:
+            manifest = run_manifest(f"{RUN_PREFIX}{child.name}")
+        except (ValueError, LookupError, OSError):
+            continue
         if manifest is not None and manifest["cycles"] > 0:
             out.append(manifest)
     return newest_first(out)

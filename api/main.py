@@ -52,6 +52,7 @@ from chaos.state import ROOT, latest_version
 
 WEB_DIST = ROOT / "web" / "dist"
 NO_KEY_MESSAGE = "WANDB_API_KEY missing; add it to .env and restart the API (Replay works without one)"
+LOOP_START_PATH = "/api/loop/start"
 
 # uvicorn only installs handlers for its own loggers; logging under its name is the one way a
 # line reliably reaches the terminal the server was started from.
@@ -72,12 +73,18 @@ app = FastAPI(title="Antibody API", version="0.1.0", lifespan=_lifespan)
 
 @app.exception_handler(RequestValidationError)
 async def _body_rules_are_400s(request: Request, exc: RequestValidationError) -> JSONResponse:
-    """A `model_validator` rule on a body ("nothing to run", "until_quiet cannot exceed chaos_cycles")
-    is a client error the drawer shows verbatim, so it answers 400 with the plain message. Field-level
-    errors (a value out of range, a wrong type) keep FastAPI's 422 envelope."""
-    rules = [e["msg"].removeprefix("Value error, ") for e in exc.errors() if e.get("type") == "value_error"]
-    if rules:
-        return JSONResponse(status_code=400, content={"detail": rules[0]})
+    """A `LoopStartBody` `model_validator` rule ("nothing to run", "until_quiet cannot exceed chaos_cycles")
+    is a client error the drawer shows verbatim, so `POST /api/loop/start` answers 400 with the plain
+    message. Only that route and only errors located in its body qualify; everywhere else, and for
+    field-level errors (a value out of range, a wrong type), FastAPI's 422 envelope stands."""
+    if request.url.path == LOOP_START_PATH:
+        rules = [
+            e["msg"].removeprefix("Value error, ")
+            for e in exc.errors()
+            if e.get("type") == "value_error" and tuple(e.get("loc") or ())[:1] == ("body",)
+        ]
+        if rules:
+            return JSONResponse(status_code=400, content={"detail": rules[0]})
     return await request_validation_exception_handler(request, exc)
 
 
@@ -313,7 +320,7 @@ def get_run(run_id: str) -> dict:
 # --- Loop control ---------------------------------------------------------------
 
 
-@app.post("/api/loop/start", status_code=201)
+@app.post(LOOP_START_PATH, status_code=201)
 def loop_start(body: LoopStartBody) -> dict:
     """Spawn `chaos.loop run` with the body's settings (`loop_ctl.LoopStartBody` is the contract).
 
@@ -364,7 +371,8 @@ class RollbackBody(BaseModel):
 def rollback_to(body: RollbackBody) -> dict:
     """Copy `run`'s `v{version}` in as the next live config version and merge its regression suite into
     the live one (api.rollback). 200 `{config: AgentConfig, newer_tests}`; 400 for `live` or a malformed
-    run id; 404 unknown run or version; 409 while a loop runs or when the run targeted another agent."""
+    run id; 404 unknown run or version; 409 while a loop runs, when the run targeted another agent, when the
+    live suite is unreadable, or when the version slot was taken concurrently (retry)."""
     try:
         return rollback.rollback(body.run, body.version)
     except ValueError as e:

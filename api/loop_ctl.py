@@ -17,14 +17,16 @@ sidecar is how `GET /api/loop` still reports the last API-started run's settings
 has restarted; `saved_settings()` reads it. The same `$ ...` command line is also appended to
 `runs/loop.log` — a human note so the log reads like a terminal session, never parsed. The loop
 process writes its own start-of-run document, `runs/run.json` (world, target, argv); the two files
-have different authors and are deliberately not merged (see `chaos.state`). Both move to history/
-with the run.
+have different authors and are deliberately not merged (see `chaos.state`). `run.json` moves to
+history/ with the run; the sidecar does not (the child archives the previous run seconds after we
+wrote it, so archiving it would file it under the wrong run) — it stays until the next `start()`
+overwrites it or `reset` removes it.
 
 `settings` is null when the sidecar is missing, when the loop that is running is not ours
 (`external: true`: a terminal-started run has no sidecar of its own, and echoing an older one under
-it would be a lie), or when the run on disk is no longer the one we spawned: a fresh terminal run
-archives the sidecar with the old run, and `saved_settings` also checks the loop's own `run.json`
-flags against the ones we passed, so a run started by hand with different settings never wears ours.
+it would be a lie), or when the run on disk is no longer the one we spawned: `saved_settings` checks
+the loop's own `run.json` flags against the ones we passed, so a run started by hand with different
+settings never wears ours.
 
 `uv run` is the repo's canonical invocation (PLAN.md, docs/FRONTEND.md §3, the golden-run terminal);
 when `uv` is not on the API process's PATH we fall back to `sys.executable -m chaos.loop`, which
@@ -137,8 +139,10 @@ class LoopHandle:
 
 
 _handle: LoopHandle | None = None
-# FastAPI runs sync routes on a threadpool, so two Start clicks can race the is_running() check.
-_start_lock = threading.Lock()
+# Guards every transition of who owns runs/: FastAPI runs sync routes on a threadpool, so two Start
+# clicks can race the is_running() check, and a rollback (api.rollback writes configs/ and
+# regression.json) must not interleave with a start or with another rollback. One lock, shared.
+runs_lock = threading.Lock()
 
 IDLE = {
     "running": False,
@@ -221,7 +225,7 @@ def state() -> dict:
     """`{running, pid, started_at, exit_code, settings, external}`.
 
     While our child runs, `settings` is the body it was started with (memory). Once it has exited the
-    sidecar is the one source of truth, so a later terminal-started run (which archives or outdates
+    sidecar is the one source of truth, so a later terminal-started run (whose `run.json` outdates
     the sidecar) makes `settings` null instead of echoing a run that is no longer the one on disk.
     """
     if _handle is not None and _handle.running():
@@ -318,7 +322,7 @@ def saved_settings() -> dict | None:
 def start(body: LoopStartBody) -> dict:
     """Spawn the loop. Raises RuntimeError("running") if one we started is still alive."""
     global _handle
-    with _start_lock:
+    with runs_lock:
         if is_running():
             raise RuntimeError("running")
 

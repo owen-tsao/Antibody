@@ -122,17 +122,44 @@ def test_loop_cmd_override_reports_the_body_on_both_routes(runs: Path, monkeypat
     assert json.loads((runs / "loop_settings.json").read_text())["cmd"] == ["sleep", "30"]
 
 
-def test_archive_and_reset_take_the_sidecar_along(runs: Path, capsys: pytest.CaptureFixture[str]) -> None:
-    loop_ctl.start(loop_ctl.LoopStartBody())
+def test_sidecar_stays_through_archive_and_goes_with_reset(runs: Path, capsys: pytest.CaptureFixture[str]) -> None:
+    """The API writes the sidecar seconds before the child archives the *previous* run; archiving it
+    would file it under that run and leave `GET /api/loop.settings` null forever after."""
+    body = loop_ctl.LoopStartBody(chaos_cycles=2)
+    loop_ctl.start(body)
+    (runs / "run.json").write_text(json.dumps({"flags": ["--seeds", "1"]}))  # the previous run's
     archived = state.archive_previous_run()
-    assert archived is not None and (archived / "loop_settings.json").exists()
-    assert not (runs / "loop_settings.json").exists()
+    assert archived is not None and (archived / "run.json").exists()
+    assert not (archived / "loop_settings.json").exists()
+    assert (runs / "loop_settings.json").exists()
+    # The child now writes its own run.json; the sidecar describes this run, so the settings hold.
+    (runs / "run.json").write_text(json.dumps({"flags": loop_ctl._flags(body)}))
     loop_ctl._handle.proc.returncode = 0
-    loop_ctl.start(loop_ctl.LoopStartBody())
+    assert loop_ctl.state()["settings"] == body.model_dump()
     state.reset()
-    assert not runs.exists()
-    out = capsys.readouterr().out
-    assert f"reset: removed {runs}" in out
+    assert not runs.exists() and loop_ctl.state()["settings"] is None
+    assert f"reset: removed {runs}" in capsys.readouterr().out
+
+
+def test_terminal_run_after_an_api_run_outdates_the_sidecar(runs: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """A terminal-started run archives the API run but leaves the sidecar; its run.json is what catches that."""
+    body = loop_ctl.LoopStartBody(chaos_cycles=2, seeds=1)
+    loop_ctl.start(body)
+    (runs / "run.json").write_text(json.dumps({"flags": loop_ctl._flags(body)}))
+    loop_ctl._handle.proc.returncode = 0
+    monkeypatch.setattr(loop_ctl, "_handle", None)  # the API restarted
+    assert loop_ctl.state()["settings"] == body.model_dump()
+    # `chaos.loop run --seeds 3` from a shell: archives ours, writes its own run.json.
+    assert state.archive_previous_run() is not None
+    assert (runs / "loop_settings.json").exists()
+    (runs / "run.json").write_text(json.dumps({"flags": ["--chaos-cycles", "3", "--repair-attempts", "3", "--seeds", "3"]}))
+    assert loop_ctl.state()["settings"] is None
+    # The next API start overwrites the sidecar and the settings are honest again.
+    other = loop_ctl.LoopStartBody(seeds=0, chaos_cycles=1)
+    loop_ctl.start(other)
+    (runs / "run.json").write_text(json.dumps({"flags": loop_ctl._flags(other)}))
+    loop_ctl._handle.proc.returncode = 0
+    assert loop_ctl.state()["settings"] == other.model_dump()
 
 
 # --- body rules and the routes' 400s ----------------------------------------------------------------
@@ -153,6 +180,27 @@ def test_body_rules_are_400_before_the_key_check(client: TestClient, body: dict,
 
 def test_out_of_range_fields_stay_422(client: TestClient) -> None:
     assert client.post("/api/loop/start", json={"chaos_cycles": 99}).status_code == 422
+
+
+def test_value_error_400_is_scoped_to_the_loop_start_body() -> None:
+    """The same rule error on another route, or outside the body, keeps FastAPI's 422 envelope."""
+    import asyncio
+
+    from fastapi.exceptions import RequestValidationError
+    from fastapi import Request
+
+    from api.main import _body_rules_are_400s
+
+    def respond(path: str, loc: tuple) -> int:
+        scope = {"type": "http", "method": "POST", "path": path, "headers": [], "query_string": b""}
+        exc = RequestValidationError([{"type": "value_error", "loc": loc, "msg": "Value error, nothing to run", "input": {}}])
+        return asyncio.run(_body_rules_are_400s(Request(scope), exc)).status_code
+
+    assert respond("/api/loop/start", ("body",)) == 400
+    assert respond("/api/loop/start", ("body", "chaos_cycles")) == 400
+    assert respond("/api/loop/start", ("query", "speed")) == 422
+    assert respond("/api/rollback", ("body",)) == 422
+    assert respond("/api/replay/start", ("query", "recording")) == 422
 
 
 def test_resume_with_nothing_saved_is_400(client: TestClient, runs: Path) -> None:
@@ -264,3 +312,74 @@ def test_reset_says_what_it_kept(runs: Path, capsys: pytest.CaptureFixture[str])
     assert (runs / "archive" / "dup").is_dir() and not (runs / "status.json").exists()
     out = capsys.readouterr().out
     assert f"except {'archive'}/" in out and f"reset: removed {runs}\n" not in out
+
+
+def test_reset_refuses_a_folder_that_is_not_a_runs_dir(runs: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """`ANTIBODY_RUNS_DIR=~/Documents` passes the import guard; `reset` is the command that would empty it."""
+    runs.mkdir()
+    (runs / "thesis.docx").write_bytes(b"years of work")
+    (runs / "photos").mkdir()
+    (runs / ".DS_Store").write_bytes(b"")
+    with pytest.raises(SystemExit, match="does not look like an Antibody runs dir"):
+        state.reset()
+    assert (runs / "thesis.docx").exists() and (runs / "photos").is_dir()
+    # Any one of the loop's or the API's files makes it ours again.
+    (runs / "loop.log").write_text("$ uv run ...\n")
+    state.reset()
+    assert not runs.exists()
+
+
+@pytest.mark.parametrize("marker", ["configs", "status.json", "run.json", "loop.log"])
+def test_reset_recognises_each_runs_dir_marker(runs: Path, marker: str) -> None:
+    runs.mkdir()
+    (runs / "stray.txt").write_text("")
+    (runs / marker).mkdir() if marker == "configs" else (runs / marker).write_text("")
+    state.reset()
+    assert not runs.exists()
+
+
+def test_reset_of_an_empty_or_absent_runs_dir_is_fine(runs: Path) -> None:
+    state.reset()
+    runs.mkdir()
+    state.reset()
+    assert not runs.exists()
+
+
+def test_migration_finishes_an_interrupted_move(runs: Path, capsys: pytest.CaptureFixture[str]) -> None:
+    """Crash between `rename(src, staging)` and `replace(staging, dest)`: the run is whole under
+    `.incoming-<name>` and `src` is gone. It must get its name back, never be deleted."""
+    state.HISTORY_DIR.mkdir()
+    orphan = state.HISTORY_DIR / ".incoming-20260102T000000Z"
+    orphan.mkdir()
+    (orphan / "cycles.jsonl").write_text("{}\n")
+    # No archive/ at all: the source dir went with the rename, and reset removed the rest.
+    assert state._migrate_legacy_archive() == 0
+    assert (state.HISTORY_DIR / "20260102T000000Z" / "cycles.jsonl").exists()
+    assert not orphan.exists()
+    assert "recovered" in capsys.readouterr().out
+
+
+def test_migration_does_not_finalize_a_half_copy_whose_source_still_exists(runs: Path) -> None:
+    """A staging dir next to a live src is a partial cross-device copy: redo it from src, do not promote it."""
+    src = runs / "archive" / "r1"
+    src.mkdir(parents=True)
+    (src / "a.json").write_text('{"whole": true}')
+    state.HISTORY_DIR.mkdir()
+    staging = state.HISTORY_DIR / ".incoming-r1"
+    staging.mkdir()
+    (staging / "a.json").write_text("{")
+    assert state._migrate_legacy_archive() == 1
+    assert (state.HISTORY_DIR / "r1" / "a.json").read_text() == '{"whole": true}'
+    assert not staging.exists() and not src.exists()
+
+
+def test_migration_never_promotes_over_an_existing_run(runs: Path) -> None:
+    state.HISTORY_DIR.mkdir()
+    (state.HISTORY_DIR / "r2").mkdir()
+    (state.HISTORY_DIR / "r2" / "cycles.jsonl").write_text("real\n")
+    staging = state.HISTORY_DIR / ".incoming-r2"
+    staging.mkdir()
+    (staging / "cycles.jsonl").write_text("orphan\n")
+    state._migrate_legacy_archive()
+    assert (state.HISTORY_DIR / "r2" / "cycles.jsonl").read_text() == "real\n"
+    assert (staging / "cycles.jsonl").read_text() == "orphan\n"
