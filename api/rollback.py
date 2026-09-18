@@ -26,11 +26,10 @@ silently replaced file.
 
 from __future__ import annotations
 
-import os
-
 from api import loop_ctl, store
 from chaos import state
 from chaos.schemas import AgentConfig, Scenario
+from chaos.target import resolve_target, target_name
 
 
 class RollbackRefused(Exception):
@@ -38,8 +37,19 @@ class RollbackRefused(Exception):
 
 
 def current_target() -> str:
-    """What the loop would record as `target` if it started now (chaos.loop reads the same variable)."""
-    return os.environ.get("ANTIBODY_TARGET") or "builtin"
+    """What the loop would record as `target` if it started now, canonical (chaos.loop reads the same variable)."""
+    return target_name()
+
+
+def same_target(recorded: str, current: str) -> bool:
+    """Whether a run's stored `target` (verbatim, e.g. the README's bare URL) names the same agent as `current`.
+
+    Both sides are normalised through `resolve_target`; a stored string that resolves to nothing matches nothing.
+    """
+    try:
+        return resolve_target(recorded).name == resolve_target(current).name
+    except ValueError:
+        return False
 
 
 def merge_suites(live: list[Scenario], incoming: list[Scenario]) -> tuple[list[Scenario], int]:
@@ -72,7 +82,7 @@ def rollback(run: str, version: int) -> dict:
         manifest = store.run_manifest(source)
         # A folder with no manifest at all is an empty run; a legacy one without run.json reads as builtin.
         target = manifest["target"] if manifest else "builtin"
-        if target != current_target():
+        if not same_target(target, current_target()):
             raise RollbackRefused(
                 f"run {run} was made against target {target!r}; this install targets {current_target()!r}"
             )

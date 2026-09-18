@@ -217,7 +217,8 @@ def _migrate_legacy_archive() -> int:
     """Move `runs/archive/*` (the pre-history/ location) into HISTORY_DIR. Returns how many moved.
 
     Runs before anything that could delete or repopulate runs/, so a `reset` on an old checkout keeps
-    every past run. Folders whose name already exists in history/ are left in place rather than merged.
+    every past run, and once at API startup so the history shows before the next run. Folders whose
+    name already exists in history/ are left in place rather than merged.
     The emptied archive/ is removed only when nothing but file-manager droppings (`_STRAY_FILES`)
     remain; anything else is reported and left for a person. Symlinks are never followed or removed.
     Any move that was interrupted last time is finished first (`_finalize_staged`).
@@ -247,6 +248,10 @@ def _migrate_legacy_archive() -> int:
     if moved:
         print(f"history: moved {moved} archived run(s) from {_LEGACY_ARCHIVE_DIR} to {HISTORY_DIR}")
     return moved
+
+
+# Public name for the API's startup hook; the loop-side callers above keep the private one.
+migrate_legacy_archive = _migrate_legacy_archive
 
 
 # What a directory the loop or the API has written to always holds at least one of. A non-empty

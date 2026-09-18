@@ -78,6 +78,7 @@ from typing import Literal
 
 from pydantic import BaseModel, Field, ValidationError, model_validator
 
+from api import agents
 from chaos.state import LOOP_SETTINGS_PATH, ROOT, RUN_MANIFEST_PATH, RUNS_DIR
 
 LOG_PATH = RUNS_DIR / "loop.log"
@@ -88,9 +89,10 @@ World = Literal["auto", "mock"]
 class LoopStartBody(BaseModel):
     """Run settings: the body of POST /api/loop/start and, as defaults, part of GET /api/manifest.
 
-    Every field is one `chaos.loop run` flag (see `_flags`); no flag, no field. `target` is deliberately
-    absent: which agent the loop attacks is an environment decision (plan 01) the UI shows read-only.
-    Unknown keys are ignored rather than rejected, so a UI still sending the retired `mode` works.
+    Every field is one `chaos.loop run` flag (see `_flags`), except `target`, which is an agent id from
+    `GET /api/agents` and becomes the child's `ANTIBODY_TARGET` (plan 00, Block 1). `None` means the
+    API process's own default target. Unknown keys are ignored rather than rejected, so a UI still
+    sending the retired `mode` works.
     """
 
     chaos_cycles: int = Field(3, ge=0, le=10)
@@ -102,6 +104,7 @@ class LoopStartBody(BaseModel):
     # Stop once N consecutive chaos-generated attacks were blocked; `chaos_cycles` becomes the cap.
     until_quiet: int | None = Field(None, ge=1, le=10)
     world: World = "auto"
+    target: str | None = Field(None, min_length=1, max_length=64)
 
     @model_validator(mode="after")
     def _rules(self) -> LoopStartBody:
@@ -258,9 +261,17 @@ def _flags(body: LoopStartBody) -> list[str]:
     return flags
 
 
-def _env_overrides(body: LoopStartBody) -> dict[str, str]:
-    """Variables the child gets on top of the API's own environment. `auto` inherits whatever is set."""
-    return {"ANTIBODY_NO_ZENDESK": "1"} if body.world == "mock" else {}
+def _env_overrides(body: LoopStartBody, target: str) -> dict[str, str]:
+    """Variables the child gets on top of the API's own environment. `auto` inherits whatever is set.
+
+    `ANTIBODY_TARGET` is always set, even to `builtin`: `chaos.config.load_env` fills the child's env from
+    `.env` with `setdefault`, so an `.env` naming an external agent would otherwise win over the agent the
+    user picked in the request.
+    """
+    overrides = {"ANTIBODY_TARGET": target}
+    if body.world == "mock":
+        overrides["ANTIBODY_NO_ZENDESK"] = "1"
+    return overrides
 
 
 def _command(body: LoopStartBody) -> list[str]:
@@ -278,9 +289,12 @@ def _shell_line(cmd: list[str], overrides: dict[str, str]) -> str:
     return "$ " + " ".join([*(f"{k}={v}" for k, v in overrides.items()), shlex.join(cmd)])
 
 
-def _write_settings(body: LoopStartBody, pid: int, started_at: str, cmd: list[str]) -> None:
-    """The sidecar, written whole via rename so a poll never reads a torn file."""
-    doc = {"body": body.model_dump(), "pid": pid, "started_at": started_at, "cmd": cmd}
+def _write_settings(body: LoopStartBody, pid: int, started_at: str, cmd: list[str], target: str) -> None:
+    """The sidecar, written whole via rename so a poll never reads a torn file.
+
+    `target` is the canonical string the child was given (`body.target` is only the agent id it came from).
+    """
+    doc = {"body": body.model_dump(), "pid": pid, "started_at": started_at, "cmd": cmd, "target": target}
     tmp = LOOP_SETTINGS_PATH.with_suffix(".json.tmp")
     tmp.write_text(json.dumps(doc, indent=2))
     os.replace(tmp, LOOP_SETTINGS_PATH)
@@ -320,15 +334,16 @@ def saved_settings() -> dict | None:
 
 
 def start(body: LoopStartBody) -> dict:
-    """Spawn the loop. Raises RuntimeError("running") if one we started is still alive."""
+    """Spawn the loop. Raises RuntimeError("running") if one we started is still alive, ValueError for an unknown `target`."""
     global _handle
+    target = agents.resolve_agent(body.target)
     with runs_lock:
         if is_running():
             raise RuntimeError("running")
 
         RUNS_DIR.mkdir(parents=True, exist_ok=True)
         cmd = _command(body)
-        overrides = _env_overrides(body)
+        overrides = _env_overrides(body, target)
         env = {**os.environ, "PYTHONUNBUFFERED": "1", **overrides}
         started_at = datetime.now(timezone.utc).isoformat()
         with LOG_PATH.open("ab") as log:
@@ -344,9 +359,9 @@ def start(body: LoopStartBody) -> dict:
                 start_new_session=True,
             )
         # After Popen: a spawn that raised must not leave a sidecar describing a run that never began.
-        _write_settings(body, proc.pid, started_at, cmd)
+        _write_settings(body, proc.pid, started_at, cmd, target)
         _handle = LoopHandle(proc=proc, started_at=started_at, settings=body.model_dump())
-    return {"pid": proc.pid, "started_at": started_at, "settings": body.model_dump()}
+    return {"pid": proc.pid, "started_at": started_at, "settings": body.model_dump(), "target": target}
 
 
 def _killpg(pid: int, sig: int) -> None:

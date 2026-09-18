@@ -45,9 +45,10 @@ from fastapi.responses import JSONResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
-from api import attack, loop_ctl, manifest, replay, rollback, store
+from api import agents, attack, example_agent, loop_ctl, manifest, replay, rollback, store
 from api.loop_ctl import LoopStartBody
 from api.store import Source
+from chaos import state
 from chaos.state import ROOT, latest_version
 
 WEB_DIST = ROOT / "web" / "dist"
@@ -64,6 +65,12 @@ async def _lifespan(_: FastAPI):
     # api.attack logs under its own name, which uvicorn does not route to the terminal; say it here.
     if attack.missing_api_key():
         _log.info("no WANDB_API_KEY: Replay only (live runs and seed attacks answer 503)")
+    # A checkout with runs under the old runs/archive/ shows its history before the next run, not after.
+    # A no-op (one `is_dir`) when there is nothing to migrate.
+    try:
+        state.migrate_legacy_archive()
+    except OSError as e:  # noqa: BLE001 - a half-moved archive must not stop the API from serving
+        _log.warning("could not migrate runs/archive into history/: %s", e)
     attack.warm_weave()
     yield
 
@@ -287,6 +294,11 @@ def _live_row() -> dict | None:
     return {**row, "label": None, "current": True}
 
 
+def _with_agent(row: dict) -> dict:
+    """The row plus `agent: {id, name} | null`, joined on the run's verbatim `target` (api.agents normalises both sides)."""
+    return {**row, "agent": agents.agent_for_target(row.get("target"))}
+
+
 @app.get("/api/runs")
 def get_runs() -> list[dict]:
     """Every run there is to open, newest first: the live run (`current: true`, only once it has a cycle),
@@ -296,12 +308,12 @@ def get_runs() -> list[dict]:
     if golden is not None and golden["cycles"] > 0:
         rows = store.newest_first([*rows, golden])
     live = _live_row()
-    return ([live] if live and live["cycles"] > 0 else []) + rows
+    return [_with_agent(r) for r in ([live] if live and live["cycles"] > 0 else []) + rows]
 
 
 @app.get("/api/runs/{run_id}")
 def get_run(run_id: str) -> dict:
-    """Manifest plus `configs` (version, parent_version, patch_note). `run_id` is `live`, `golden` or a history folder."""
+    """Manifest plus `agent` and `configs` (version, parent_version, patch_note). `run_id` is `live`, `golden` or a history folder."""
     if run_id == "live":
         row = _live_row()
         src: Source = "live"
@@ -314,7 +326,81 @@ def get_run(run_id: str) -> dict:
         row = {**m, "label": None, "current": False} if m else None
     if row is None:
         raise HTTPException(404, f"run {run_id!r} has no files")
-    return {**row, "configs": _config_rows(src)}
+    return {**_with_agent(row), "configs": _config_rows(src)}
+
+
+# --- Agents (plan 00, Block 1) ------------------------------------------------------------------------
+
+
+class AgentBody(BaseModel):
+    name: str
+    url: str
+
+
+@app.get("/api/agents")
+def get_agents() -> list[dict]:
+    """`builtin`, `example` (with `running`/`starting`/`pid`), then every connected agent."""
+    return agents.list_agents()
+
+
+@app.post("/api/agents", status_code=201)
+def agent_create(body: AgentBody) -> dict:
+    """Connect an agent by name and `http(s)://` URL. 400 for a bad name or URL, 409 when that URL is already connected."""
+    try:
+        return agents.add_agent(body.name, body.url)
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+    except agents.Duplicate as e:
+        raise HTTPException(409, str(e))
+
+
+@app.delete("/api/agents/{agent_id}", status_code=204)
+def agent_delete(agent_id: str) -> None:
+    """404 for `builtin`, `example` or an unknown id. 409 while any loop runs: the live run names its target only
+    seconds after spawn, so the conservative rule is that nothing is deleted while a run is in flight."""
+    if loop_ctl.is_running():
+        raise HTTPException(409, "a loop is running; agents cannot be deleted until it finishes")
+    try:
+        agents.delete_agent(agent_id)
+    except LookupError as e:
+        raise HTTPException(404, str(e))
+
+
+@app.post("/api/agents/{agent_id}/ping")
+def agent_ping(agent_id: str) -> dict:
+    """`{ok, latency_ms, reply_preview | error, tools, mapping}`. Always 200 once the agent exists: an unreachable
+    agent is a result (`ok: false`), not an HTTP error. Records no episode."""
+    agent = agents.get_agent(agent_id)
+    if agent is None:
+        raise HTTPException(404, f"no agent {agent_id!r}")
+    return agents.ping(agent)
+
+
+@app.post("/api/agents/example/start", status_code=202)
+def example_agent_start() -> dict:
+    """Spawn the example agent on 8790. 202 because the first start syncs its venv and can take a minute; the `example`
+    row's `running` flips when the port answers. 503 without a key (the agent calls inference); 409 if 8790 is taken."""
+    if attack.missing_api_key():
+        raise HTTPException(503, NO_KEY_MESSAGE)
+    try:
+        return example_agent.start()
+    except example_agent.PortBusy as e:
+        raise HTTPException(409, {"message": str(e), **example_agent.state()})
+
+
+@app.post("/api/agents/example/stop")
+def example_agent_stop() -> dict:
+    """Stop the example agent this API spawned. 404 when nothing is running; an agent on 8790 that someone else started
+    is reported (`owned: false`) and left alone."""
+    try:
+        return example_agent.stop()
+    except LookupError as e:
+        raise HTTPException(404, str(e))
+
+
+@app.get("/api/agents/example/log")
+def example_agent_log(tail: int = Query(200, ge=1, le=5000)) -> dict:
+    return {"lines": example_agent.log_tail(tail)}
 
 
 # --- Loop control ---------------------------------------------------------------
@@ -326,11 +412,13 @@ def loop_start(body: LoopStartBody) -> dict:
 
     Client errors come first, whether or not a key is set, so the drawer reads the same on a keyless
     install: the body's own rules ("nothing to run", `until_quiet` over the cap) are 400s before this
-    runs (`_body_rules_are_400s`); a `resume` with no saved config is 400 here rather than a child
-    that exits 1 a second later.
+    runs (`_body_rules_are_400s`); a `resume` with no saved config, or a `target` naming no agent, is 400
+    here rather than a child that exits 1 a second later.
     """
     if body.resume and latest_version() is None:
         raise HTTPException(400, "nothing to resume: no saved config to continue from")
+    if body.target is not None and agents.get_agent(body.target) is None:
+        raise HTTPException(400, f"unknown agent {body.target!r}")
     if attack.missing_api_key():
         raise HTTPException(503, NO_KEY_MESSAGE)
     # Heal always means "start a real run": a replay that was playing is the fallback, not a reason
@@ -339,6 +427,9 @@ def loop_start(body: LoopStartBody) -> dict:
         _log.info("replay stopped: a live loop is being started")
     try:
         return loop_ctl.start(body)
+    except ValueError as e:
+        # `target` names an agent that does not exist (deleted between the picker's load and Start).
+        raise HTTPException(400, str(e))
     except RuntimeError:
         raise HTTPException(409, {"message": "loop already running", **loop_ctl.state()})
 
