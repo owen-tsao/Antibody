@@ -1,7 +1,7 @@
 import { AnimatePresence, motion, useReducedMotion } from "framer-motion";
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 
-import { api, type Manifest, type Status } from "@/api";
+import { api, type LoopState, type Manifest, type Status } from "@/api";
 import ApiDown from "@/components/ApiDown";
 import CyclesBox from "@/components/CyclesBox";
 import ErrorBoundary from "@/components/ErrorBoundary";
@@ -66,17 +66,24 @@ function targetLine(t: Manifest["target"] | undefined): string | null {
 
 export default function Agents({
   replayNote = null,
-  onLeave,
+  loop,
+  status: polled,
+  statusError,
+  refresh,
 }: {
   /** Why Replay did not start (a live run owns the screen instead); shown quietly beside the headline. */
   replayNote?: string | null;
-  /** Called after this page stopped or paused a replay, so the shell's pill and the runs page catch up at once. */
-  onLeave?: () => void;
+  /** From the shell's polls (docs/FRONTEND.md "Routes"): /api/loop is the process truth — whether a run we
+   *  own is alive (→ "stop run") or how it ended (→ "the loop stopped (exit N)"). */
+  loop: LoopState | null;
+  /** The raw /api/status row, 1 s while something plays. status.json is the only thing that drives the orbs. */
+  status: Status | null;
+  statusError: string | null;
+  /** Re-poll the shell's routes now, after an action whose effect the next tick would show late. */
+  refresh: () => void;
 }) {
-  // status.json is the only thing that drives the orbs; 1 s is the spec's cadence. The dwell only
-  // delays *when* a phase that really arrived is shown (min 1.2 s each), so `chaos` is not skipped.
-  // A replay transport action (seek/speed/pause) bumps `epoch` so the jump shows at once.
-  const { data: polled, error: statusError, refresh: refreshStatus } = usePoll(api.status, 1_000);
+  // The dwell only delays *when* a phase that really arrived is shown (min 1.2 s each), so `chaos` is
+  // not skipped. A replay transport action (seek/speed/pause) bumps `epoch` so the jump shows at once.
   const [epoch, setEpoch] = useState(0);
   const status = useDwell(polled, phaseKey, undefined, undefined, epoch);
   const running = isRunning(status);
@@ -92,14 +99,10 @@ export default function Agents({
   } = usePoll(api.cycles, running || replay ? 2_000 : 10_000);
   const onReplayChanged = useCallback(() => {
     setEpoch((n) => n + 1);
-    refreshStatus();
+    refresh();
     refreshCycles();
-  }, [refreshStatus, refreshCycles]);
+  }, [refresh, refreshCycles]);
 
-  // /api/loop is the process truth: whether a run we own is alive (→ "stop run"), or how it ended
-  // (→ "the loop stopped (exit N)"). The 2 s cadence while running keeps "stop run" from lingering
-  // after the process is gone; idle it only needs to notice a Heal press made elsewhere.
-  const { data: loop, refresh: refreshLoop } = usePoll(api.loop, running ? 2_000 : 5_000);
   const [stopping, setStopping] = useState(false);
   const stopRun = () => {
     if (stopping) return;
@@ -109,8 +112,7 @@ export default function Agents({
       .catch(() => undefined)
       .finally(() => {
         setStopping(false);
-        refreshLoop();
-        refreshStatus();
+        refresh();
       });
   };
   // Both are static facts about this API; fetched once, quietly ignored if the route is not there
@@ -166,29 +168,14 @@ export default function Agents({
   const transport = tape?.replay === true && tape.duration_s != null;
 
   const stopReplay = () => {
-    api.replayStop().catch(() => undefined).finally(() => onLeave?.());
+    api.replayStop().catch(() => undefined).finally(refresh);
   };
-  // Leaving this page (any shell link, browser Back) leaves a replay frozen where it is, so nothing
-  // keeps playing off-screen and the runs page can honestly offer "Resume replay". The ref carries
-  // the latest flag into the unmount cleanup; fire-and-forget, the API catches up within a poll.
-  const replayingRef = useRef(false);
-  const replaying = status?.replay === true;
-  useEffect(() => {
-    replayingRef.current = replaying;
-  }, [replaying]);
-  useEffect(
-    () => () => {
-      if (replayingRef.current) api.replayPause().catch(() => undefined);
-    },
-    [],
-  );
 
   const loading = !status && !statusError && !cycles && !cyclesError;
   const unreachable = statusError && !status && !cycles;
   const retry = () => {
-    refreshStatus();
+    refresh();
     refreshCycles();
-    refreshLoop();
   };
 
   // "stop run" only for a process this API spawned: an external loop (found via pgrep) is someone
@@ -202,7 +189,7 @@ export default function Agents({
   const noKey = hasKey === false && !replay && !loop?.running;
 
   return (
-    <main className="min-h-full px-6 pb-16 pt-14 md:px-10 md:pt-16">
+    <main className="min-h-full px-6 pb-16 pt-8 md:px-10 md:pt-7">
       <div className="mx-auto w-full max-w-[1040px]">
         {/* Header: the page's job, then one quiet line of where the run stands. The only large text. */}
         <header>

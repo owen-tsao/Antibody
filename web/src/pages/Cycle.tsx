@@ -34,7 +34,7 @@ export default function Cycle({
   const next = cycles && idx >= 0 && idx < cycles.length - 1 ? cycles[idx + 1] : undefined;
 
   return (
-    <main className="min-h-full px-6 pb-20 pt-14 md:px-10 md:pt-16">
+    <main className="min-h-full px-6 pb-20 pt-8 md:px-10 md:pt-7">
       {/* The shell's "Runs" goes to the list; the way back to this run is the page's own, in text. */}
       <nav className="mx-auto w-full max-w-6xl pb-6 text-[13px]">
         <button type="button" onClick={onBack} className="group rounded text-[var(--muted)] transition-colors hover:text-[var(--fg)]">
@@ -140,8 +140,8 @@ function Header({ r }: { r: CycleRecord }) {
 }
 
 // Distance from the viewport top at which the chart pins when the left column is taller than
-// the screen (matches the page's top padding), and the margin kept under it.
-const STICKY_TOP_PX = 96;
+// the screen (the page's top padding inside the shell), and the margin kept under it.
+const STICKY_TOP_PX = 28;
 const STICKY_BOTTOM_PX = 24;
 const CHART_MIN_H = 288;
 // How long the reveal runs; after this the animation class comes off so resizes do not replay it.

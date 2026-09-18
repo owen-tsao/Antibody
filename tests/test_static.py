@@ -29,6 +29,11 @@ def test_api_routes_still_win_over_the_fallback(client: TestClient) -> None:
     r = client.get("/api/health")
     assert r.status_code == 200
     assert r.headers["content-type"].startswith("application/json")
+    # An unknown /api path is FastAPI's JSON 404, never the dashboard's HTML.
+    missing = client.get("/api/unknown")
+    assert missing.status_code == 404
+    assert missing.headers["content-type"].startswith("application/json")
+    assert missing.json() == {"detail": "Not Found"}
 
 
 def test_assets_are_served_as_files(client: TestClient) -> None:

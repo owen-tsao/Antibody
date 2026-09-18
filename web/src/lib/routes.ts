@@ -90,7 +90,11 @@ const notify = () => listeners.forEach((fn) => fn());
 
 export function navigate(route: Route): void {
   const to = href(route);
-  if (to !== window.location.pathname) window.history.pushState(null, "", to);
+  if (to !== window.location.pathname) {
+    window.history.pushState(null, "", to);
+    // A new screen starts at its top; Back/Forward keep the browser's own scroll restoration.
+    window.scrollTo(0, 0);
+  }
   notify();
 }
 

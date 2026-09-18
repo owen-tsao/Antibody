@@ -63,16 +63,18 @@ function AppPages({ route }: { route: Route }) {
   // Whether live runs are possible decides the empty states' copy; static for the API's lifetime.
   const { data: health } = usePoll(api.health, 60_000);
 
-  // The runs page knows two replay states: none, or paused. Leaving the run page pauses, but a deep
-  // link (or a lost pause request) can arrive with one still playing; freeze it here so nothing
-  // advances off-screen and the link can honestly say "Resume".
+  // Nothing plays off-screen: whenever the screen is not the live run — a shell link, browser Back, or
+  // a deep link arriving with a tape still playing — a playing replay is frozen where it is, so the
+  // runs page can honestly offer "Resume replay". Decided on the API's fresh answer, never a stale
+  // flag, so a tape that was just stopped is left alone.
+  const onLiveRun = route.kind === "run" && route.id === "live";
   useEffect(() => {
-    if (route.kind !== "runs") return;
+    if (onLiveRun) return;
     api
       .replay()
       .then((info) => (info.active && !info.paused ? api.replayPause() : undefined))
       .catch(() => undefined);
-  }, [route.kind]);
+  }, [onLiveRun]);
 
   const start = async (mode: StartMode, loop: LoopState | null, replay: ReplayInfo | null, refresh: () => void) => {
     setReplayNote(null);
@@ -128,13 +130,13 @@ function AppPages({ route }: { route: Route }) {
 
   return (
     <Shell route={route}>
-      {({ loop, replay, refresh }) => {
+      {({ loop, replay, status, statusError, refresh }) => {
         switch (route.kind) {
           case "agents":
           case "agent-new": {
             const empty = emptyStateFor(route.kind, health);
             return (
-              <main className="px-6 pb-16 pt-14 md:px-10 md:pt-16">
+              <main className="px-6 pb-16 pt-8 md:px-10 md:pt-7">
                 <div className="mx-auto w-full max-w-[1040px]">
                   <h1 className="display text-[48px] leading-[1]">{empty.title}</h1>
                   <p className="mt-4 max-w-[56ch] text-[13px] leading-[1.6] text-[var(--muted)]">{empty.body}</p>
@@ -166,7 +168,7 @@ function AppPages({ route }: { route: Route }) {
             if (route.id !== "live") return <HistoryRunPlaceholder id={route.id} />;
             // While something is playing the run is the four agents at work; once it is over, the proof.
             return loop?.running || replay?.active ? (
-              <Agents replayNote={replayNote} onLeave={refresh} />
+              <Agents replayNote={replayNote} loop={loop} status={status} statusError={statusError} refresh={refresh} />
             ) : (
               <Results onCycle={(n) => navigate({ kind: "cycle", id: "live", n })} />
             );
@@ -194,7 +196,7 @@ function AppPages({ route }: { route: Route }) {
  */
 function HistoryRunPlaceholder({ id }: { id: string }) {
   return (
-    <main className="px-6 pb-16 pt-14 md:px-10 md:pt-16">
+    <main className="px-6 pb-16 pt-8 md:px-10 md:pt-7">
       <div className="mx-auto w-full max-w-[1040px]">
         <h1 className="display text-[48px] leading-[1]">{id === "golden" ? "Demo tape" : `Run ${id}`}</h1>
         <p className="mt-4 max-w-[56ch] text-[13px] leading-[1.6] text-[var(--muted)]">

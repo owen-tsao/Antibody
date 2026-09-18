@@ -11,6 +11,4 @@ npm run build      # type-check + production bundle in dist/
 npm run lint
 ```
 
-`?demo=hero|orb|list|plan` renders one of the pasted UI components in isolation; it is a verification harness, not part of the product.
-
 How the pages map to the loop, and the API contract they rely on, is in `../docs/FRONTEND.md`.

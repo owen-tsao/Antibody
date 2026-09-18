@@ -1164,6 +1164,9 @@ export function shellPill(loop: LoopState | null, replay: ReplayInfo | null, sta
     const cycle = status && status.phase !== "idle" && !status.replay ? status.cycle : undefined;
     return { label: cycle ? `running · cycle ${cycle}` : "running", live: true };
   }
-  if (replay?.active) return { label: replay.paused ? "replay paused" : "replaying", live: false };
+  if (replay?.active) {
+    // An ended tape also reports `paused: true`; say which it is.
+    return { label: replay.ended ? "replay ended" : replay.paused ? "replay paused" : "replaying", live: false };
+  }
   return null;
 }

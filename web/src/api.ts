@@ -134,11 +134,6 @@ export type Source = "live" | "golden" | "replay";
 /** `?source=` on the read routes: the live files, the committed golden run, or one archived run (`run:<id>`). */
 export type ReadSource = "live" | "golden" | `run:${string}`;
 
-/** The `source` for a runs-list id (docs/plans/handoffs/ui-3-run-history.md): `live` and `golden` are literal, anything else is an archive. */
-export function sourceOf(runId: string): ReadSource {
-  return runId === "live" || runId === "golden" ? runId : `run:${runId}`;
-}
-
 export type World = "auto" | "mock";
 
 /** Body of POST /api/loop/start (api/loop_ctl.py `LoopStartBody`); every field is one `chaos.loop run` flag. */
@@ -268,15 +263,6 @@ export interface Status {
   paused?: boolean;
 }
 
-/** What POST /api/replay/start returns. */
-export interface ReplayStarted {
-  recorded_at: string;
-  duration_s: number;
-  cycles: number;
-  speed: number;
-  started_at: string;
-}
-
 /** The tape a replay plays or would play (GET /api/replay `recording`). */
 export interface RecordingInfo {
   source: "golden" | `run:${string}`;
@@ -392,9 +378,9 @@ export const api = {
   loopStop: () => post<LoopState>("/api/loop/stop"),
   /** Where "open log" points: the last `tail` lines of runs/loop.log, as JSON. */
   loopLogUrl: (tail = 200) => `/api/loop/log?tail=${tail}`,
-  /** Play a recording (golden by default, or `run:<id>`) into /api/status and /api/cycles (409 if a loop or another replay is running). */
+  /** Play a recording (golden by default, or `run:<id>`) into /api/status and /api/cycles; 201 with GET /api/replay's document (409 if a loop or another replay is running). */
   replayStart: (speed = 1, recording?: RecordingInfo["source"]) =>
-    post<ReplayStarted>(`/api/replay/start?speed=${speed}${recording ? `&recording=${recording}` : ""}`),
+    post<ReplayInfo>(`/api/replay/start?speed=${speed}${recording ? `&recording=${recording}` : ""}`),
   replayStop: () => post<{ stopped: boolean }>("/api/replay/stop"),
   /** Back on Agents freezes the replay where it is; Heal's "Resume replay" continues it. 404 if none is active. */
   replayPause: () => post<ReplayInfo>("/api/replay/pause"),

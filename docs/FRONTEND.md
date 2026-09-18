@@ -22,20 +22,22 @@ line linking to the current run). Routing is `lib/routes.ts` — `parse(pathname
 | `/app/agents` | titled empty state from `emptyStateFor("agents")` in `App.tsx` *(temporary)* | `/api/health` (60 s) |
 | `/app/agents/new` | titled empty state from `emptyStateFor("agent-new")` *(temporary)* | `/api/health` (60 s) |
 | `/app/runs` | `pages/Heal` — start a run, settings drawer, resume/stop replay *(temporary)* | via the shell |
-| `/app/runs/live` | `pages/Agents` while `loop.running` or a replay is active, else `pages/Results` *(temporary)* | Agents: `/api/status` 1 s, `/api/cycles` 2–10 s, `/api/state`, `/api/loop`; Results: `/api/state` 10 s, `/api/cycles` 2–10 s |
+| `/app/runs/live` | `pages/Agents` while `loop.running` or a replay is active, else `pages/Results` — *temporary* | Agents: `loop` + `status` from the shell, `/api/cycles` 2–10 s, `/api/state` 2–10 s; Results: `/api/state` 10 s, `/api/cycles` 2–10 s |
 | `/app/runs/live/cycles/:n` | `pages/Cycle` | `/api/cycles` 10 s, `/api/configs/{v}` ×2 for the diff |
 | `/app/runs/:id`, `/app/runs/:id/cycles/:n` (any other id) | placeholder in `App.tsx` naming the run; Block 4 builds the page | nothing |
 | unknown under `/app` | → `/app/runs` | — |
 | unknown elsewhere | → `/` | — |
 
-The shell itself polls `/api/loop`, `/api/replay` and `/api/status` every 2 s for its status line
-("running · cycle N" / "replaying" / "replay paused" / hidden) and hands `loop` and `replay` to the page
-underneath, so pages do not poll those two again. `ApiDown` renders in the shell's status slot when both
+The shell itself polls `/api/loop` and `/api/replay` every 2 s and `/api/status` every 1 s while something
+is running or replaying (2 s otherwise), for its status line ("running · cycle N" / "replaying" / "replay
+paused" / "replay ended" / hidden) and hands `loop`, `replay`, `status` and a `refresh()` to the page
+underneath — no page polls those three routes itself. `ApiDown` renders in the shell's status slot when both
 `/api/loop` and `/api/replay` have never answered. Content fades 120 ms on route change (off under reduced
 motion); nothing slides. Page titles keep the serif `display` class at 48 px; everything else is Inter.
 
-Leaving `/app/runs/live` while a replay plays pauses it (the run page's unmount does what the old Back
-disc did), and opening `/app/runs` pauses a replay found still playing — nothing advances off-screen.
+Nothing plays off-screen: whenever the route is anything but `/app/runs/live` (a shell link, browser Back,
+or a deep link arriving with a tape still playing), `App` asks `/api/replay` and pauses a replay that is
+`active && !paused`. One mechanism, decided on the fresh answer, so a tape that was just stopped is left alone.
 
 ---
 

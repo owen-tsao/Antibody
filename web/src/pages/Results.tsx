@@ -141,7 +141,7 @@ export default function Results({ onCycle }: { onCycle: (cycle: number) => void 
 
   return (
     <main className="min-h-full pb-16">
-      <header className="mx-auto w-full max-w-6xl px-6 pb-1 pt-14 md:px-10 md:pt-16">
+      <header className="mx-auto w-full max-w-6xl px-6 pb-1 pt-8 md:px-10 md:pt-7">
         <h1 className="display text-[48px] leading-[1]">Results</h1>
         <p className="tabular mt-4 text-[13px] text-[var(--muted)]">
           {story ? (

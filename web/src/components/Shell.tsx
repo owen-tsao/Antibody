@@ -1,7 +1,7 @@
 import { AnimatePresence, motion, useReducedMotion } from "framer-motion";
-import type { ReactNode } from "react";
+import { type ReactNode, useCallback } from "react";
 
-import { api, type LoopState, type ReplayInfo } from "@/api";
+import { api, type LoopState, type ReplayInfo, type Status } from "@/api";
 import ApiDown from "@/components/ApiDown";
 import { usePoll } from "@/hooks/usePoll";
 import { shellPill } from "@/lib/derive";
@@ -18,12 +18,17 @@ import { cn } from "@/lib/utils";
  */
 
 // Cheap file reads on a local API; the pill must notice a run starting within a beat of the click.
+// Status drives the run page's orbs, whose spec cadence is 1 s while something is playing.
 const POLL_MS = 2_000;
+const LIVE_STATUS_MS = 1_000;
 const FADE_S = 0.12;
 
 export interface ShellData {
   loop: LoopState | null;
   replay: ReplayInfo | null;
+  /** The raw /api/status row (undwelled); the run page smooths it itself. */
+  status: Status | null;
+  statusError: string | null;
   /** Poll all three routes now (after an action whose effect the next tick would show late). */
   refresh: () => void;
 }
@@ -37,12 +42,13 @@ export default function Shell({ route, children }: { route: Route; children: (da
   const reduced = useReducedMotion();
   const { data: loop, error: loopError, refresh: refreshLoop } = usePoll(api.loop, POLL_MS);
   const { data: replay, error: replayError, refresh: refreshReplay } = usePoll(api.replay, POLL_MS);
-  const { data: status, refresh: refreshStatus } = usePoll(api.status, POLL_MS);
-  const refresh = () => {
+  const live = !!loop?.running || !!replay?.active;
+  const { data: status, error: statusError, refresh: refreshStatus } = usePoll(api.status, live ? LIVE_STATUS_MS : POLL_MS);
+  const refresh = useCallback(() => {
     refreshLoop();
     refreshReplay();
     refreshStatus();
-  };
+  }, [refreshLoop, refreshReplay, refreshStatus]);
 
   const pill = shellPill(loop, replay, status);
   // Down means neither poll has ever answered; a hiccup after first contact keeps the last value.
@@ -117,7 +123,7 @@ export default function Shell({ route, children }: { route: Route; children: (da
           exit={{ opacity: 0 }}
           transition={{ duration: reduced ? 0 : FADE_S, ease: "linear" }}
         >
-          {children({ loop, replay, refresh })}
+          {children({ loop, replay, status, statusError, refresh })}
         </motion.div>
       </AnimatePresence>
     </div>
