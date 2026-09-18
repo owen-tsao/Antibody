@@ -13,8 +13,9 @@ HTTP contract (all bodies JSON):
     POST /tools/{name}          header X-Antibody-Session: <id>, body = the tool's arguments as an object
          200  the tool result as the built-in agent would see it. Blocked calls and unknown tools are
               *also* 200 with {"error": "..."}: to the agent they are tool output, not transport failures.
-              A body that is not a JSON object is treated as `{}` — the same as the built-in harness does
-              with arguments the model failed to serialise — and the call is still recorded.
+              A body that is not a JSON object — not JSON, not UTF-8, or over MAX_BODY_BYTES — is treated
+              as `{}`, the same as the built-in harness does with arguments the model failed to serialise,
+              and the call is still recorded.
          404  {"detail": "unknown session"}
 
 The server runs in a daemon thread inside the loop process, started by `HttpTarget` on first use, one per
@@ -48,6 +49,8 @@ from chaos.tools import serialize_result, tool_specs_for
 PORT_ENV = "ANTIBODY_TOOLS_PORT"
 DEFAULT_PORT = 8765
 SESSION_HEADER = "X-Antibody-Session"
+# Tool arguments are a handful of short strings and numbers; anything this large is not arguments.
+MAX_BODY_BYTES = 64 * 1024
 
 _sessions: dict[str, ToolSession] = {}
 _sessions_lock = threading.Lock()
@@ -74,7 +77,7 @@ def _session_or_404(session_id: str | None) -> ToolSession:
     return session
 
 
-app = FastAPI(title="Antibody tool server", docs_url=None, redoc_url=None)
+app = FastAPI(title="Antibody tool server", docs_url=None, redoc_url=None, openapi_url=None)
 
 
 @app.get("/tools")
@@ -89,14 +92,21 @@ async def run_tool(
     x_antibody_session: str | None = Header(default=None, alias=SESSION_HEADER),
 ) -> Response:
     session = _session_or_404(x_antibody_session)
-    raw = await request.body()
-    try:
-        args = json.loads(raw) if raw else {}
-    except json.JSONDecodeError:
-        args = {}
+    args = _parse_args(await request.body())
     # Tools may block (Zendesk, a faulted timeout); off the event loop so concurrent sessions do not queue.
     call = await run_in_threadpool(call_tool, session, name, args)
     return Response(content=serialize_result(call.result), media_type="application/json")
+
+
+def _parse_args(raw: bytes) -> dict[str, Any]:
+    """The request body as tool arguments; anything that is not a JSON object becomes `{}` (still recorded)."""
+    if not raw or len(raw) > MAX_BODY_BYTES:
+        return {}
+    try:
+        args = json.loads(raw)
+    except ValueError:  # covers JSONDecodeError and the UnicodeDecodeError a non-UTF-8 body raises
+        return {}
+    return args if isinstance(args, dict) else {}
 
 
 # --- lifecycle: one server per process ----------------------------------------------------------------

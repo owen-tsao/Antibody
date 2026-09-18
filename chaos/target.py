@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import json
 import os
+import urllib.error
 import urllib.request
 from typing import Protocol, get_args
 
@@ -97,11 +98,28 @@ class HttpTarget:
             toolserver.drop(session_id)
 
 
+class _NoRedirect(urllib.request.HTTPRedirectHandler):
+    """A 30x from the agent is a failed episode, not a request to be replayed at another address."""
+
+    def redirect_request(self, req, fp, code, msg, headers, newurl):  # urllib's signature
+        return None  # declining here makes urllib raise the 30x as an HTTPError instead of following it
+
+
+# No proxy from the environment (the agent is a local URL the operator typed; an `HTTP_PROXY` in the
+# shell must not silently route episodes through it) and no following of redirects.
+_opener = urllib.request.build_opener(urllib.request.ProxyHandler({}), _NoRedirect())
+
+
 def _post_json(url: str, body: dict, timeout: float) -> object:
     data = json.dumps(body).encode()
     req = urllib.request.Request(url, data=data, method="POST", headers={"Content-Type": "application/json"})
-    with urllib.request.urlopen(req, timeout=timeout) as resp:
-        return json.loads(resp.read() or b"null")
+    try:
+        with _opener.open(req, timeout=timeout) as resp:
+            return json.loads(resp.read() or b"null")
+    except urllib.error.HTTPError as e:
+        if 300 <= e.code < 400:
+            raise RuntimeError("redirect") from e
+        raise
 
 
 def _is_timeout(e: Exception) -> bool:

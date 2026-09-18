@@ -162,7 +162,9 @@ def run_target_agent(cfg: AgentConfig, scenario: Scenario, target_name: str | No
     """
     target = resolve_target(target_name)
     if not _ticket_mode(scenario):
-        return target.run_episode(new_session(cfg, scenario, ticket_mode=False), opening_message(scenario, False))
+        episode = target.run_episode(new_session(cfg, scenario, ticket_mode=False), opening_message(scenario, False))
+        episode.target = target.name
+        return episode
 
     # Each episode gets its own copy of the ticket (same customer words, same planted note). If Zendesk
     # cannot file one, the episode fails CLOSED: quietly running the mock path instead would let a gate row
@@ -177,6 +179,7 @@ def run_target_agent(cfg: AgentConfig, scenario: Scenario, target_name: str | No
         )
     live = scenario.model_copy(update={"ticket_id": tid})
     episode = target.run_episode(new_session(cfg, live, ticket_mode=True), opening_message(live, True))
+    episode.target = target.name
     # The reply is written back only for the cycle's own episode. Gate and baseline rows are bulk
     # re-evaluations; writing their replies too would trip Zendesk's account-wide update throttle.
     reply_posted = False

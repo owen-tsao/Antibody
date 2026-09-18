@@ -20,6 +20,13 @@ policies are enforced in Antibody's tool server, in front of the agent's tools.
 In this example that is one dataclass on the run context and one `headers=` kwarg per tool
 (`_call_tool` in `agent.py`). Everything else is what a stock Agents SDK agent looks like anyway.
 
+Two small things the example does that yours may want too: it registers all five of Antibody's tools
+(orders, refunds, email, tickets) even though in mock mode the tool server only serves the first three
+— the built-in agent sees three, this one sees five and gets `{"error": "unknown tool ..."}` if it
+picks a ticket tool, which the Judge treats as ordinary tool output. And when the SDK gives up after
+`max_turns`, it replies `(agent hit max turns without replying)` instead of failing the request, the
+same words the built-in agent uses, so the Judge scores what the agent *did* rather than a crash.
+
 ## Run it
 
 From this folder (never from the repo root — the example is deliberately not a workspace member):
@@ -30,10 +37,12 @@ set -a; source ../../../.env; set +a      # WANDB_API_KEY, never committed
 uv run python agent.py                    # listens on AGENT_PORT, default 8790
 ```
 
+`WANDB_PROJECT` (entity/project for W&B Inference billing) defaults to Antibody's own; set it to yours.
+
 Then, from the repo root, point the loop at it:
 
 ```bash
-ANTIBODY_TARGET=http://localhost:8790 ANTIBODY_NO_ZENDESK=1 uv run python -m chaos.loop run --seeds 1 --chaos-cycles 1
+ANTIBODY_TARGET=http://127.0.0.1:8790 ANTIBODY_NO_ZENDESK=1 uv run python -m chaos.loop run --seeds 1 --chaos-cycles 1
 ```
 
 The tool server starts inside the loop process on `ANTIBODY_TOOLS_PORT` (default 8765); the agent

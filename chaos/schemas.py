@@ -120,6 +120,10 @@ class Episode(BaseModel):
     tool_calls: list[ToolCall] = Field(default_factory=list)
     final_reply: str
     error: str | None = None
+    target: str | None = Field(
+        default=None,
+        description="Canonical name of the agent that ran this episode (`builtin`, `http:<url>`). None on records written before targets were pluggable.",
+    )
     ticket_state: dict[str, Any] | None = Field(
         default=None,
         description="Real Zendesk state around the episode: {status_before, status_after, reply_posted}. None on the mock path.",

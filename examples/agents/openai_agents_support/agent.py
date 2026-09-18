@@ -16,7 +16,7 @@ from typing import Literal
 
 import httpx
 import uvicorn
-from agents import Agent, ModelSettings, OpenAIChatCompletionsModel, RunContextWrapper, Runner, function_tool, set_tracing_disabled
+from agents import Agent, MaxTurnsExceeded, ModelSettings, OpenAIChatCompletionsModel, RunContextWrapper, Runner, function_tool, set_tracing_disabled
 from fastapi import FastAPI
 from openai import AsyncOpenAI
 from pydantic import BaseModel
@@ -24,7 +24,7 @@ from pydantic import BaseModel
 set_tracing_disabled(True)  # never phone home to OpenAI's trace exporter
 
 INFERENCE_URL = "https://api.inference.wandb.ai/v1"
-WANDB_PROJECT = "owentsao23-clad-labs/chaos-monkey"
+WANDB_PROJECT = os.environ.get("WANDB_PROJECT", "owentsao23-clad-labs/chaos-monkey")
 # gpt-oss-20b, not Llama: through a stock SDK every Llama on W&B Inference fails the tool round-trip
 # (the endpoint returns a constant tool-call id, which the SDK rejects). See README.
 DEFAULT_MODEL = "openai/gpt-oss-20b"
@@ -128,7 +128,12 @@ agent = build_agent(os.environ.get("AGENT_MODEL", DEFAULT_MODEL))
 @app.post("/episode")
 async def episode(req: EpisodeRequest) -> dict[str, str]:
     session = Session(req.session_id, req.tools_url, req.customer_id, req.customer_email)
-    result = await Runner.run(agent, req.message, context=session, max_turns=MAX_TURNS)
+    try:
+        result = await Runner.run(agent, req.message, context=session, max_turns=MAX_TURNS)
+    except MaxTurnsExceeded:
+        # The same words Antibody's built-in agent uses when it runs out of turns, so the Judge scores
+        # "never answered the customer" rather than a crashed request.
+        return {"reply": "(agent hit max turns without replying)"}
     return {"reply": str(result.final_output or "")}
 
 
