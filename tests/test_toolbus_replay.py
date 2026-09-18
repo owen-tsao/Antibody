@@ -15,7 +15,6 @@ from pathlib import Path
 
 import pytest
 
-from chaos import toolbus
 from chaos.schemas import AgentConfig, CycleRecord, Scenario
 from chaos.tools import TOOL_FUNCS, reset_side_effects
 from chaos.toolbus import ToolSession, call_tool
@@ -115,13 +114,3 @@ def test_validator_runs_after_fault_and_withholds_verification() -> None:
     assert session.verified_orders == set()
     email = call_tool(session, "send_email", {"to": "owen@example.com", "subject": "s", "body": "b"})
     assert email.blocked_by_policy
-
-
-def test_bind_scopes_the_session_to_the_current_context() -> None:
-    cfg = _config(0)
-    scenario = RECORDS[0].scenario
-    session = ToolSession(cfg=cfg, scenario=scenario, customer_turns=[])
-    assert toolbus.CURRENT_SESSION.get() is None
-    with toolbus.bind(session):
-        assert toolbus.CURRENT_SESSION.get() is session
-    assert toolbus.CURRENT_SESSION.get() is None

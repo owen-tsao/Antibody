@@ -29,8 +29,10 @@ def _short_model(model_id: str) -> str:
 def build() -> dict:
     from chaos.config import TARGET_MODEL
     from chaos.scenarios import ATTACK_FAMILIES, SEED_SCENARIOS
+    from chaos.target import resolve_target
     from chaos.tools import TOOL_SPECS
 
+    target = resolve_target()
     tools = []
     for spec in TOOL_SPECS:
         fn = spec["function"]
@@ -54,7 +56,12 @@ def build() -> dict:
     ]
 
     return {
-        "target": {"name": TARGET_NAME, "model": TARGET_MODEL, "model_short": _short_model(TARGET_MODEL)},
+        "target": {
+            "name": TARGET_NAME,
+            "model": TARGET_MODEL,
+            "model_short": _short_model(TARGET_MODEL),
+            "transport": target.transport,
+        },
         "tools": tools,
         "families": families,
     }

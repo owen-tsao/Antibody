@@ -9,14 +9,12 @@ blocks it for either.
 
 from __future__ import annotations
 
-import contextvars
-from contextlib import contextmanager
 from dataclasses import dataclass, field
-from typing import Any, Iterator
+from typing import Any
 
 from chaos import zendesk
 from chaos.schemas import AgentConfig, Scenario, ToolCall, ToolFault
-from chaos.tools import TICKET_TOOL_FUNCS, TOOL_FUNCS, VALIDATORS, policy_blocks
+from chaos.tools import TICKET_TOOL_FUNCS, TOOL_FUNCS, VALIDATORS, customer_email_for, policy_blocks
 
 
 @dataclass
@@ -34,19 +32,14 @@ class ToolSession:
     verified_orders: set[str] = field(default_factory=set)
     calls: list[ToolCall] = field(default_factory=list)
 
+    @property
+    def customer_id(self) -> str:
+        return self.scenario.customer_id
 
-# The built-in agent binds its session here for the duration of an episode. asyncio.to_thread copies
-# contextvars, so concurrent gate rows (one thread each) keep their sessions apart without a lock.
-CURRENT_SESSION: contextvars.ContextVar[ToolSession | None] = contextvars.ContextVar("tool_session", default=None)
-
-
-@contextmanager
-def bind(session: ToolSession) -> Iterator[ToolSession]:
-    token = CURRENT_SESSION.set(session)
-    try:
-        yield session
-    finally:
-        CURRENT_SESSION.reset(token)
+    @property
+    def customer_email(self) -> str:
+        """Who the agent is talking to. The built-in prompt states it; an external agent is told in `/episode`."""
+        return customer_email_for(self.scenario.customer_id)
 
 
 def apply_fault(fault: ToolFault | None, clean_result: Any) -> Any:

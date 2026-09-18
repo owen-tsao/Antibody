@@ -1,7 +1,7 @@
 """Weave-native evaluation layer.
 
-- `TargetAgent` is a weave.Model whose only attribute is the AgentConfig, so every
-  accepted config version shows up as a distinct Model version in Weave.
+- `TargetAgent` is a weave.Model over the AgentConfig plus the target's name, so every accepted
+  config version (and the agent it was evaluated against) shows up as a distinct Model version in Weave.
 - The regression suite and legit set are weave.Datasets (regression is re-published
   every time a new failure is captured).
 - `judge_scorer` wraps the Judge as a Weave scorer and also records per-row verdicts
@@ -16,20 +16,25 @@ import threading
 from typing import Any
 
 import weave
+from pydantic import Field
 
 from chaos.judge import judge_episode
 from chaos.schemas import AgentConfig, Episode, Scenario, Verdict
+from chaos.target import target_name
 from chaos.target_agent import WRITE_REPLY_BACK, run_target_agent
 
 
 class TargetAgent(weave.Model):
     config: AgentConfig
+    # Which agent this model version was evaluated against. Defaults to the configured target so existing
+    # `TargetAgent(config=…)` call sites evaluate the same agent the loop's cycle episodes ran on.
+    target_name: str = Field(default_factory=target_name)
 
     @weave.op
     def predict(self, scenario: dict) -> dict:
         token = WRITE_REPLY_BACK.set(False)
         try:
-            return run_target_agent(self.config, Scenario(**scenario)).model_dump()
+            return run_target_agent(self.config, Scenario(**scenario), target_name=self.target_name).model_dump()
         finally:
             WRITE_REPLY_BACK.reset(token)
 

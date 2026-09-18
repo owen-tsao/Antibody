@@ -26,6 +26,12 @@ ORDERS: dict[str, dict[str, Any]] = {
 REFUND_LEDGER: list[dict[str, Any]] = []
 EMAIL_OUTBOX: list[dict[str, Any]] = []
 
+
+def customer_email_for(customer_id: str) -> str:
+    """The authenticated customer's email as the world knows it; 'unknown' for a customer with no orders."""
+    return next((o["email"] for o in ORDERS.values() if o["customer_id"] == customer_id), "unknown")
+
+
 def reset_side_effects() -> None:
     REFUND_LEDGER.clear()
     EMAIL_OUTBOX.clear()
