@@ -1,7 +1,7 @@
 """The target seam: which agent runs an episode, chosen by name.
 
-Antibody attacks, judges and repairs *some* support agent. Until now that was only the built-in one in
-`chaos.target_agent`; an external agent behind HTTP is next. Both receive the same thing — a `ToolSession`
+Antibody attacks, judges and repairs *some* support agent: the built-in one in `chaos.target_agent`, or an
+external agent behind HTTP that calls back into `chaos.toolserver`. Both receive the same thing — a `ToolSession`
 whose `call_tool` is the only way their tools run, plus the opening message — and hand back an `Episode`.
 Everything else in the loop (Judge, Repair, gate) is unchanged by which one ran.
 
@@ -12,9 +12,12 @@ serialised as an input on every call.
 
 from __future__ import annotations
 
+import json
 import os
+import urllib.request
 from typing import Protocol, get_args
 
+from chaos import toolserver
 from chaos.schemas import Episode, PatchKind
 from chaos.toolbus import ToolSession
 
@@ -53,17 +56,57 @@ class BuiltinTarget:
 
 
 class HttpTarget:
-    """An agent behind `POST {url}/episode` that calls back into Antibody's tool server. Transport lands in Step 3."""
+    """An agent behind `POST {url}/episode` that calls back into Antibody's tool server for every tool.
+
+    One episode is one request: `{session_id, message, customer_id, customer_email, tools_url}` out,
+    `{reply}` back. The agent's tool calls arrive at the tool server (in this process) under that
+    session id while we wait, so by the time the reply lands `session.calls` is the full record.
+    """
 
     transport = "http"
     supported_patch_kinds = CODE_LEVEL_PATCH_KINDS
 
-    def __init__(self, url: str):
-        self.url = url
-        self.name = f"http:{url}"
+    def __init__(self, url: str, timeout: float = 120.0):
+        self.url = url.rstrip("/")
+        self.name = f"http:{self.url}"
+        self.timeout = timeout
 
     def run_episode(self, session: ToolSession, opening_message: str) -> Episode:
-        raise NotImplementedError("HttpTarget lands in Step 3")
+        # Server first: a port that cannot be bound is an operator error worth raising on the first episode.
+        tools_url = toolserver.tools_url()
+        session_id = toolserver.register(session)
+        try:
+            body = {
+                "session_id": session_id,
+                "message": opening_message,
+                "customer_id": session.customer_id,
+                "customer_email": session.customer_email,
+                "tools_url": tools_url,
+            }
+            try:
+                response = _post_json(f"{self.url}/episode", body, self.timeout)
+            except Exception as e:  # noqa: BLE001 - any transport failure is the episode's error, never a crash
+                if _is_timeout(e):
+                    return session.episode("", error="target timed out")
+                return session.episode("", error=f"target request failed: {e}")
+            reply = response.get("reply") if isinstance(response, dict) else None
+            if not isinstance(reply, str):
+                return session.episode("", error="target returned no reply: expected {\"reply\": \"...\"}")
+            return session.episode(reply)
+        finally:
+            toolserver.drop(session_id)
+
+
+def _post_json(url: str, body: dict, timeout: float) -> object:
+    data = json.dumps(body).encode()
+    req = urllib.request.Request(url, data=data, method="POST", headers={"Content-Type": "application/json"})
+    with urllib.request.urlopen(req, timeout=timeout) as resp:
+        return json.loads(resp.read() or b"null")
+
+
+def _is_timeout(e: Exception) -> bool:
+    # urllib surfaces a socket timeout either bare or wrapped as URLError(reason=TimeoutError).
+    return isinstance(e, TimeoutError) or isinstance(getattr(e, "reason", None), TimeoutError)
 
 
 def target_name() -> str:

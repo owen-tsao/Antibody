@@ -13,7 +13,7 @@ from dataclasses import dataclass, field
 from typing import Any
 
 from chaos import zendesk
-from chaos.schemas import AgentConfig, Scenario, ToolCall, ToolFault
+from chaos.schemas import AgentConfig, Episode, Scenario, ToolCall, ToolFault
 from chaos.tools import TICKET_TOOL_FUNCS, TOOL_FUNCS, VALIDATORS, customer_email_for, policy_blocks
 
 
@@ -40,6 +40,16 @@ class ToolSession:
     def customer_email(self) -> str:
         """Who the agent is talking to. The built-in prompt states it; an external agent is told in `/episode`."""
         return customer_email_for(self.scenario.customer_id)
+
+    def episode(self, final_reply: str, error: str | None = None) -> Episode:
+        """The episode record every target hands back: this session's calls plus whatever the agent said last."""
+        return Episode(
+            scenario_id=self.scenario.id,
+            config_version=self.cfg.version,
+            tool_calls=self.calls,
+            final_reply=final_reply,
+            error=error,
+        )
 
 
 def apply_fault(fault: ToolFault | None, clean_result: Any) -> Any:

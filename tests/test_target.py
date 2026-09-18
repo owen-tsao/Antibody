@@ -69,12 +69,6 @@ def test_env_drives_resolution(monkeypatch: pytest.MonkeyPatch) -> None:
     assert isinstance(resolve_target("builtin"), BuiltinTarget), "an explicit name wins over the env"
 
 
-def test_http_target_is_not_runnable_yet() -> None:
-    scenario = Scenario(id="s", kind="ambiguous_request", title="t", user_message="hi", expected_behavior="e")
-    with pytest.raises(NotImplementedError, match="Step 3"):
-        resolve_target("http:localhost:8790").run_episode(new_session(_config(0), scenario, False), "hi")
-
-
 def test_unknown_target_name_is_a_clear_error() -> None:
     with pytest.raises(ValueError, match=r"unknown target 'mcp:foo'.*ANTIBODY_TARGET"):
         resolve_target("mcp:foo")

@@ -218,7 +218,6 @@ def run_builtin_episode(session: ToolSession, opening_message: str) -> Episode:
         {"role": "system", "content": build_system_prompt(cfg, scenario.customer_id, ticket_mode)},
         {"role": "user", "content": opening_message},
     ]
-    tool_calls = session.calls
 
     for turn in range(MAX_TURNS):
         last_turn = turn == MAX_TURNS - 1
@@ -237,13 +236,7 @@ def run_builtin_episode(session: ToolSession, opening_message: str) -> Episode:
                 request["tool_choice"] = "auto"
             resp = client.chat.completions.create(**request)
         except Exception as e:  # noqa: BLE001
-            return Episode(
-                scenario_id=scenario.id,
-                config_version=cfg.version,
-                tool_calls=tool_calls,
-                final_reply="",
-                error=f"model call failed: {e}",
-            )
+            return session.episode("", error=f"model call failed: {e}")
 
         msg = resp.choices[0].message
         tool_calls_this_turn = list(msg.tool_calls or [])[:1]
@@ -253,12 +246,7 @@ def run_builtin_episode(session: ToolSession, opening_message: str) -> Episode:
             tool_calls_this_turn = _parse_text_tool_calls(msg.content or "")
 
         if not tool_calls_this_turn:
-            return Episode(
-                scenario_id=scenario.id,
-                config_version=cfg.version,
-                tool_calls=tool_calls,
-                final_reply=msg.content or "",
-            )
+            return session.episode(msg.content or "")
 
         if msg.tool_calls:
             dumped = msg.model_dump(exclude_none=True)
@@ -290,10 +278,4 @@ def run_builtin_episode(session: ToolSession, opening_message: str) -> Episode:
                 }
             )
 
-    return Episode(
-        scenario_id=scenario.id,
-        config_version=cfg.version,
-        tool_calls=tool_calls,
-        final_reply="(agent hit max turns without replying)",
-        error="max_turns",
-    )
+    return session.episode("(agent hit max turns without replying)", error="max_turns")
