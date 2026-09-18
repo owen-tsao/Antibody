@@ -1,0 +1,16 @@
+[project]
+name = "openai-agents-support"
+version = "0.1.0"
+description = "Example support agent built on the stock OpenAI Agents SDK. Imports nothing from Antibody."
+requires-python = ">=3.12"
+dependencies = [
+    "fastapi>=0.141.1",
+    "httpx>=0.28.1",
+    "openai-agents>=0.22.3",
+    "uvicorn[standard]>=0.52.4",
+]
+
+# Deliberately its own project with its own lockfile and venv: the point of this example is that the
+# target agent is not part of Antibody. Run with `uv sync` / `uv run` from this folder.
+[tool.uv]
+package = false

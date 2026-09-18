@@ -15,8 +15,13 @@ the warm-up is skipped and `/api/attack` answers 503 up front: the key is what t
 call the inference endpoint with, so the attack cannot run without it whether or not it is traced.
 The loop subprocess has its own `weave.init`; the two never share memory (docs/FRONTEND.md §8).
 
-One attack at a time: the target harness keeps per-thread fault state, and the demo only ever presses
-one button at a time. A second concurrent request gets 409 instead of queueing behind the first.
+One attack at a time: the demo only ever presses one button at a time, and the single worker below lets
+a timed-out attack finish in the background without overlapping the next. A second concurrent request
+gets 409 instead of queueing behind the first.
+
+Built-in target only. With `ANTIBODY_TARGET` pointing at an external agent, running the target here would
+start Antibody's tool server inside the API process (plan 01: it belongs in the loop process, on the same
+fixed port), and the next real run would then fail to bind it. `run` refuses before taking the lock.
 """
 
 from __future__ import annotations
@@ -59,6 +64,14 @@ class AttackTimeout(Exception):
 
 class AttackFailed(Exception):
     """The attack raised instead of returning a verdict; `str(exc)` is safe to show the client."""
+
+
+class AttackUnsupported(AttackFailed):
+    """The configured target cannot be previewed from the API process (an external agent).
+
+    A subclass of AttackFailed so the route's existing mapping surfaces it (500 with this message) until
+    `api.main` maps it to 501 on its own; the message names the target and the env var to change.
+    """
 
 
 def tracing_disabled() -> bool:
@@ -164,8 +177,27 @@ def _run(cfg: AgentConfig, scenario: Scenario) -> dict:
         _attack_lock.release()
 
 
+def unsupported_target() -> str | None:
+    """Why the configured target cannot be previewed here, or None when it can (the built-in agent)."""
+    from chaos.target import TARGET_ENV, resolve_target
+
+    try:
+        target = resolve_target()
+    except ValueError as e:
+        return str(e)
+    if target.transport != "in-process":
+        return (
+            f"the seed-attack preview runs only against the built-in agent; {TARGET_ENV} points at "
+            f"{target.name} (via {target.transport}), whose tool server must live in the loop process"
+        )
+    return None
+
+
 def run(cfg: AgentConfig, scenario: Scenario) -> dict:
-    """Run target + judge with a wall-clock budget. Raises AttackBusy, AttackTimeout or AttackFailed."""
+    """Run target + judge with a wall-clock budget. Raises AttackUnsupported, AttackBusy, AttackTimeout or AttackFailed."""
+    reason = unsupported_target()
+    if reason is not None:
+        raise AttackUnsupported(reason)
     if not _attack_lock.acquire(blocking=False):
         raise AttackBusy()
     try:
