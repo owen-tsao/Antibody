@@ -127,10 +127,7 @@ export default function App() {
       // Heal always means a real run. The API also discards a (paused) replay on start; doing it here
       // first keeps the UI honest if the start then fails (no "Resume replay" over a run that never began).
       if (replay?.active) await api.replayStop().catch(() => undefined);
-      // TODO(A1): pass `toStartBody(settings)` on its own once api.ts's LoopStartBody carries the A1 fields.
-      // `mode` is a dead field A1 removes; until then the settings ride along and today's API ignores
-      // the ones it does not know (Pydantic drops unknown keys) — and rejects `chaos_cycles: 0` (ge=1).
-      await api.loopStart({ mode: "fixed", ...toStartBody(settings) });
+      await api.loopStart(toStartBody(settings));
       setPage("agents");
     } catch (e) {
       // 409 = a loop is already running (possibly one the API did not spawn); watching it is the

@@ -210,10 +210,15 @@ export default function SettingsDrawer({ settings, onChange, onClose }: Props) {
         </div>
 
         {manifest && (
+          // An external agent has no model to name (Antibody only sees its URL), so the line is just its name.
           <p className="mt-auto pt-6 text-[12px] leading-relaxed text-[var(--faint)]">
             {manifest.target.name}
-            <span className="px-1.5">·</span>
-            <span title={manifest.target.model}>{manifest.target.model_short}</span>
+            {manifest.target.model_short && (
+              <>
+                <span className="px-1.5">·</span>
+                <span title={manifest.target.model ?? undefined}>{manifest.target.model_short}</span>
+              </>
+            )}
           </p>
         )}
       </motion.aside>

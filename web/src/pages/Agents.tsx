@@ -1,7 +1,7 @@
 import { AnimatePresence, motion, useReducedMotion } from "framer-motion";
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 
-import { api, type Status } from "@/api";
+import { api, type Manifest, type Status } from "@/api";
 import ApiDown from "@/components/ApiDown";
 import BackLink, { ForwardLink } from "@/components/BackLink";
 import CyclesBox from "@/components/CyclesBox";
@@ -54,13 +54,14 @@ const phaseKey = (s: Status | null) => s?.phase ?? "idle";
 
 /**
  * "target: openai-agents via HTTP" / "target: built-in", from the manifest's `target`. Null until the
- * backend reports a `transport` (plan 01 Step 5): without it there is no honest way to say how the
- * agent is reached, so the line is not drawn rather than guessed.
+ * backend reports a `transport`: without it there is no honest way to say how the agent is reached,
+ * so the line is not drawn rather than guessed. The backend's word for the built-in agent is
+ * "in-process" (chaos/target.py); "builtin" is kept for the runs list, which stores that spelling.
  */
-function targetLine(t: { name: string; transport?: string } | undefined): string | null {
+function targetLine(t: Manifest["target"] | undefined): string | null {
   if (!t?.transport) return null;
   const transport = t.transport.toLowerCase();
-  if (transport === "builtin" || transport === "built-in") return "target: built-in";
+  if (transport === "in-process" || transport === "builtin" || transport === "built-in") return "target: built-in";
   return `target: ${t.name} via ${transport === "http" ? "HTTP" : t.transport}`;
 }
 

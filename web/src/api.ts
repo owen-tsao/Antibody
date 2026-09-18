@@ -131,43 +131,99 @@ export interface AgentConfig {
 
 export type Source = "live" | "golden" | "replay";
 
+/** `?source=` on the read routes: the live files, the committed golden run, or one archived run (`run:<id>`). */
+export type ReadSource = "live" | "golden" | `run:${string}`;
+
+/** The `source` for a runs-list id (docs/plans/handoffs/ui-3-run-history.md): `live` and `golden` are literal, anything else is an archive. */
+export function sourceOf(runId: string): ReadSource {
+  return runId === "live" || runId === "golden" ? runId : `run:${runId}`;
+}
+
+export type World = "auto" | "mock";
+
+/** Body of POST /api/loop/start (api/loop_ctl.py `LoopStartBody`); every field is one `chaos.loop run` flag. */
+export interface LoopStartBody {
+  chaos_cycles?: number;
+  /** null = all seeds; 0 = none. */
+  seeds?: number | null;
+  repair_attempts?: number;
+  second_pass?: boolean;
+  resume?: boolean;
+  /** Stop once N chaos attacks in a row are blocked; `chaos_cycles` becomes the cap. null = off. */
+  until_quiet?: number | null;
+  world?: World;
+}
+
 export interface LoopState {
   running: boolean;
   pid: number | null;
   started_at: string | null;
   exit_code: number | null;
-  mode: LoopMode | null;
-  chaos_cycles: number | null;
+  /** The body the last run this API spawned was started with; null for an external loop or a hand-started run. */
+  settings: Required<LoopStartBody> | null;
   /** true when the loop was found via pgrep rather than spawned by this API (cannot be stopped from the UI). */
   external?: boolean;
-}
-
-export type LoopMode = "fixed" | "until_quiet";
-
-export interface LoopStartBody {
-  mode: LoopMode;
-  chaos_cycles?: number;
-  quiet_streak?: number;
-  max_cycles?: number;
 }
 
 export interface LoopStarted {
   pid: number;
   started_at: string;
-  mode: LoopMode;
-  chaos_cycles: number;
+  settings: Required<LoopStartBody>;
 }
 
 export interface Manifest {
   target: {
+    /** Display name for the built-in agent; the canonical target string (`http:<url>`) for an external one. */
     name: string;
-    model: string;
-    model_short: string;
-    /** How the loop reaches the target (plan 01 Step 5): "builtin", or "http" for an external agent. Absent until that lands. */
+    /** null for an external agent: Antibody does not know what runs behind the URL. */
+    model: string | null;
+    model_short: string | null;
+    /** How the loop reaches the target: "in-process" for the built-in agent, "http" for an external one. */
     transport?: string;
+    url?: string | null;
   };
   tools: { name: string; description: string; side_effect: boolean; free_text_fields: string[] }[];
   families: { kind: ScenarioKind; title: string; seed_id: string | null }[];
+  /** The run-settings defaults a start dialog begins from. */
+  defaults: Required<LoopStartBody>;
+}
+
+/** One row of GET /api/runs (docs/plans/handoffs/ui-3-run-history.md). */
+export interface RunRow {
+  /** "live" | "golden" | a history folder name. */
+  id: string;
+  /** Only the golden run carries one ("demo tape"). */
+  label: string | null;
+  /** Only the live row. */
+  current: boolean;
+  started_at: string | null;
+  /** null while the live run's loop is alive. */
+  finished_at: string | null;
+  world: "mock" | "zendesk";
+  /** "builtin" or the target string as the loop stored it. */
+  target: string;
+  cycles: number;
+  accepted: number;
+  rejected: number;
+  versions: number[];
+  final_version: number | null;
+  flags: string[];
+  /** A legacy archive with no run.json: world/target/flags are guesses. */
+  synthesized: boolean;
+  /** GET /api/runs/{id} only. */
+  configs?: Pick<AgentConfig, "version" | "parent_version" | "patch_note">[];
+}
+
+export interface RollbackBody {
+  /** A runs-list id; never "live". */
+  run: string;
+  version: number;
+}
+
+export interface RollbackResult {
+  config: AgentConfig;
+  /** Scenarios in the merged live suite that the rolled-back run never had ("N tests are newer than this config"). */
+  newer_tests: number;
 }
 
 /** GET /api/health (plan 03 Step 1). Never carries the key itself, only whether one is set. */
@@ -221,8 +277,10 @@ export interface ReplayStarted {
   started_at: string;
 }
 
-/** The golden run a replay would play (GET /api/replay `recording`). */
+/** The tape a replay plays or would play (GET /api/replay `recording`). */
 export interface RecordingInfo {
+  source: "golden" | `run:${string}`;
+  id: string;
   recorded_at: string;
   cycles: number;
   duration_s: number;
@@ -310,21 +368,33 @@ async function post<T>(path: string, body?: unknown, signal?: AbortSignal): Prom
   return res.json() as Promise<T>;
 }
 
+// Read routes take `?source=`; `live` is the API's default, so it is only sent when a caller asks for
+// something else. A replay only ever overrides `live` (api/main.py), so an archive is always served as asked.
+const withSource = (path: string, source?: ReadSource) => (source && source !== "live" ? `${path}?source=${source}` : path);
+
 export const api = {
-  state: () => get<State>("/api/state"),
+  state: (source?: ReadSource) => get<State>(withSource("/api/state", source)),
   status: () => get<Status>("/api/status"),
-  cycles: () => get<CycleRecord[]>("/api/cycles"),
-  config: (v: number) => get<AgentConfig>(`/api/configs/${v}`),
-  configs: () => get<Pick<AgentConfig, "version" | "parent_version" | "patch_note">[]>("/api/configs"),
+  cycles: (source?: ReadSource) => get<CycleRecord[]>(withSource("/api/cycles", source)),
+  config: (v: number, source?: ReadSource) => get<AgentConfig>(withSource(`/api/configs/${v}`, source)),
+  configs: (source?: ReadSource) =>
+    get<Pick<AgentConfig, "version" | "parent_version" | "patch_note">[]>(withSource("/api/configs", source)),
   manifest: () => get<Manifest>("/api/manifest"),
   health: () => get<Health>("/api/health"),
+  /** Every run there is to open, newest first; the live run first (once it has a cycle), golden last. */
+  runs: () => get<RunRow[]>("/api/runs"),
+  /** One run plus its config versions. 404 for `live` until the run's first cycle lands. */
+  run: (id: string) => get<RunRow>(`/api/runs/${id}`),
+  /** Copy a past run's config in as the next live version (409 while a loop runs or on target mismatch). */
+  rollback: (body: RollbackBody) => post<RollbackResult>("/api/rollback", body),
   loop: () => get<LoopState>("/api/loop"),
   loopStart: (body: LoopStartBody) => post<LoopStarted>("/api/loop/start", body),
   loopStop: () => post<LoopState>("/api/loop/stop"),
   /** Where "open log" points: the last `tail` lines of runs/loop.log, as JSON. */
   loopLogUrl: (tail = 200) => `/api/loop/log?tail=${tail}`,
-  /** Play the golden run into /api/status and /api/cycles (409 if a loop or another replay is running). */
-  replayStart: (speed = 1) => post<ReplayStarted>(`/api/replay/start?speed=${speed}`),
+  /** Play a recording (golden by default, or `run:<id>`) into /api/status and /api/cycles (409 if a loop or another replay is running). */
+  replayStart: (speed = 1, recording?: RecordingInfo["source"]) =>
+    post<ReplayStarted>(`/api/replay/start?speed=${speed}${recording ? `&recording=${recording}` : ""}`),
   replayStop: () => post<{ stopped: boolean }>("/api/replay/stop"),
   /** Back on Agents freezes the replay where it is; Heal's "Resume replay" continues it. 404 if none is active. */
   replayPause: () => post<ReplayInfo>("/api/replay/pause"),
