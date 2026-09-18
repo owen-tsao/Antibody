@@ -125,6 +125,14 @@ app = FastAPI(title="Northwind support agent (OpenAI Agents SDK)", docs_url=None
 agent = build_agent(os.environ.get("AGENT_MODEL", DEFAULT_MODEL))
 
 
+@app.get("/tools")
+async def tools() -> list[dict[str, str]]:
+    """The tools this agent owns, by name. Optional in Antibody's contract: the connect screen uses it to say
+    which of them the sandbox storefront serves. Answered without calling the model, so it doubles as the
+    readiness check Antibody polls after starting this process."""
+    return [{"name": t.name, "description": t.description or ""} for t in agent.tools]
+
+
 @app.post("/episode")
 async def episode(req: EpisodeRequest) -> dict[str, str]:
     session = Session(req.session_id, req.tools_url, req.customer_id, req.customer_email)
