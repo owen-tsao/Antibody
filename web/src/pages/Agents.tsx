@@ -3,7 +3,6 @@ import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } fr
 
 import { api, type Manifest, type Status } from "@/api";
 import ApiDown from "@/components/ApiDown";
-import BackLink, { ForwardLink } from "@/components/BackLink";
 import CyclesBox from "@/components/CyclesBox";
 import ErrorBoundary from "@/components/ErrorBoundary";
 import ReplayControls from "@/components/ReplayControls";
@@ -67,13 +66,12 @@ function targetLine(t: Manifest["target"] | undefined): string | null {
 
 export default function Agents({
   replayNote = null,
-  onBack,
-  onResults,
+  onLeave,
 }: {
   /** Why Replay did not start (a live run owns the screen instead); shown quietly beside the headline. */
   replayNote?: string | null;
-  onBack: () => void;
-  onResults: () => void;
+  /** Called after this page stopped or paused a replay, so the shell's pill and the runs page catch up at once. */
+  onLeave?: () => void;
 }) {
   // status.json is the only thing that drives the orbs; 1 s is the spec's cadence. The dwell only
   // delays *when* a phase that really arrived is shown (min 1.2 s each), so `chaos` is not skipped.
@@ -166,19 +164,24 @@ export default function Agents({
   // flick the bar backwards at every boundary. Only the orbs want smoothing.
   const tape = polled ?? status;
   const transport = tape?.replay === true && tape.duration_s != null;
-  // Results is reachable once the loop has finished and there is something to show. `loop.running`
-  // is computed from the live process by the API, so a crashed loop still counts as finished.
-  const done = !running && !(state?.loop.running ?? false) && (cycles?.length ?? 0) > 0;
 
   const stopReplay = () => {
-    api.replayStop().catch(() => undefined).finally(onBack);
+    api.replayStop().catch(() => undefined).finally(() => onLeave?.());
   };
-  // Back leaves a replay frozen where it is (Heal offers "Resume replay"); it must not keep playing
-  // off-screen. Fire-and-forget: the page changes now, the API catches up within the poll.
-  const back = () => {
-    if (status?.replay) api.replayPause().catch(() => undefined);
-    onBack();
-  };
+  // Leaving this page (any shell link, browser Back) leaves a replay frozen where it is, so nothing
+  // keeps playing off-screen and the runs page can honestly offer "Resume replay". The ref carries
+  // the latest flag into the unmount cleanup; fire-and-forget, the API catches up within a poll.
+  const replayingRef = useRef(false);
+  const replaying = status?.replay === true;
+  useEffect(() => {
+    replayingRef.current = replaying;
+  }, [replaying]);
+  useEffect(
+    () => () => {
+      if (replayingRef.current) api.replayPause().catch(() => undefined);
+    },
+    [],
+  );
 
   const loading = !status && !statusError && !cycles && !cyclesError;
   const unreachable = statusError && !status && !cycles;
@@ -200,13 +203,10 @@ export default function Agents({
 
   return (
     <main className="min-h-full px-6 pb-16 pt-14 md:px-10 md:pt-16">
-      <BackLink onClick={back} label="Back" />
-      <AnimatePresence>{done && <ForwardLink onClick={onResults} label="Results" />}</AnimatePresence>
-
       <div className="mx-auto w-full max-w-[1040px]">
         {/* Header: the page's job, then one quiet line of where the run stands. The only large text. */}
         <header>
-          <h1 className="display text-[80px] leading-[0.9]">Cycles</h1>
+          <h1 className="display text-[48px] leading-[1]">Cycles</h1>
           <p className="tabular mt-4 text-[13px] text-[var(--muted)]">
             {unreachable ? (
               <ApiDown onRetry={retry} />

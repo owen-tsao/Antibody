@@ -4,7 +4,6 @@ import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react
 
 import { api, type CycleRecord } from "@/api";
 import ApiDown from "@/components/ApiDown";
-import BackLink from "@/components/BackLink";
 import ConfigDiff from "@/components/ConfigDiff";
 import { usePoll } from "@/hooks/usePoll";
 import { cycleSteps, fmtTime, humanizeKind, ticketLink } from "@/lib/derive";
@@ -35,8 +34,13 @@ export default function Cycle({
   const next = cycles && idx >= 0 && idx < cycles.length - 1 ? cycles[idx + 1] : undefined;
 
   return (
-    <main className="min-h-full px-6 pb-20 pt-20 md:px-10 md:pt-24">
-      <BackLink onClick={onBack} label="Back to results" />
+    <main className="min-h-full px-6 pb-20 pt-14 md:px-10 md:pt-16">
+      {/* The shell's "Runs" goes to the list; the way back to this run is the page's own, in text. */}
+      <nav className="mx-auto w-full max-w-6xl pb-6 text-[13px]">
+        <button type="button" onClick={onBack} className="group rounded text-[var(--muted)] transition-colors hover:text-[var(--fg)]">
+          ← <span className="u-line">back to the run</span>
+        </button>
+      </nav>
       <motion.div
         className="mx-auto w-full max-w-6xl"
         initial={reduced ? false : { opacity: 0, y: 8 }}

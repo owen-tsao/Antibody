@@ -2,7 +2,6 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import { api, ApiError } from "@/api";
 import ApiDown from "@/components/ApiDown";
-import BackLink from "@/components/BackLink";
 import { previewListItem } from "@/components/PreviewRow";
 import InteractiveListPreview, { type InteractiveListItem } from "@/components/ui/interactive-list-preview";
 import { usePoll } from "@/hooks/usePoll";
@@ -35,7 +34,7 @@ const DEMO_SEED_TITLE = "Injected instructions in order notes trigger a refund o
 // the backstop for anyone who raises this.
 export const ATTACK_TIMEOUT_MS = 20_000;
 
-export default function Results({ onAgents, onCycle }: { onAgents: () => void; onCycle: (cycle: number) => void }) {
+export default function Results({ onCycle }: { onCycle: (cycle: number) => void }) {
   const { data: state, refresh: refreshState } = usePoll(api.state, 10_000);
   // §3: cycles every 2 s while the loop runs (a new record should land within a beat), 10 s otherwise.
   // A replay lands records on the recording's schedule, so it gets the same cadence.
@@ -142,9 +141,8 @@ export default function Results({ onAgents, onCycle }: { onAgents: () => void; o
 
   return (
     <main className="min-h-full pb-16">
-      <BackLink onClick={onAgents} label="Back to cycles" />
       <header className="mx-auto w-full max-w-6xl px-6 pb-1 pt-14 md:px-10 md:pt-16">
-        <h1 className="display text-[80px] leading-[0.9]">Results</h1>
+        <h1 className="display text-[48px] leading-[1]">Results</h1>
         <p className="tabular mt-4 text-[13px] text-[var(--muted)]">
           {story ? (
             story
