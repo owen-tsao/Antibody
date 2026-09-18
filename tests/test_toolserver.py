@@ -11,13 +11,13 @@ from __future__ import annotations
 import json
 import threading
 import time
-import urllib.error
 import urllib.request
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from typing import Any, Iterator
 
 import pytest
+from conftest import FakeAgent, http_json as _request
 
 from chaos import target as target_mod
 from chaos import toolserver
@@ -34,16 +34,6 @@ INJECTION = next(s for s in SEED_SCENARIOS if s.id == "seed-injection-refund")
 
 def _config(version: int) -> AgentConfig:
     return AgentConfig(**json.loads((GOLDEN / "runs" / "configs" / f"v{version}.json").read_text()))
-
-
-def _request(method: str, url: str, body: Any = None, headers: dict[str, str] | None = None, timeout: float = 5.0) -> tuple[int, Any]:
-    data = None if body is None else (body if isinstance(body, bytes) else json.dumps(body).encode())
-    req = urllib.request.Request(url, data=data, method=method, headers={"Content-Type": "application/json", **(headers or {})})
-    try:
-        with urllib.request.urlopen(req, timeout=timeout) as resp:
-            return resp.status, json.loads(resp.read())
-    except urllib.error.HTTPError as e:
-        return e.code, json.loads(e.read())
 
 
 @pytest.fixture(scope="module")
@@ -178,51 +168,7 @@ def test_concurrent_sessions_keep_their_calls_apart(tools_url: str) -> None:
         assert len(session.calls) == 10 and {c.args["order_id"] for c in session.calls} == {f"A-100{i}"}
 
 
-# --- the HTTP target against a fake external agent ------------------------------------------------------
-
-
-class FakeAgent:
-    """The smallest thing that satisfies plan 01's contract: `POST /episode` in, one tool call out, `{reply}` back."""
-
-    def __init__(self, delay: float = 0.0):
-        self.delay = delay
-        self.received: list[dict[str, Any]] = []
-        outer = self
-
-        class Handler(BaseHTTPRequestHandler):
-            def log_message(self, *_: Any) -> None:
-                pass
-
-            def do_POST(self) -> None:
-                body = json.loads(self.rfile.read(int(self.headers["Content-Length"])))
-                outer.received.append(body)
-                time.sleep(outer.delay)
-                status, order = _request(
-                    "POST", f"{body['tools_url']}/tools/lookup_order", {"order_id": "A-1001"},
-                    {toolserver.SESSION_HEADER: body["session_id"]},
-                )
-                text = f"order {order['order_id']} is {order['status']}" if status == 200 else f"tools said {status}"
-                reply = json.dumps({"reply": f"Hi {body['customer_email']}, {text}."}).encode()
-                self.send_response(200)
-                self.send_header("Content-Type", "application/json")
-                self.send_header("Content-Length", str(len(reply)))
-                self.end_headers()
-                self.wfile.write(reply)
-
-        self.server = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
-        self.url = f"http://127.0.0.1:{self.server.server_address[1]}"
-        threading.Thread(target=self.server.serve_forever, daemon=True).start()
-
-    def close(self) -> None:
-        self.server.shutdown()
-        self.server.server_close()
-
-
-@pytest.fixture
-def fake_agent() -> Iterator[FakeAgent]:
-    agent = FakeAgent()
-    yield agent
-    agent.close()
+# --- the HTTP target against a fake external agent (`FakeAgent` lives in conftest) ----------------------
 
 
 def test_http_target_runs_an_episode_end_to_end(tools_url: str, fake_agent: FakeAgent, monkeypatch: pytest.MonkeyPatch) -> None:

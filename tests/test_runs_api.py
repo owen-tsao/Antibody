@@ -211,7 +211,7 @@ def test_runs_list_shape(client: TestClient, history: Path) -> None:
     golden = next(r for r in rows if r["id"] == "golden")
     assert golden["label"] == "demo tape" and golden["current"] is False
     keys = {
-        "id", "label", "current", "started_at", "finished_at", "world", "target", "cycles",
+        "id", "label", "current", "started_at", "finished_at", "world", "target", "agent", "cycles",
         "accepted", "rejected", "versions", "final_version", "flags", "synthesized",
     }
     assert all(set(r) == keys for r in rows)
