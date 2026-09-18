@@ -473,6 +473,12 @@ class AttackBody(BaseModel):
 
 @app.post("/api/attack")
 def attack_preview(body: AttackBody) -> dict:
+    # An external target's tool server lives in the loop process; previewing from here would bind its
+    # port under uvicorn and the loop could never start. Refused before the key check: it is unsupported
+    # with or without one.
+    unsupported = attack.unsupported_target()
+    if unsupported is not None:
+        raise HTTPException(501, unsupported)
     # Unconditional: the target and judge call the inference endpoint with this key, so the attack
     # cannot run without it even when tracing is off (it used to fall through to a SystemExit → 500).
     if attack.missing_api_key():

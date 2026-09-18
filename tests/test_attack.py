@@ -50,10 +50,9 @@ def test_route_surfaces_the_refusal_with_a_clear_detail(monkeypatch: pytest.Monk
     from api.main import app
 
     monkeypatch.setenv(TARGET_ENV, "http:localhost:8790")
-    monkeypatch.setenv("ANTIBODY_NO_WEAVE", "1")  # the route's key check comes first; this is not about keys
+    monkeypatch.delenv("WANDB_API_KEY", raising=False)  # refused before the key check: unsupported with or without one
 
     response = TestClient(app).post("/api/attack", json={"scenario_id": INJECTION.id, "version": 0})
 
-    # Until api.main maps AttackUnsupported to 501 itself, the refusal rides on the AttackFailed → 500 mapping.
-    assert response.status_code == 500
+    assert response.status_code == 501
     assert "built-in agent" in response.json()["detail"] and "http://localhost:8790" in response.json()["detail"]

@@ -28,7 +28,7 @@ from chaos.config import ENTITY_PROJECT
 from chaos.evals import TargetAgent, publish_dataset, run_evaluation, scenario_rows
 from chaos.gate import run_gate
 from chaos.judge import judge_episode
-from chaos.repair_agent import apply_patch, build_memory, propose_patch
+from chaos.repair_agent import EXHAUSTED_RATIONALE, apply_patch, build_memory, propose_patch
 from chaos.scenarios import LEGIT_SCENARIOS, SEED_SCENARIOS
 from chaos.schemas import AgentConfig, CycleRecord, GateResult, Scenario
 from chaos.state import (
@@ -207,7 +207,13 @@ def run_cycle(state: LoopState, scenario: Scenario, retry_of: int | None = None)
         memory = build_memory(state.records)
         for attempt in range(1, MAX_REPAIR_ATTEMPTS + 1):
             set_phase(state.cycle, "repair", True, attempt=attempt, retry_of=retry_of)
-            patch = propose_patch(base, scenario, episode, verdict, rejected, memory=memory)
+            proposed = propose_patch(base, scenario, episode, verdict, rejected, memory=memory)
+            if proposed.rationale == EXHAUSTED_RATIONALE:
+                # Every kind this target supports was already rejected this cycle; gating a canned repeat
+                # would spend three evaluations to learn nothing. The record keeps the last real attempt.
+                print(f"  repair attempt {attempt}: skipped — {proposed.rationale}")
+                break
+            patch = proposed
             candidate = apply_patch(base, patch)
             candidate.version = state.cfg.version + 1
             candidate.parent_version = state.cfg.version

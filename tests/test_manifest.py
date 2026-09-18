@@ -39,5 +39,5 @@ def test_external_target_reports_its_canonical_name_url_and_no_model(monkeypatch
         "url": "http://localhost:8790",
     }
     # Only `target` depends on the env; the rest of the manifest is the same for every target.
-    assert set(built) == {"target", "tools", "families"}
+    assert set(built) == {"target", "tools", "families", "defaults"}
     assert [t["name"] for t in built["tools"]][:3] == ["lookup_order", "issue_refund", "send_email"]
