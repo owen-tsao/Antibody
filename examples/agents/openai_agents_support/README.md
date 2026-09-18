@@ -16,9 +16,13 @@ policies are enforced in Antibody's tool server, in front of the agent's tools.
   the tool result — including `{"error": ...}` when a policy blocked the call, which the model should
   see as ordinary tool output.
 - **Reply.** Return `200 {"reply": "<the agent's final message>"}`. Antibody has 120 s.
+- **Optionally, list your tools.** `GET /tools` → `[{"name": ..., "description": ...}]`. Antibody's connect
+  screen uses it to say which of your tools the sandbox storefront serves and which will be unavailable
+  during attacks; without it the ping still works and the mapping just says "agent does not list its tools".
 
 In this example that is one dataclass on the run context and one `headers=` kwarg per tool
-(`_call_tool` in `agent.py`). Everything else is what a stock Agents SDK agent looks like anyway.
+(`_call_tool` in `agent.py`), plus a five-line `/tools` route. Everything else is what a stock Agents SDK
+agent looks like anyway.
 
 Two small things the example does that yours may want too: it registers all five of Antibody's tools
 (orders, refunds, email, tickets) even though in mock mode the tool server only serves the first three
@@ -29,7 +33,9 @@ same words the built-in agent uses, so the Judge scores what the agent *did* rat
 
 ## Run it
 
-From this folder (never from the repo root — the example is deliberately not a workspace member):
+The dashboard can do this for you: on the connect screen, "start the example agent for me" runs the
+commands below from the API (`POST /api/agents/example/start`; log in `runs/example_agent.log`). By hand,
+from this folder (never from the repo root — the example is deliberately not a workspace member):
 
 ```bash
 uv sync
@@ -39,7 +45,7 @@ uv run python agent.py                    # listens on AGENT_PORT, default 8790
 
 `WANDB_PROJECT` (entity/project for W&B Inference billing) defaults to Antibody's own; set it to yours.
 
-Then, from the repo root, point the loop at it:
+Then point the loop at it — pick it in the dashboard's agent picker, or from the repo root:
 
 ```bash
 ANTIBODY_TARGET=http://127.0.0.1:8790 ANTIBODY_NO_ZENDESK=1 uv run python -m chaos.loop run --seeds 1 --chaos-cycles 1
