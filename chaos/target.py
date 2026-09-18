@@ -85,9 +85,9 @@ class HttpTarget:
                 "tools_url": tools_url,
             }
             try:
-                response = _post_json(f"{self.url}/episode", body, self.timeout)
+                response = post_json(f"{self.url}/episode", body, self.timeout)
             except Exception as e:  # noqa: BLE001 - any transport failure is the episode's error, never a crash
-                if _is_timeout(e):
+                if is_timeout(e):
                     return session.episode("", error="target timed out")
                 return session.episode("", error=f"target request failed: {e}")
             reply = response.get("reply") if isinstance(response, dict) else None
@@ -106,13 +106,12 @@ class _NoRedirect(urllib.request.HTTPRedirectHandler):
 
 
 # No proxy from the environment (the agent is a local URL the operator typed; an `HTTP_PROXY` in the
-# shell must not silently route episodes through it) and no following of redirects.
+# shell must not silently route episodes through it) and no following of redirects. This is the one
+# HTTP client Antibody points at an agent: the loop's episodes and the API's ping both go through it.
 _opener = urllib.request.build_opener(urllib.request.ProxyHandler({}), _NoRedirect())
 
 
-def _post_json(url: str, body: dict, timeout: float) -> object:
-    data = json.dumps(body).encode()
-    req = urllib.request.Request(url, data=data, method="POST", headers={"Content-Type": "application/json"})
+def _fetch_json(req: urllib.request.Request, timeout: float) -> object:
     try:
         with _opener.open(req, timeout=timeout) as resp:
             return json.loads(resp.read() or b"null")
@@ -122,7 +121,18 @@ def _post_json(url: str, body: dict, timeout: float) -> object:
         raise
 
 
-def _is_timeout(e: Exception) -> bool:
+def post_json(url: str, body: dict, timeout: float) -> object:
+    """`POST url` with a JSON body; the decoded JSON reply. Raises on transport errors, non-2xx and 30x."""
+    data = json.dumps(body).encode()
+    return _fetch_json(urllib.request.Request(url, data=data, method="POST", headers={"Content-Type": "application/json"}), timeout)
+
+
+def get_json(url: str, timeout: float) -> object:
+    """`GET url`; the decoded JSON reply. Same opener and error rules as `post_json`."""
+    return _fetch_json(urllib.request.Request(url, method="GET", headers={"Accept": "application/json"}), timeout)
+
+
+def is_timeout(e: Exception) -> bool:
     # urllib surfaces a socket timeout either bare or wrapped as URLError(reason=TimeoutError).
     return isinstance(e, TimeoutError) or isinstance(getattr(e, "reason", None), TimeoutError)
 
