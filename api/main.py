@@ -3,10 +3,11 @@
 The Vite dev server proxies /api to this in development; in production the same process also
 serves the built dashboard from web/dist (mounted at "/" after every /api route, only when the
 directory exists), so `make demo` is one server. Read routes serve the loop's files with a golden
-fallback (api.store); /api/loop/* spawns and controls the loop as a subprocess with the settings in
-the request body (api.loop_ctl); /api/manifest describes the target for the Intro line and carries
-the settings defaults; /api/attack runs one seed scenario in-process
-as a preview (api.attack); /api/replay/* plays the recorded golden run into /api/status and
+fallback (api.store) from one of three sources, `live`, `golden` or `run:<id>` (a past run under
+history/); /api/runs lists those runs with their manifests. /api/loop/* spawns and controls the loop
+as a subprocess with the settings in the request body (api.loop_ctl); /api/manifest describes the
+target for the Intro line and carries the settings defaults; /api/attack runs one seed scenario
+in-process as a preview (api.attack); /api/replay/* plays the recorded golden run into /api/status and
 /api/cycles on its original schedule (api.replay); /api/health is what the Makefile waits on and
 where the UI learns whether a key is set. /api/loop/reset is planned (docs/FRONTEND.md §3) and
 does not exist yet.
@@ -94,9 +95,27 @@ def _resolve(requested: Source) -> Source:
     return src
 
 
+def _source(raw: str) -> Source:
+    """The `source` query value, validated. `run:<id>` must name an existing history folder.
+
+    A malformed id (anything outside `store.RUN_ID`, so also every path) is the client's mistake: 400.
+    A well-formed id nobody has is 404. Neither may reach `store._paths` unchecked.
+    """
+    try:
+        return store.parse_source(raw)
+    except LookupError as e:
+        raise HTTPException(404, str(e))
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+
+
 def _read_source(requested: Source) -> Source:
-    """Where read routes get their files: golden during a replay (never the live run's), else as asked."""
-    if replay_if_no_loop():
+    """Where read routes get their files: golden during a replay (never the live run's), else as asked.
+
+    Only `live` is overridden. A past run asked for by name is exactly that run whether or not a tape
+    is playing; the replay owns the screen, not the history.
+    """
+    if replay_if_no_loop() and requested == "live":
         return "golden"
     return _resolve(requested)
 
@@ -115,13 +134,14 @@ def get_health() -> dict:
 
 
 @app.get("/api/state")
-def get_state(source: Source = Query("live")) -> dict:
+def get_state(source: str = Query("live")) -> dict:
+    src = _source(source)
     # Decide live-vs-replay once so cycles, versions and `source` cannot disagree within one response
     # (the replay's tail can expire between two calls).
-    replaying = source == "live" and replay_if_no_loop()
+    replaying = src == "live" and replay_if_no_loop()
     replayed = replay.current_cycles() if replaying else None
     replaying = replayed is not None
-    src: Source = "golden" if replaying else _resolve(source)
+    src = "golden" if replaying else _resolve(src)
     cycles = replayed if replaying else store.read_cycles(src)
     versions = store.config_versions(src)
 
@@ -167,18 +187,21 @@ def get_status() -> dict:
 
 
 @app.get("/api/cycles")
-def get_cycles(source: Source = Query("live")) -> list[dict]:
-    if source == "live" and replay_if_no_loop():
+def get_cycles(source: str = Query("live")) -> list[dict]:
+    src = _source(source)
+    if src == "live" and replay_if_no_loop():
         replayed = replay.current_cycles()
         if replayed is not None:
             return [rec.model_dump() for rec in replayed]
-    src = _resolve(source)
-    return [rec.model_dump() for rec in store.read_cycles(src)]
+    return [rec.model_dump() for rec in store.read_cycles(_resolve(src))]
 
 
 @app.get("/api/configs")
-def get_configs(source: Source = Query("live")) -> list[dict]:
-    src = _read_source(source)
+def get_configs(source: str = Query("live")) -> list[dict]:
+    return _config_rows(_read_source(_source(source)))
+
+
+def _config_rows(src: Source) -> list[dict]:
     out = []
     for v in store.config_versions(src):
         cfg = store.read_config(src, v)
@@ -191,8 +214,8 @@ def get_configs(source: Source = Query("live")) -> list[dict]:
 
 
 @app.get("/api/configs/{version}")
-def get_config(version: int, source: Source = Query("live")) -> dict:
-    src = _read_source(source)
+def get_config(version: int, source: str = Query("live")) -> dict:
+    src = _read_source(_source(source))
     cfg = store.read_config(src, version)
     if cfg is None:
         raise HTTPException(404, f"no config v{version} in {src}")
@@ -200,14 +223,68 @@ def get_config(version: int, source: Source = Query("live")) -> dict:
 
 
 @app.get("/api/regression")
-def get_regression(source: Source = Query("live")) -> list[dict]:
-    src = _read_source(source)
+def get_regression(source: str = Query("live")) -> list[dict]:
+    src = _read_source(_source(source))
     return [s.model_dump() for s in store.read_regression(src)]
 
 
 @app.get("/api/manifest")
 def get_manifest() -> dict:
     return manifest.build()
+
+
+# --- Run history (docs/plans/02, B1) ---------------------------------------------------------------
+
+
+def _golden_row() -> dict | None:
+    """The committed demo run as one more row, so the UI has a single list to show."""
+    row = store.run_manifest("golden")
+    if row is None:
+        return None
+    meta = replay.recording_meta()
+    if meta is not None:
+        row["started_at"] = meta["recorded_at"]
+    return {**row, "label": "demo tape", "current": False}
+
+
+def _live_row() -> dict | None:
+    """The run in runs/ as it stands now; `finished_at` is null while its loop is still alive."""
+    row = store.run_manifest("live")
+    if row is None:
+        return None
+    if loop_ctl.state()["running"]:
+        row["finished_at"] = None
+    return {**row, "label": None, "current": True}
+
+
+@app.get("/api/runs")
+def get_runs() -> list[dict]:
+    """Every run there is to open, newest first: the live run (`current: true`, only once it has a cycle),
+    then history/ and the golden demo tape ordered by start time. Runs with no cycles are hidden."""
+    rows = [{**m, "label": None, "current": False} for m in store.history_runs()]
+    golden = _golden_row()
+    if golden is not None and golden["cycles"] > 0:
+        rows = store.newest_first([*rows, golden])
+    live = _live_row()
+    return ([live] if live and live["cycles"] > 0 else []) + rows
+
+
+@app.get("/api/runs/{run_id}")
+def get_run(run_id: str) -> dict:
+    """Manifest plus `configs` (version, parent_version, patch_note). `run_id` is `live`, `golden` or a history folder."""
+    if run_id == "live":
+        row = _live_row()
+        src: Source = "live"
+    elif run_id == "golden":
+        row = _golden_row()
+        src = "golden"
+    else:
+        src = _source(f"{store.RUN_PREFIX}{run_id}")
+        m = store.run_manifest(src)
+        row = {**m, "label": None, "current": False} if m else None
+    if row is None:
+        raise HTTPException(404, f"run {run_id!r} has no files")
+    return {**row, "configs": _config_rows(src)}
 
 
 # --- Loop control ---------------------------------------------------------------

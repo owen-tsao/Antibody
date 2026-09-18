@@ -40,6 +40,7 @@ from chaos.state import (
     save_config,
     save_regression,
     snapshot_golden,
+    write_run_manifest,
 )
 from chaos.status import set_phase, start_run
 from chaos.target_agent import V0_CONFIG, run_target_agent
@@ -373,11 +374,23 @@ def main() -> None:
             print(f"Starting from saved config v{args.from_version}")
 
     start_run(resume=args.resume, cycle=state.cycle)
+    if not args.resume:
+        # After LoopState: a Zendesk that refused every ticket has flipped the world to mock by now.
+        write_run_manifest(
+            world="zendesk" if zendesk.enabled() else "mock",
+            target=os.environ.get("ANTIBODY_TARGET") or "builtin",
+            flags=_run_flags(sys.argv[1:]),
+        )
     try:
         _run_loop(state, args)
     finally:
         # Whatever happens, the UI must not be left showing an agent as "thinking".
         set_phase(state.cycle, "idle")
+
+
+def _run_flags(argv: list[str]) -> list[str]:
+    """The `run` subcommand's flags as typed, without the subcommand itself (`chaos.loop` alone means `run`)."""
+    return argv[1:] if argv[:1] == ["run"] else argv
 
 
 def _run_loop(state: LoopState, args) -> None:

@@ -9,3 +9,8 @@ dependencies = [
     "wandb>=0.30.0",
     "weave>=0.53.9",
 ]
+
+[tool.pytest.ini_options]
+# The repo root is the import root (`api`, `chaos`); pytest is not a dependency: `uv run --with pytest pytest`.
+pythonpath = ["."]
+testpaths = ["tests"]

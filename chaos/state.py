@@ -3,6 +3,7 @@
 Layout:
     runs/configs/v{n}.json   every accepted AgentConfig, one file per version
     runs/regression.json     the captured regression suite (scenarios)
+    runs/run.json            what only the loop process knows about this run (world, target, flags)
     cycles.jsonl             append-only cycle log read by the dashboard
     history/<timestamp>/     every previous run, moved there whole before a fresh run starts
     data/golden/             a committed clean run used as the demo fallback
@@ -28,6 +29,7 @@ RUNS_DIR = Path(_runs_override).expanduser().resolve() if _runs_override else RO
 CONFIGS_DIR = RUNS_DIR / "configs"
 REGRESSION_PATH = RUNS_DIR / "regression.json"
 CYCLES_PATH = RUNS_DIR / "cycles.jsonl" if _runs_override else ROOT / "cycles.jsonl"
+RUN_MANIFEST_PATH = RUNS_DIR / "run.json"
 _history_override = os.environ.get("ANTIBODY_HISTORY_DIR")
 HISTORY_DIR = Path(_history_override).expanduser().resolve() if _history_override else ROOT / "history"
 GOLDEN_DIR = ROOT / "data" / "golden"
@@ -64,6 +66,32 @@ def load_regression() -> list[Scenario]:
     if not REGRESSION_PATH.exists():
         return []
     return [Scenario(**row) for row in json.loads(REGRESSION_PATH.read_text())]
+
+
+def write_run_manifest(world: str, target: str, flags: list[str]) -> Path:
+    """Record the facts about this run that no file the loop writes would otherwise carry.
+
+    Only what the process alone knows goes in: which world it attacked (`mock`/`zendesk`), which target
+    (`builtin` or the `ANTIBODY_TARGET` URL), its CLI flags, and the wall-clock start. Cycle counts,
+    versions and the finish time are *not* stored: the API derives those from `cycles.jsonl`, `configs/`
+    and `status_log.jsonl` at read time (`api.store.run_manifest`), so the manifest can never disagree
+    with the run it describes — the loop appends cycles long after this file is written.
+
+    `flags` are the flags of the process that *started* the run. A `--resume` continuation does not call
+    this, so a run resumed with different flags keeps the first process's; the history folder is one
+    archive, not a resume chain.
+    """
+    from datetime import datetime, timezone
+
+    RUNS_DIR.mkdir(parents=True, exist_ok=True)
+    doc = {
+        "world": world,
+        "target": target,
+        "flags": list(flags),
+        "started_at": datetime.now(timezone.utc).isoformat(),
+    }
+    RUN_MANIFEST_PATH.write_text(json.dumps(doc, indent=2))
+    return RUN_MANIFEST_PATH
 
 
 def _migrate_legacy_archive() -> int:
@@ -121,7 +149,16 @@ def archive_previous_run() -> Path | None:
 
     _migrate_legacy_archive()
     # status.json goes too: a fresh run must not begin with the previous run's last phase on screen.
-    movable = [CONFIGS_DIR, REGRESSION_PATH, CYCLES_PATH, RUNS_DIR / "status.json", RUNS_DIR / "status_log.jsonl", RUNS_DIR / "vulnerability.json", RUNS_DIR / "vulnerability_detail.json"]
+    movable = [
+        CONFIGS_DIR,
+        REGRESSION_PATH,
+        CYCLES_PATH,
+        RUN_MANIFEST_PATH,
+        RUNS_DIR / "status.json",
+        RUNS_DIR / "status_log.jsonl",
+        RUNS_DIR / "vulnerability.json",
+        RUNS_DIR / "vulnerability_detail.json",
+    ]
     present = [p for p in movable if p.exists()]
     if not present:
         return None
