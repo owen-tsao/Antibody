@@ -22,7 +22,7 @@ active replay win over the files; during it configs/regression come from golden.
 
 Importing this module has no side effects. Startup kicks off `weave.init` in a daemon thread
 (network, never blocking) so the first /api/attack does not pay for it; `ANTIBODY_NO_WEAVE=1`
-skips that. The API never writes under runs/ except runs/loop.log.
+skips that. The API writes under runs/ only `loop.log` and `loop_settings.json` (api.loop_ctl).
 
 Test-only override: `ANTIBODY_IGNORE_EXTERNAL_LOOP=1` makes the replay-start guard (and
 loop_ctl's pgrep fallback) ignore loops this API did not spawn, so a scratch server on another port
@@ -35,17 +35,20 @@ import logging
 from contextlib import asynccontextmanager
 from typing import Literal
 
-from fastapi import FastAPI, HTTPException, Query
+from fastapi import FastAPI, HTTPException, Query, Request
+from fastapi.exception_handlers import request_validation_exception_handler
+from fastapi.exceptions import RequestValidationError
+from fastapi.responses import JSONResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
 from api import attack, loop_ctl, manifest, replay, store
 from api.loop_ctl import LoopStartBody
 from api.store import Source
-from chaos.state import GOLDEN_DIR, ROOT
+from chaos.state import ROOT, latest_version
 
 WEB_DIST = ROOT / "web" / "dist"
-NO_KEY_MESSAGE = "WANDB_API_KEY missing; add it to .env to run live (Replay works without one)"
+NO_KEY_MESSAGE = "WANDB_API_KEY missing; add it to .env and restart the API (Replay works without one)"
 
 # uvicorn only installs handlers for its own loggers; logging under its name is the one way a
 # line reliably reaches the terminal the server was started from.
@@ -62,6 +65,17 @@ async def _lifespan(_: FastAPI):
 
 
 app = FastAPI(title="Antibody API", version="0.1.0", lifespan=_lifespan)
+
+
+@app.exception_handler(RequestValidationError)
+async def _body_rules_are_400s(request: Request, exc: RequestValidationError) -> JSONResponse:
+    """A `model_validator` rule on a body ("nothing to run", "until_quiet cannot exceed chaos_cycles")
+    is a client error the drawer shows verbatim, so it answers 400 with the plain message. Field-level
+    errors (a value out of range, a wrong type) keep FastAPI's 422 envelope."""
+    rules = [e["msg"].removeprefix("Value error, ") for e in exc.errors() if e.get("type") == "value_error"]
+    if rules:
+        return JSONResponse(status_code=400, content={"detail": rules[0]})
+    return await request_validation_exception_handler(request, exc)
 
 
 def replay_if_no_loop() -> bool:
@@ -127,7 +141,8 @@ def get_health() -> dict:
         "ok": True,
         "version": app.version,
         "live_exists": store.live_exists(),
-        "golden_exists": (GOLDEN_DIR / "cycles.jsonl").exists(),
+        # What Replay actually needs (api.replay): the recorded phase log and the cycles it lands.
+        "golden_exists": replay.GOLDEN_LOG.exists() and replay.GOLDEN_CYCLES.exists(),
         "has_api_key": not attack.missing_api_key(),
         "weave": attack.weave_status(),
     }
@@ -294,11 +309,13 @@ def get_run(run_id: str) -> dict:
 def loop_start(body: LoopStartBody) -> dict:
     """Spawn `chaos.loop run` with the body's settings (`loop_ctl.LoopStartBody` is the contract).
 
-    Checks run client-error first: a body that describes no work is 400 whether or not a key is set,
-    so the drawer's "nothing to run" reads the same on a keyless install.
+    Client errors come first, whether or not a key is set, so the drawer reads the same on a keyless
+    install: the body's own rules ("nothing to run", `until_quiet` over the cap) are 400s before this
+    runs (`_body_rules_are_400s`); a `resume` with no saved config is 400 here rather than a child
+    that exits 1 a second later.
     """
-    if body.nothing_to_run():
-        raise HTTPException(400, "nothing to run: no seeds and no chaos cycles")
+    if body.resume and latest_version() is None:
+        raise HTTPException(400, "nothing to resume: no saved config to continue from")
     if attack.missing_api_key():
         raise HTTPException(503, NO_KEY_MESSAGE)
     # Heal always means "start a real run": a replay that was playing is the fallback, not a reason

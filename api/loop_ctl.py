@@ -7,10 +7,24 @@ and it can run for minutes. It is started exactly the way the CLI is used by han
 
 `LoopStartBody` is the settings contract (docs/plans/02, A1): every field is one `chaos.loop run`
 flag, so the UI cannot offer a knob the loop does not have; `world: "mock"` becomes
-`ANTIBODY_NO_ZENDESK=1` in the child's environment only. `start()` writes the exact command to
-`runs/loop.log` as a `$ ...` line, env overrides first, so the log reads like a terminal session and
-the line can be pasted back into one. `last_settings()` parses that line back out, which is how
-`GET /api/loop` still reports the settings of the last run after the API itself has restarted.
+`ANTIBODY_NO_ZENDESK=1` in the child's environment only. Cross-field rules (`until_quiet` needs chaos
+cycles to count; a body with no seeds and no cycles is nothing to run) live on the model as a
+`model_validator`, so any code constructing a body gets them; `api.main` turns those into 400s.
+
+`start()` records what it spawned in `runs/loop_settings.json` (`{body, pid, started_at, cmd}`),
+written only after `Popen` succeeded so the file can never describe a run that did not start. That
+sidecar is how `GET /api/loop` still reports the last API-started run's settings after the API itself
+has restarted; `saved_settings()` reads it. The same `$ ...` command line is also appended to
+`runs/loop.log` — a human note so the log reads like a terminal session, never parsed. The loop
+process writes its own start-of-run document, `runs/run.json` (world, target, argv); the two files
+have different authors and are deliberately not merged (see `chaos.state`). Both move to history/
+with the run.
+
+`settings` is null when the sidecar is missing, when the loop that is running is not ours
+(`external: true`: a terminal-started run has no sidecar of its own, and echoing an older one under
+it would be a lie), or when the run on disk is no longer the one we spawned: a fresh terminal run
+archives the sidecar with the old run, and `saved_settings` also checks the loop's own `run.json`
+flags against the ones we passed, so a run started by hand with different settings never wears ours.
 
 `uv run` is the repo's canonical invocation (PLAN.md, docs/FRONTEND.md §3, the golden-run terminal);
 when `uv` is not on the API process's PATH we fall back to `sys.executable -m chaos.loop`, which
@@ -35,8 +49,9 @@ process counts, as before.
 
 Testing without spending tokens: set `ANTIBODY_LOOP_CMD` in the uvicorn environment to a
 shell-style command string (e.g. `ANTIBODY_LOOP_CMD="sleep 30"`) and the API spawns that
-instead of the loop. The 409 / stop / log paths behave identically; `settings` is null because the
-`$` line is not a loop command.
+instead of the loop. The 409 / stop / log paths behave identically. `settings` is the body that was
+asked for, from both `POST /api/loop/start` and `GET /api/loop`: the sidecar records the request, and
+its `cmd` field is honest about what actually ran.
 
 Test-only override: `ANTIBODY_IGNORE_EXTERNAL_LOOP=1` disables the pgrep fallback, so a scratch
 API on another port does not see (and is not blocked by) a real run started elsewhere. It only
@@ -46,6 +61,7 @@ the fallback is to refuse a second loop.
 
 from __future__ import annotations
 
+import json
 import os
 import shlex
 import shutil
@@ -58,9 +74,9 @@ from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import Literal
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, ValidationError, model_validator
 
-from chaos.state import ROOT, RUNS_DIR
+from chaos.state import LOOP_SETTINGS_PATH, ROOT, RUN_MANIFEST_PATH, RUNS_DIR
 
 LOG_PATH = RUNS_DIR / "loop.log"
 
@@ -85,8 +101,14 @@ class LoopStartBody(BaseModel):
     until_quiet: int | None = Field(None, ge=1, le=10)
     world: World = "auto"
 
-    def nothing_to_run(self) -> bool:
-        return self.chaos_cycles == 0 and self.seeds == 0
+    @model_validator(mode="after")
+    def _rules(self) -> LoopStartBody:
+        if self.chaos_cycles == 0 and self.seeds == 0:
+            raise ValueError("nothing to run: no seeds and no chaos cycles")
+        # The streak is counted over chaos cycles only, so it can never be reached past the cap.
+        if self.until_quiet is not None and self.until_quiet > self.chaos_cycles:
+            raise ValueError("until_quiet cannot exceed chaos_cycles")
+        return self
 
 
 def ignore_external() -> bool:
@@ -97,6 +119,8 @@ def ignore_external() -> bool:
 class LoopHandle:
     proc: subprocess.Popen
     started_at: str
+    # The body this run was started with; reported while it runs, no file involved.
+    settings: dict
 
     def running(self) -> bool:
         return self.proc.poll() is None
@@ -107,7 +131,7 @@ class LoopHandle:
             "pid": self.proc.pid,
             "started_at": self.started_at,
             "exit_code": self.proc.returncode,
-            "settings": last_settings(),
+            "settings": self.settings,
             "external": False,
         }
 
@@ -196,9 +220,9 @@ def external_pid() -> int | None:
 def state() -> dict:
     """`{running, pid, started_at, exit_code, settings, external}`.
 
-    `settings` are those of the last run this API spawned (parsed from loop.log, so they survive an API
-    restart). They are null for an external loop: a terminal-started run left no `$` line, and echoing
-    the previous API-started run's settings under it would be a lie.
+    While our child runs, `settings` is the body it was started with (memory). Once it has exited the
+    sidecar is the one source of truth, so a later terminal-started run (which archives or outdates
+    the sidecar) makes `settings` null instead of echoing a run that is no longer the one on disk.
     """
     if _handle is not None and _handle.running():
         return _handle.snapshot()
@@ -206,8 +230,8 @@ def state() -> dict:
     if pid is not None:
         return {**IDLE, "running": True, "pid": pid, "external": True}
     if _handle is not None:
-        return _handle.snapshot()
-    return {**IDLE, "settings": last_settings()}
+        return {**_handle.snapshot(), "settings": saved_settings()}
+    return {**IDLE, "settings": saved_settings()}
 
 
 def is_running() -> bool:
@@ -246,77 +270,49 @@ def _command(body: LoopStartBody) -> list[str]:
 
 
 def _shell_line(cmd: list[str], overrides: dict[str, str]) -> str:
-    """`$ KEY=VAL cmd ...`: what a person would have typed to start this run."""
+    """`$ KEY=VAL cmd ...`: what a person would have typed to start this run. A note in the log, never parsed."""
     return "$ " + " ".join([*(f"{k}={v}" for k, v in overrides.items()), shlex.join(cmd)])
 
 
-def _settings_from_line(line: str) -> dict | None:
-    """Inverse of `_flags` + `_env_overrides` for one `$` line; None when it is not a `chaos.loop run`.
+def _write_settings(body: LoopStartBody, pid: int, started_at: str, cmd: list[str]) -> None:
+    """The sidecar, written whole via rename so a poll never reads a torn file."""
+    doc = {"body": body.model_dump(), "pid": pid, "started_at": started_at, "cmd": cmd}
+    tmp = LOOP_SETTINGS_PATH.with_suffix(".json.tmp")
+    tmp.write_text(json.dumps(doc, indent=2))
+    os.replace(tmp, LOOP_SETTINGS_PATH)
 
-    Flags this body does not cover (`--from-version` from a terminal run) are skipped, not an error.
+
+def _run_on_disk_is_ours(doc: dict, body: LoopStartBody) -> bool:
+    """False when `runs/run.json` says the run on disk was started with other flags than we spawned.
+
+    The loop records its argv in `run.json` at start; if a terminal-started run has replaced ours since
+    the sidecar was written, those flags differ from `_flags(body)`. A `--resume` continues the run on
+    disk, whose `run.json` is the original's, so it is not compared. No `run.json`, or a spawned command
+    that is not the loop (`ANTIBODY_LOOP_CMD`), leaves nothing to contradict the sidecar.
+    """
+    cmd = doc.get("cmd")
+    if body.resume or not isinstance(cmd, list) or "chaos.loop" not in cmd:
+        return True
+    try:
+        flags = json.loads(RUN_MANIFEST_PATH.read_text()).get("flags")
+    except (OSError, ValueError, AttributeError):
+        return True
+    return not isinstance(flags, list) or flags == _flags(body)
+
+
+def saved_settings() -> dict | None:
+    """The body of the last run this API spawned, from the sidecar; None when absent, unreadable or outdated.
+
+    Outdated means the run on disk is not the one the sidecar describes (`_run_on_disk_is_ours`).
     """
     try:
-        argv = shlex.split(line[2:])
-        run_at = argv.index("run", argv.index("chaos.loop"))
-    except ValueError:
+        doc = json.loads(LOOP_SETTINGS_PATH.read_text())
+        body = LoopStartBody.model_validate(doc["body"])
+    except (OSError, ValueError, KeyError, TypeError, ValidationError):
         return None
-    out = LoopStartBody().model_dump()
-    out["world"] = "mock" if "ANTIBODY_NO_ZENDESK=1" in argv[:run_at] else "auto"
-    tokens = iter(argv[run_at + 1 :])
-    try:
-        for tok in tokens:
-            if tok == "--chaos-cycles":
-                out["chaos_cycles"] = int(next(tokens))
-            elif tok == "--seeds":
-                out["seeds"] = int(next(tokens))
-            elif tok == "--no-seeds":
-                out["seeds"] = 0
-            elif tok == "--repair-attempts":
-                out["repair_attempts"] = int(next(tokens))
-            elif tok == "--no-second-pass":
-                out["second_pass"] = False
-            elif tok == "--resume":
-                out["resume"] = True
-            elif tok == "--until-quiet":
-                out["until_quiet"] = int(next(tokens))
-    except (StopIteration, ValueError):
+    if not isinstance(doc, dict) or not _run_on_disk_is_ours(doc, body):
         return None
-    return out
-
-
-_SCAN_CHUNK = 64 * 1024
-_SCAN_LIMIT = 2 * 1024 * 1024
-
-
-def _last_command_line() -> str | None:
-    """The most recent `$` line in loop.log, read backwards from the end so a long log costs one chunk.
-
-    Gives up after `_SCAN_LIMIT`: a log written entirely before `$` lines existed would otherwise be
-    read whole on every poll.
-    """
-    if not LOG_PATH.exists():
-        return None
-    with LOG_PATH.open("rb") as f:
-        end = f.seek(0, os.SEEK_END)
-        buf = b""
-        while end > 0 and len(buf) < _SCAN_LIMIT:
-            start = max(0, end - _SCAN_CHUNK)
-            f.seek(start)
-            buf = f.read(end - start) + buf
-            end = start
-            lines = buf.split(b"\n")
-            # The first piece is a partial line until the file start has been reached.
-            complete = lines if start == 0 else lines[1:]
-            for raw in reversed(complete):
-                if raw.startswith(b"$ "):
-                    return raw.decode(errors="replace").rstrip("\r")
-    return None
-
-
-def last_settings() -> dict | None:
-    """Settings of the last loop this API spawned, from the log rather than memory so they outlive a restart."""
-    line = _last_command_line()
-    return _settings_from_line(line) if line else None
+    return body.model_dump()
 
 
 def start(body: LoopStartBody) -> dict:
@@ -330,6 +326,7 @@ def start(body: LoopStartBody) -> dict:
         cmd = _command(body)
         overrides = _env_overrides(body)
         env = {**os.environ, "PYTHONUNBUFFERED": "1", **overrides}
+        started_at = datetime.now(timezone.utc).isoformat()
         with LOG_PATH.open("ab") as log:
             log.write((_shell_line(cmd, overrides) + "\n").encode())
             log.flush()
@@ -342,8 +339,10 @@ def start(body: LoopStartBody) -> dict:
                 stdin=subprocess.DEVNULL,
                 start_new_session=True,
             )
-        _handle = LoopHandle(proc=proc, started_at=datetime.now(timezone.utc).isoformat())
-    return {"pid": proc.pid, "started_at": _handle.started_at, "settings": body.model_dump()}
+        # After Popen: a spawn that raised must not leave a sidecar describing a run that never began.
+        _write_settings(body, proc.pid, started_at, cmd)
+        _handle = LoopHandle(proc=proc, started_at=started_at, settings=body.model_dump())
+    return {"pid": proc.pid, "started_at": started_at, "settings": body.model_dump()}
 
 
 def _killpg(pid: int, sig: int) -> None:

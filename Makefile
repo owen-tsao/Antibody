@@ -27,7 +27,8 @@ serve:
 	uv run uvicorn api.main:app --port $(PORT)
 
 # Serve in the background, wait for /api/health, open the browser, then hand the terminal to the
-# server so Ctrl-C stops it. The open step is best-effort: no opener found just prints the URL.
+# server so Ctrl-C stops it. The open step is best-effort: macOS has `open`; elsewhere `xdg-open` if
+# present (Debian's /usr/bin/open is openvt, so it is never tried off macOS); otherwise print the URL.
 demo: build
 	@uv run uvicorn api.main:app --port $(PORT) & \
 	pid=$$!; \
@@ -38,7 +39,7 @@ demo: build
 	  sleep 0.5; \
 	done; \
 	echo; echo "  Antibody  $(URL)"; echo; \
-	if command -v open >/dev/null 2>&1; then open "$(URL)"; \
+	if [ "$$(uname -s)" = Darwin ]; then open "$(URL)"; \
 	elif command -v xdg-open >/dev/null 2>&1; then xdg-open "$(URL)" >/dev/null 2>&1; \
 	else echo "  open $(URL) in your browser"; fi; \
 	wait $$pid

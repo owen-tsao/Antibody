@@ -4,6 +4,7 @@ Layout:
     runs/configs/v{n}.json   every accepted AgentConfig, one file per version
     runs/regression.json     the captured regression suite (scenarios)
     runs/run.json            what only the loop process knows about this run (world, target, flags)
+    runs/loop_settings.json  the request body the API spawned this run with (absent for a terminal run)
     cycles.jsonl             append-only cycle log read by the dashboard
     history/<timestamp>/     every previous run, moved there whole before a fresh run starts
     data/golden/             a committed clean run used as the demo fallback
@@ -12,6 +13,9 @@ Layout:
 `ANTIBODY_HISTORY_DIR` relocates history/. `history/` sits outside `runs/` on purpose: `reset` wipes
 `runs/` and must never be able to delete past runs. Older checkouts kept them under `runs/archive/`;
 `_migrate_legacy_archive` moves those into `history/` the first time a run or reset would touch them.
+
+Importing this module refuses (SystemExit) a layout where `reset`'s `rmtree(RUNS_DIR)` could take the
+repo or history/ with it — `ANTIBODY_RUNS_DIR=.` from the repo root, or a history dir inside runs/.
 """
 
 from __future__ import annotations
@@ -29,11 +33,35 @@ RUNS_DIR = Path(_runs_override).expanduser().resolve() if _runs_override else RO
 CONFIGS_DIR = RUNS_DIR / "configs"
 REGRESSION_PATH = RUNS_DIR / "regression.json"
 CYCLES_PATH = RUNS_DIR / "cycles.jsonl" if _runs_override else ROOT / "cycles.jsonl"
+# Two start-of-run documents with different authors, kept apart on purpose. `run.json` is written by
+# the loop process and holds what only it knows (world, target, argv). `loop_settings.json` is written
+# by the API (api.loop_ctl) when *it* spawns a run and holds the request body it was given; a
+# terminal-started run never has one. Both move to history/ with the run and go with `reset`.
 RUN_MANIFEST_PATH = RUNS_DIR / "run.json"
+LOOP_SETTINGS_PATH = RUNS_DIR / "loop_settings.json"
 _history_override = os.environ.get("ANTIBODY_HISTORY_DIR")
 HISTORY_DIR = Path(_history_override).expanduser().resolve() if _history_override else ROOT / "history"
 GOLDEN_DIR = ROOT / "data" / "golden"
 _LEGACY_ARCHIVE_DIR = RUNS_DIR / "archive"
+# Files a file manager drops into a folder; an emptied runs/archive holding only these is still empty.
+_STRAY_FILES = frozenset({".DS_Store", "Thumbs.db"})
+
+
+def _refuse_unsafe_layout() -> None:
+    """`reset` deletes RUNS_DIR whole, so nothing that must survive a reset may live inside it."""
+    if HISTORY_DIR == RUNS_DIR or HISTORY_DIR.is_relative_to(RUNS_DIR):
+        raise SystemExit(
+            f"refusing to start: history dir {HISTORY_DIR} is inside runs dir {RUNS_DIR}; "
+            "`reset` would delete every past run. Set ANTIBODY_HISTORY_DIR outside ANTIBODY_RUNS_DIR."
+        )
+    if ROOT.is_relative_to(RUNS_DIR):
+        raise SystemExit(
+            f"refusing to start: runs dir {RUNS_DIR} contains the repo ({ROOT}); "
+            "`reset` would delete the checkout. Point ANTIBODY_RUNS_DIR at a directory of its own."
+        )
+
+
+_refuse_unsafe_layout()
 
 
 def save_config(cfg: AgentConfig) -> Path:
@@ -94,28 +122,70 @@ def write_run_manifest(world: str, target: str, flags: list[str]) -> Path:
     return RUN_MANIFEST_PATH
 
 
+def _remove(path: Path) -> None:
+    """Delete one entry without following a symlink into somewhere else."""
+    if path.is_dir() and not path.is_symlink():
+        shutil.rmtree(path)
+    else:
+        path.unlink()
+
+
+def _move_dir_complete(src: Path, dest: Path) -> None:
+    """Move a directory so `dest` only ever exists whole.
+
+    Across filesystems `shutil.move` is a copy followed by a delete; a crash in the middle would leave a
+    half-copied `dest` that later looks like a finished run. So the copy lands in `.incoming-<name>`
+    next to `dest` and is renamed into place only once complete; a failed copy is removed and the
+    source is left untouched. Same-filesystem moves are a rename and never partial.
+    """
+    staging = dest.parent / f".incoming-{dest.name}"
+    if staging.is_symlink() or staging.exists():
+        # A previous attempt died mid-copy. `src` still exists (we are moving it), so the leftover
+        # cannot be the only copy of anything.
+        _remove(staging)
+    try:
+        os.rename(src, staging)
+    except OSError:
+        try:
+            shutil.copytree(src, staging, symlinks=True)
+        except BaseException:
+            shutil.rmtree(staging, ignore_errors=True)
+            raise
+        os.replace(staging, dest)
+        shutil.rmtree(src)
+        return
+    os.replace(staging, dest)
+
+
 def _migrate_legacy_archive() -> int:
     """Move `runs/archive/*` (the pre-history/ location) into HISTORY_DIR. Returns how many moved.
 
     Runs before anything that could delete or repopulate runs/, so a `reset` on an old checkout keeps
     every past run. Folders whose name already exists in history/ are left in place rather than merged.
+    The emptied archive/ is removed only when nothing but file-manager droppings (`_STRAY_FILES`)
+    remain; anything else is reported and left for a person. Symlinks are never followed or removed.
     """
+    if _LEGACY_ARCHIVE_DIR.is_symlink():
+        print(f"history: {_LEGACY_ARCHIVE_DIR} is a symlink; not migrating through it")
+        return 0
     if not _LEGACY_ARCHIVE_DIR.is_dir():
         return 0
     moved = 0
     for child in sorted(_LEGACY_ARCHIVE_DIR.iterdir()):
-        if not child.is_dir():
+        if child.is_symlink() or not child.is_dir():
             continue
         dest = HISTORY_DIR / child.name
-        if dest.exists():
+        if dest.is_symlink() or dest.exists():
             print(f"history: {dest} already exists; leaving {child} in place")
             continue
         HISTORY_DIR.mkdir(parents=True, exist_ok=True)
-        shutil.move(str(child), str(dest))
+        _move_dir_complete(child, dest)
         moved += 1
-    # Stray files (Finder's .DS_Store) must not make an emptied archive look like an unmigrated one.
-    if not any(child.is_dir() for child in _LEGACY_ARCHIVE_DIR.iterdir()):
+    remaining = sorted(p.name for p in _LEGACY_ARCHIVE_DIR.iterdir())
+    if all(name in _STRAY_FILES for name in remaining):
         shutil.rmtree(_LEGACY_ARCHIVE_DIR)
+    else:
+        print(f"history: {_LEGACY_ARCHIVE_DIR} still holds {', '.join(remaining)}; leaving it for you to move by hand")
     if moved:
         print(f"history: moved {moved} archived run(s) from {_LEGACY_ARCHIVE_DIR} to {HISTORY_DIR}")
     return moved
@@ -124,18 +194,22 @@ def _migrate_legacy_archive() -> int:
 def reset() -> None:
     """Wipe the current run's state. Explicit command; never happens implicitly on start. history/ is untouched."""
     _migrate_legacy_archive()
+    removed: list[str] = []
     if CYCLES_PATH.exists():
         CYCLES_PATH.unlink()
+        removed.append(str(CYCLES_PATH))
     if RUNS_DIR.is_dir():
-        if _LEGACY_ARCHIVE_DIR.exists():
-            # Only reachable when a legacy folder collided with one already in history/. Never delete it.
+        if _LEGACY_ARCHIVE_DIR.is_symlink() or _LEGACY_ARCHIVE_DIR.exists():
+            # Only reachable when a legacy folder could not be migrated. Never delete it.
             print(f"reset: keeping {_LEGACY_ARCHIVE_DIR} (could not be migrated); move it by hand")
             for child in RUNS_DIR.iterdir():
                 if child != _LEGACY_ARCHIVE_DIR:
-                    shutil.rmtree(child) if child.is_dir() else child.unlink()
+                    _remove(child)
+            removed.append(f"everything in {RUNS_DIR} except {_LEGACY_ARCHIVE_DIR.name}/")
         else:
             shutil.rmtree(RUNS_DIR)
-    print(f"reset: removed {RUNS_DIR} and {CYCLES_PATH}")
+            removed.append(str(RUNS_DIR))
+    print(("reset: removed " + ", ".join(removed)) if removed else "reset: nothing to remove")
 
 
 def archive_previous_run() -> Path | None:
@@ -154,6 +228,7 @@ def archive_previous_run() -> Path | None:
         REGRESSION_PATH,
         CYCLES_PATH,
         RUN_MANIFEST_PATH,
+        LOOP_SETTINGS_PATH,
         RUNS_DIR / "status.json",
         RUNS_DIR / "status_log.jsonl",
         RUNS_DIR / "vulnerability.json",

@@ -39,6 +39,9 @@ log = logging.getLogger("api.attack")
 TIMEOUT_S = 40.0
 
 _weave_ready = False
+# Set when the startup warm-up raised, so /api/health says "failed" instead of "warming" forever;
+# cleared by the retry in `_ensure_weave` succeeding.
+_weave_error: str | None = None
 _weave_lock = threading.Lock()
 _attack_lock = threading.Lock()
 # Single worker so a timed-out attack keeps running to completion in the background (threads
@@ -68,16 +71,18 @@ def missing_api_key() -> bool:
 
 
 def weave_status() -> str:
-    """For /api/health: `disabled` (ANTIBODY_NO_WEAVE), `no_key`, `ready`, or `warming`."""
+    """For /api/health: `disabled` (ANTIBODY_NO_WEAVE), `no_key`, `ready`, `failed` (warm-up raised), or `warming`."""
     if tracing_disabled():
         return "disabled"
     if missing_api_key():
         return "no_key"
-    return "ready" if _weave_ready else "warming"
+    if _weave_ready:
+        return "ready"
+    return "failed" if _weave_error else "warming"
 
 
 def _ensure_weave() -> None:
-    global _weave_ready
+    global _weave_ready, _weave_error
     if _weave_ready or tracing_disabled():
         return
     with _weave_lock:
@@ -89,6 +94,7 @@ def _ensure_weave() -> None:
         for name in ("weave", "weave.evaluation.eval"):
             logging.getLogger(name).setLevel(logging.WARNING)
         _weave_ready = True
+        _weave_error = None
 
 
 def warm_weave() -> None:
@@ -101,10 +107,12 @@ def warm_weave() -> None:
         return
 
     def _go() -> None:
+        global _weave_error
         try:
             _ensure_weave()
         except BaseException as e:  # noqa: BLE001 - a warm-up failure must never take the API down
-            log.warning("weave warm-up failed (%s: %s); the first attack will retry", type(e).__name__, e)
+            _weave_error = f"{type(e).__name__}: {e}"
+            log.warning("weave warm-up failed (%s); the first attack will retry", _weave_error)
 
     threading.Thread(target=_go, name="weave-warmup", daemon=True).start()
 
