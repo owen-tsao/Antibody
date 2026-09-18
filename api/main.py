@@ -4,14 +4,16 @@ The Vite dev server proxies /api to this in development; in production the same 
 serves the built dashboard from web/dist (mounted at "/" after every /api route, only when the
 directory exists), so `make demo` is one server. Read routes serve the loop's files with a golden
 fallback (api.store) from one of three sources, `live`, `golden` or `run:<id>` (a past run under
-history/); /api/runs lists those runs with their manifests. /api/loop/* spawns and controls the loop
-as a subprocess with the settings in the request body (api.loop_ctl); /api/manifest describes the
-target for the Intro line and carries the settings defaults; /api/attack runs one seed scenario
-in-process as a preview (api.attack); /api/replay/* plays a recorded run (golden, or any past run)
-into /api/status and /api/cycles on its original schedule (api.replay); /api/rollback copies a past
-run's config version in as the next live version (api.rollback); /api/health is what the Makefile waits
-on and where the UI learns whether a key is set. /api/loop/reset is planned (docs/FRONTEND.md §3) and
-does not exist yet.
+history/); /api/runs lists those runs with their manifests and names the agent each ran against.
+/api/agents/* is the list of connected agents: add one by URL, ping it, delete it, or start and stop the
+bundled example agent (api.agents, api.example_agent). /api/loop/* spawns and controls the loop
+as a subprocess with the settings in the request body, including which agent to attack (api.loop_ctl);
+/api/manifest describes the default target for the Intro line and carries the settings defaults;
+/api/attack runs one seed scenario in-process as a preview (api.attack); /api/replay/* plays a recorded
+run (golden, or any past run) into /api/status and /api/cycles on its original schedule (api.replay);
+/api/rollback copies a past run's config version in as the next live version (api.rollback); /api/health
+is what the Makefile waits on and where the UI learns whether a key is set. /api/loop/reset is planned
+(docs/FRONTEND.md §3) and does not exist yet.
 
 Without WANDB_API_KEY the API is Replay-only: /api/attack and POST /api/loop/start answer 503
 instead of spawning work that would die on `get_client()`.
@@ -22,10 +24,12 @@ screen, so a replay is ignored *and stopped* the moment one is seen (`replay_if_
 active replay win over the files; during it configs/regression come from the run being replayed
 (golden, or the history run named by `recording=run:<id>`).
 
-Importing this module has no side effects. Startup kicks off `weave.init` in a daemon thread
-(network, never blocking) so the first /api/attack does not pay for it; `ANTIBODY_NO_WEAVE=1`
-skips that. The API writes under runs/ only `loop.log` and `loop_settings.json` (api.loop_ctl) and,
-on `POST /api/rollback`, the next `configs/v{n}.json` plus the merged `regression.json` (api.rollback).
+Importing this module has no side effects. Startup migrates any pre-history/ `runs/archive` and kicks off
+`weave.init` in a daemon thread (network, never blocking) so the first /api/attack does not pay for it;
+`ANTIBODY_NO_WEAVE=1` skips that. The API writes under runs/ only `loop.log` and `loop_settings.json`
+(api.loop_ctl), `example_agent.log` and `example_agent.pid` (api.example_agent) and, on
+`POST /api/rollback`, the next `configs/v{n}.json` plus the merged `regression.json` (api.rollback).
+Under history/ it writes one file, `agents.json` (api.agents).
 
 Test-only override: `ANTIBODY_IGNORE_EXTERNAL_LOOP=1` makes the replay-start guard (and
 loop_ctl's pgrep fallback) ignore loops this API did not spawn, so a scratch server on another port

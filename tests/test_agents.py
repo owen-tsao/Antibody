@@ -103,11 +103,16 @@ def test_add_round_trips_through_the_file(world: dict[str, Path]) -> None:
 
 @pytest.mark.parametrize(
     "url",
-    ["ftp://x", "127.0.0.1:9999", "", "http://a b", "http://" + "x" * 2100],
+    ["ftp://x", "127.0.0.1:9999", "", "http://a b", "http://" + "x" * 2100, "http://", "https://", "http://h/x?y=1", "http://h/x#frag"],
 )
 def test_add_rejects_bad_urls(world: dict[str, Path], url: str) -> None:
     with pytest.raises(ValueError):
         agents.add_agent("x", url)
+
+
+def test_bad_url_is_400_on_the_route(client: TestClient) -> None:
+    for url in ("http://", "http://h/x?y=1"):
+        assert client.post("/api/agents", json={"name": "x", "url": url}).status_code == 400
 
 
 def test_add_rejects_empty_name(world: dict[str, Path]) -> None:
@@ -134,12 +139,16 @@ def test_delete_removes_only_stored_rows(world: dict[str, Path]) -> None:
             agents.delete_agent(bad)
 
 
-def test_unreadable_store_reads_as_empty(world: dict[str, Path]) -> None:
+def test_unreadable_store_reads_as_empty(world: dict[str, Path], client: TestClient) -> None:
     world["history"].mkdir()
     (world["history"] / "agents.json").write_text("{not json")
     assert [r["id"] for r in agents.list_agents()] == ["builtin", "example"]
     (world["history"] / "agents.json").write_text(json.dumps([{"id": 1}, "x", {"id": "ok", "url": "http://h", "name": "n"}]))
     assert [r["id"] for r in agents.list_agents()] == ["builtin", "example", "ok"]
+    # A hand-edited row whose URL resolves to nothing is skipped, not raised: the runs list must not 500.
+    (world["history"] / "agents.json").write_text(json.dumps([{"id": "bad", "url": "gopher://x", "name": "n"}]))
+    assert [r["id"] for r in agents.list_agents()] == ["builtin", "example"]
+    assert client.get("/api/runs").status_code == 200
 
 
 # --- resolving and joining --------------------------------------------------------------------------
@@ -233,6 +242,17 @@ def test_ping_refused(world: dict[str, Path]) -> None:
     assert _stored(world, row["id"])["last_ping"]["ok"] is False
 
 
+def test_ping_http_error_names_the_status(world: dict[str, Path]) -> None:
+    broken = FakeAgent(status=500, tools=FIVE_TOOLS)
+    try:
+        out = agents.ping(agents.add_agent("a", broken.url))
+    finally:
+        broken.close()
+    assert out["ok"] is False and out["error"].startswith("agent answered HTTP 500")
+    # No tool listing after a failed hello, even though this agent would have answered it.
+    assert out["tools"] is None
+
+
 def test_ping_timeout(world: dict[str, Path], monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(agents, "PING_TIMEOUT_S", 0.3)
     slow = FakeAgent(delay=1.5)
@@ -322,6 +342,24 @@ def test_example_start_spawns_in_its_folder_and_409s_when_bound(client: TestClie
     assert stopped.status_code == 200 and stopped.json()["owned"] is False and stopped.json()["running"] is True
 
 
+def test_stale_pid_file_is_never_signalled(world: dict[str, Path], monkeypatch: pytest.MonkeyPatch) -> None:
+    """After a reboot the pid in the file can belong to anything; only a session leader running agent.py is ours."""
+    import os
+
+    world["runs"].mkdir()
+    (world["runs"] / "example_agent.pid").write_text(str(os.getpid()))  # alive, but this test process
+    signalled: list[tuple[int, int]] = []
+    monkeypatch.setattr(loop_ctl, "_killpg", lambda pid, sig: signalled.append((pid, sig)))
+    assert example_agent._owned_pid() is None
+    assert not (world["runs"] / "example_agent.pid").exists(), "a pid that is not our child is forgotten"
+    with pytest.raises(LookupError):
+        example_agent.stop()
+    assert signalled == []
+    # The check itself: our own pid is not a session leader whose command line names agent.py.
+    assert example_agent._looks_like_our_child(os.getpid()) is False
+    assert example_agent._looks_like_our_child(2**22) is False
+
+
 # --- target from the request ------------------------------------------------------------------------
 
 
@@ -348,6 +386,22 @@ def test_start_sets_the_child_target_explicitly(world: dict[str, Path], monkeypa
 
     with pytest.raises(ValueError):
         loop_ctl.start(loop_ctl.LoopStartBody(target="nope"))
+
+
+def test_sidecar_is_outdated_by_a_run_against_another_target(world: dict[str, Path], monkeypatch: pytest.MonkeyPatch) -> None:
+    body = loop_ctl.LoopStartBody(chaos_cycles=2, target="builtin")
+    loop_ctl.start(body)
+    loop_ctl._handle.proc.returncode = 0
+    monkeypatch.setattr(loop_ctl, "_handle", None)  # the API restarted
+    # Same flags, same target in the bare form the loop writes: still ours.
+    (world["runs"] / "run.json").write_text(json.dumps({"flags": loop_ctl._flags(body), "target": "builtin"}))
+    assert loop_ctl.state()["settings"] == body.model_dump()
+    # Same flags, but a terminal run pointed at an external agent: not ours any more.
+    (world["runs"] / "run.json").write_text(json.dumps({"flags": loop_ctl._flags(body), "target": "http://127.0.0.1:8790"}))
+    assert loop_ctl.state()["settings"] is None
+    # Older run.json without a target field: nothing to contradict the sidecar.
+    (world["runs"] / "run.json").write_text(json.dumps({"flags": loop_ctl._flags(body)}))
+    assert loop_ctl.state()["settings"] == body.model_dump()
 
 
 def test_unknown_target_is_400_before_the_key_check(client: TestClient) -> None:

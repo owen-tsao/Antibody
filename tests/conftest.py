@@ -64,10 +64,11 @@ class FakeAgent:
     reply body wholesale, for agents that answer with something other than `{reply}`.
     """
 
-    def __init__(self, delay: float = 0.0, tools: list[dict] | None = None, raw_reply: bytes | None = None):
+    def __init__(self, delay: float = 0.0, tools: list[dict] | None = None, raw_reply: bytes | None = None, status: int = 200):
         self.delay = delay
         self.tools = tools
         self.raw_reply = raw_reply
+        self.status = status
         self.received: list[dict[str, Any]] = []
         outer = self
 
@@ -92,6 +93,9 @@ class FakeAgent:
                 body = json.loads(self.rfile.read(int(self.headers["Content-Length"])))
                 outer.received.append(body)
                 time.sleep(outer.delay)
+                if outer.status != 200:
+                    self._send(outer.status, b'{"detail": "broken"}')
+                    return
                 if outer.raw_reply is not None:
                     self._send(200, outer.raw_reply)
                     return

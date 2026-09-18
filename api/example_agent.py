@@ -11,7 +11,9 @@ and can take a minute, during which the process exists and the port does not; an
 hand from a shell is just as running as one we spawned. `start()` therefore refuses (409) whenever the port
 is bound, whoever bound it, and `stop()` only ever signals a process this module spawned or left a pid
 file for. The pid file (`runs/example_agent.pid`) is how a restarted API still owns the child; it is
-removed when the child is stopped or seen dead.
+removed when the child is stopped or seen dead. A pid read from the file is trusted only if it still looks
+like our child — a session leader (we spawn with `start_new_session=True`) whose command line names
+`agent.py` — because after a reboot the same number can belong to anything.
 
 The agent needs `WANDB_API_KEY` (it calls inference); the route answers 503 without one, like every other
 route that would spawn work destined to fail.
@@ -27,6 +29,7 @@ import sys
 import threading
 from datetime import datetime, timezone
 
+from api import loop_ctl
 from chaos.state import ROOT, RUNS_DIR
 from chaos.target import get_json
 
@@ -67,8 +70,24 @@ def _alive(pid: int) -> bool:
     except ProcessLookupError:
         return False
     except PermissionError:
-        return True
+        # Alive, but not ours to signal: treated as "not our child" so we never try to.
+        return False
     return True
+
+
+def _looks_like_our_child(pid: int) -> bool:
+    """A pid from the file is ours only if it leads its own session and its command line names `agent.py`.
+
+    `start_new_session=True` makes our child the session (and group) leader, so `getpgid(pid) == pid`;
+    the command-line check catches a recycled pid after a reboot. One `ps` call, like `loop_ctl._cwd_of`.
+    """
+    try:
+        if os.getpgid(pid) != pid:
+            return False
+        out = subprocess.run(["ps", "-o", "command=", "-p", str(pid)], capture_output=True, text=True, timeout=2, check=False).stdout
+    except (ProcessLookupError, PermissionError, OSError, subprocess.TimeoutExpired):
+        return False
+    return "agent.py" in out
 
 
 def _owned_pid() -> int | None:
@@ -78,7 +97,7 @@ def _owned_pid() -> int | None:
             return _proc.pid
         return None
     pid = _read_pid()
-    if pid is not None and _alive(pid):
+    if pid is not None and _alive(pid) and _looks_like_our_child(pid):
         return pid
     if pid is not None:
         PID_PATH.unlink(missing_ok=True)
@@ -126,13 +145,6 @@ def start() -> dict:
     return {"pid": _proc.pid, "started_at": started_at, "url": URL, "running": False, "starting": True}
 
 
-def _killpg(pid: int, sig: int) -> None:
-    try:
-        os.killpg(os.getpgid(pid), sig)
-    except ProcessLookupError:
-        pass
-
-
 def stop() -> dict:
     """SIGTERM the agent we spawned (SIGKILL after 5 s). LookupError when we own no running agent.
 
@@ -146,12 +158,12 @@ def stop() -> dict:
             if port_answers():
                 return {**state(), "stopped": False, "owned": False}
             raise LookupError("the example agent is not running")
-        _killpg(pid, signal.SIGTERM)
+        loop_ctl._killpg(pid, signal.SIGTERM)
         if _proc is not None:
             try:
                 _proc.wait(timeout=5)
             except subprocess.TimeoutExpired:
-                _killpg(pid, signal.SIGKILL)
+                loop_ctl._killpg(pid, signal.SIGKILL)
                 _proc.wait(timeout=5)
         else:
             # A child from a previous API process: not ours to wait() on, so poll it instead.
@@ -160,16 +172,11 @@ def stop() -> dict:
                     break
                 threading.Event().wait(0.1)
             else:
-                _killpg(pid, signal.SIGKILL)
+                loop_ctl._killpg(pid, signal.SIGKILL)
         _proc = None
         PID_PATH.unlink(missing_ok=True)
     return {**state(), "stopped": True, "owned": True}
 
 
 def log_tail(n: int) -> list[str]:
-    from collections import deque
-
-    if not LOG_PATH.exists():
-        return []
-    with LOG_PATH.open("r", errors="replace") as f:
-        return list(deque(f, maxlen=n))
+    return loop_ctl.tail_lines(LOG_PATH, n)

@@ -80,6 +80,7 @@ from pydantic import BaseModel, Field, ValidationError, model_validator
 
 from api import agents
 from chaos.state import LOOP_SETTINGS_PATH, ROOT, RUN_MANIFEST_PATH, RUNS_DIR
+from chaos.target import resolve_target
 
 LOG_PATH = RUNS_DIR / "loop.log"
 
@@ -301,21 +302,31 @@ def _write_settings(body: LoopStartBody, pid: int, started_at: str, cmd: list[st
 
 
 def _run_on_disk_is_ours(doc: dict, body: LoopStartBody) -> bool:
-    """False when `runs/run.json` says the run on disk was started with other flags than we spawned.
+    """False when `runs/run.json` says the run on disk was started with other flags, or against another
+    target, than we spawned.
 
-    The loop records its argv in `run.json` at start; if a terminal-started run has replaced ours since
-    the sidecar was written, those flags differ from `_flags(body)`. A `--resume` continues the run on
-    disk, whose `run.json` is the original's, so it is not compared. No `run.json`, or a spawned command
-    that is not the loop (`ANTIBODY_LOOP_CMD`), leaves nothing to contradict the sidecar.
+    The loop records its argv and target in `run.json` at start; if a terminal-started run has replaced ours
+    since the sidecar was written, those differ from `_flags(body)` / the sidecar's canonical `target`
+    (targets are compared normalised, since `run.json` stores the string verbatim). A `--resume` continues
+    the run on disk, whose `run.json` is the original's, so it is not compared. No `run.json`, or a spawned
+    command that is not the loop (`ANTIBODY_LOOP_CMD`), leaves nothing to contradict the sidecar.
     """
     cmd = doc.get("cmd")
     if body.resume or not isinstance(cmd, list) or "chaos.loop" not in cmd:
         return True
     try:
-        flags = json.loads(RUN_MANIFEST_PATH.read_text()).get("flags")
+        manifest = json.loads(RUN_MANIFEST_PATH.read_text())
+        flags, recorded_target = manifest.get("flags"), manifest.get("target")
     except (OSError, ValueError, AttributeError):
         return True
-    return not isinstance(flags, list) or flags == _flags(body)
+    if isinstance(flags, list) and flags != _flags(body):
+        return False
+    if isinstance(recorded_target, str) and isinstance(doc.get("target"), str):
+        try:
+            return resolve_target(recorded_target).name == resolve_target(doc["target"]).name
+        except ValueError:
+            return False
+    return True
 
 
 def saved_settings() -> dict | None:
@@ -365,7 +376,7 @@ def start(body: LoopStartBody) -> dict:
 
 
 def _killpg(pid: int, sig: int) -> None:
-    """Signal the child's process group; a child that already exited is not an error."""
+    """Signal the child's process group; a child that already exited is not an error. Shared with `api.example_agent`."""
     try:
         os.killpg(os.getpgid(pid), sig)
     except ProcessLookupError:
@@ -392,7 +403,12 @@ def stop() -> dict:
 
 
 def log_tail(n: int) -> list[str]:
-    if not LOG_PATH.exists():
+    return tail_lines(LOG_PATH, n)
+
+
+def tail_lines(path, n: int) -> list[str]:
+    """The last `n` lines of a log file, or [] when it does not exist. Shared with `api.example_agent`."""
+    if not path.exists():
         return []
-    with LOG_PATH.open("r", errors="replace") as f:
+    with path.open("r", errors="replace") as f:
         return list(deque(f, maxlen=n))
