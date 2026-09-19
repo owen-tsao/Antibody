@@ -48,6 +48,46 @@ Nothing plays off-screen: whenever the route is anything but `/app/runs/live` (a
 or a deep link arriving with a tape still playing), `App` asks `/api/replay` and pauses a replay that is
 `active && !paused`. One mechanism, decided on the fresh answer, so a tape that was just stopped is left alone.
 
+## Run page
+
+`/app/runs/:id` is one component, `pages/Run.tsx`, for every run the API lists: `live` (the un-archived
+run, running or not — Block 4's identity rule), `golden` (the demo tape) and any history id. It has four
+faces, picked by `runMode(id, row, loop, replay)` in `lib/derive.ts`:
+
+| Mode | When | Reads | Shows |
+| --- | --- | --- | --- |
+| `starting` | `id === "live"`, `loop.running`, and `GET /api/runs/live` still 404s (no `run.json` yet) | `live` | title, "starting · measuring baseline…", the plate saying the same, grey orbs |
+| `live` | `id === "live"` and `loop.running` | `live` cycles/state 2 s, `status` from the shell | stats plate, four orbs, "stop run", the cycles box following the newest cycle, **Results so far** |
+| `finished` | a history row, `golden`, or `live` with `loop.running === false` | `run:<id>` / `golden` / `live` cycles/state 10 s, `GET /api/runs/{id}` | header facts (`started · agent · world · flags · v0 → vN`), the numbers line, the vulnerability line, **watch it back** and **roll back to v<n>** as quiet text, the cycles box (static, nothing lit), **Results** |
+| `watching` | `GET /api/replay` is active and its `recording.source` is this run's tape (on `/app/runs/live`, any tape) | `live` cycles/state 2 s + `status` from the shell | the live face with `ReplayControls` under the title; **stop** returns to `finished` |
+
+**The replay rule.** A replay only overrides `live` reads (`api/main.py` `_read_source`); `run:<id>` is served
+as asked and `/api/status` has no `source`. So "watch it back" — `POST /api/replay/start {speed: 3,
+recording: "golden" | "run:<id>"}` — flips the page's reads to `live` for the duration and back when the tape
+stops. Every answer is tagged with the source it was read from and the page keeps the last answer per source,
+so stopping shows the run's own rows immediately rather than the tape's last frame or a "loading…" flash.
+`/app/runs/:id/replay` arrives already watching (the Replays page's "watch"); stopping from that address
+rewrites it to `/app/runs/:id` so a refresh does not start the tape again. Leaving the run (any route that is
+not this run's page or one of its cycles) **stops** the replay — `App.tsx`, one effect keyed on the run on
+screen, asking `/api/replay` fresh and stopping a tape that is not that run's. A `/replay` arrival is exempt:
+the page swaps tapes itself before starting its own. `live` has no tape (`POST /api/replay/start` refuses it),
+so the current run shows no "watch it back".
+
+**Roll back.** Finished history runs (never `live`, which the API answers 400; never while `loop.running`,
+when the loop owns the live config) list every version the run saved. The first click turns the action into
+`confirm roll back to v<n> · cancel`; the second sends `POST /api/rollback {run, version}` and shows the
+answer as one line: `<patch_note> → live is now v<k> · N tests are newer than this config`. Errors (409 while
+a loop runs or across targets) show the API's message in the same slot.
+
+**Cycles.** `/app/runs/:id/cycles/:n` is `pages/Cycle.tsx` with `source` from the route (`readSource(id)`):
+`/api/cycles?source=…` and, through `ConfigDiff`, `/api/configs/{v}?source=…`, so a history run's cycle diffs
+that run's configs. Back goes to the run. Gate copy reads the sampled fix: `fixed 2/2` on accept, `fixed 1/2 —
+not accepted` on a reject where a sample failed; nothing extra when the gate ran the fix once (`fixLine`).
+
+The seed-attack preview under the results list appears only on `/app/runs/live` with a run row present,
+against the built-in agent (`seedAttackAvailable`), with a key set: it runs the API's default agent against
+the *live* config tree, which says nothing about a history run's versions.
+
 ---
 
 ## 1. What we are building
