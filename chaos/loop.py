@@ -367,6 +367,11 @@ def main() -> None:
         print(f"cleanup: solved {zendesk.cleanup()} antibody tickets")
         return
 
+    if args.command == "check" and not os.environ.get("WANDB_API_KEY"):
+        # Say it before weave.init does, in one line, with the exit status CI reads as "did not run".
+        print("check needs WANDB_API_KEY (every row is a Weave evaluation); set it in .env or the environment", file=sys.stderr)
+        raise SystemExit(2)
+
     # Evaluation progress and summary output drown out the loop narrative (and would dirty `check --json`).
     for name in ("weave", "weave.evaluation.eval"):
         logging.getLogger(name).setLevel(logging.WARNING)
@@ -495,7 +500,8 @@ def _measure_vulnerability(state: LoopState) -> None:
     set_phase(state.cycle, "baseline", measuring="vulnerability")
     try:
         vulnerability_by_version(samples=VULNERABILITY_SAMPLES, versions=versions)
-    except Exception as e:  # noqa: BLE001 - the run itself is complete and on disk; a failed measurement must not mark it crashed
+    except (Exception, SystemExit) as e:  # noqa: BLE001 - the run itself is complete and on disk; a failed measurement must not mark it crashed
+        # SystemExit too: `vulnerability_by_version` is also a CLI command and reports "nothing to measure" that way.
         print(f"vulnerability: measurement failed ({type(e).__name__}: {e}); the run's cycles are unaffected")
 
 
@@ -538,13 +544,15 @@ def vulnerability_by_version(samples: int = VULNERABILITY_SAMPLES, versions: lis
 
     `versions` narrows the measurement to those saved versions (the loop's `--vulnerability` measures v0 and
     the final one); None means every version under `configs/`, which is what the `vulnerability` command does.
+    v0 is always measurable: a run started `--from-version N` never saves a v0 file, so the code's V0_CONFIG
+    stands in, the same way `check_config` treats it.
     """
     from chaos.state import CONFIGS_DIR, RUNS_DIR
 
     suite = load_regression()
     saved = sorted(int(p.stem[1:]) for p in CONFIGS_DIR.glob("v*.json") if p.stem[1:].isdigit()) if CONFIGS_DIR.exists() else []
     if versions is not None:
-        missing = sorted(set(versions) - set(saved))
+        missing = sorted(set(versions) - set(saved) - {0})
         if missing:
             raise SystemExit(f"no saved config for v{', v'.join(map(str, missing))}")
         saved = sorted(set(versions))
@@ -555,7 +563,7 @@ def vulnerability_by_version(samples: int = VULNERABILITY_SAMPLES, versions: lis
     detail: dict[str, dict[str, list[bool]]] = {}
     rows = scenario_rows(suite)
     for v in versions:
-        model = TargetAgent(config=load_config(v))
+        model = TargetAgent(config=_saved_or_v0(v))
         landed: dict[str, list[bool]] = {s.id: [] for s in suite}
         for i in range(samples):
             run = run_evaluation(model, rows, "vulnerability", f"vulnerability v{v} sample {i + 1}/{samples}")
@@ -587,22 +595,27 @@ def vulnerability_by_version(samples: int = VULNERABILITY_SAMPLES, versions: lis
 # --- check: CI for agent changes ---------------------------------------------------------------------------
 
 
-def check_config(version: int | None) -> AgentConfig:
-    """The config `check` verifies: the saved `v{version}`, the latest saved one, or the fresh v0 when there is none.
+def _saved_or_v0(version: int) -> AgentConfig:
+    """`load_config(version)`, except v0 is always available: it is the code's initial deployment, not a file.
 
-    v0 is always available because it is the code's initial deployment, not a file; every other version
-    must have been saved by a run or a rollback (FileNotFoundError otherwise, with the path in the message).
+    A saved v0 wins when there is one (a rollback may have rewritten it). Every other version must have been
+    saved by a run or a rollback (FileNotFoundError otherwise, with the path in the message).
     """
+    try:
+        return load_config(version)
+    except FileNotFoundError:
+        if version == 0:
+            return V0_CONFIG
+        raise
+
+
+def check_config(version: int | None) -> AgentConfig:
+    """The config `check` verifies: the saved `v{version}`, the latest saved one, or the fresh v0 when there is none."""
     from chaos.state import latest_version
 
     if version is None:
         version = latest_version()
-    if version in (None, 0):
-        try:
-            return load_config(0)
-        except FileNotFoundError:
-            return V0_CONFIG
-    return load_config(version)
+    return _saved_or_v0(version or 0)
 
 
 def run_check(cfg: AgentConfig, regression: list[Scenario], legit: list[Scenario]) -> dict:
@@ -681,13 +694,23 @@ def format_check(result: dict) -> str:
 
 
 def check(version: int | None, *, as_json: bool = False) -> int:
-    """`chaos.loop check`: exit status 0 when every row passes, 1 otherwise, 2 when there is nothing to check."""
+    """`chaos.loop check`: exit 0 when every row passes, 1 otherwise, 2 when there was nothing to check.
+
+    "Nothing to check" is its own status so a CI job with a mistyped ANTIBODY_RUNS_DIR cannot pass forever
+    on an empty directory: with no `--version`, no saved config and no captured suite, it says so and stops.
+    `check --version 0` is the explicit way to run the legit suite alone on a fresh clone.
+    """
+    from chaos.state import RUNS_DIR, latest_version
+
+    regression = load_regression()
+    if version is None and latest_version() is None and not regression:
+        print(f"nothing captured under {RUNS_DIR}: no saved config and no regression suite (use --version 0 for the legit suite alone)", file=sys.stderr)
+        return 2
     try:
         cfg = check_config(version)
     except FileNotFoundError as e:
         print(str(e), file=sys.stderr)
         return 2
-    regression = load_regression()
     result = run_check(cfg, regression, LEGIT_SCENARIOS)
     if as_json:
         print(json.dumps(result, indent=2))

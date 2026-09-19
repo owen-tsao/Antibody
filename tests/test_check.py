@@ -165,6 +165,40 @@ def test_exit_codes(runs: Path, scripted, capsys: pytest.CaptureFixture[str]) ->
     assert "v9" in capsys.readouterr().err
 
 
+def test_nothing_captured_is_exit_2_not_a_pass(runs: Path, scripted, capsys: pytest.CaptureFixture[str]) -> None:
+    """No --version, no saved config, no suite: a mistyped ANTIBODY_RUNS_DIR in CI must not pass forever."""
+    assert loop.check(None) == 2
+    err = capsys.readouterr().err
+    assert "nothing captured under" in err and str(runs) in err and "--version 0" in err
+    assert not scripted.calls
+
+
+def test_explicit_version_0_runs_the_legit_suite_alone(runs: Path, scripted, capsys: pytest.CaptureFixture[str]) -> None:
+    assert loop.check(0) == 0
+    assert [c[0] for c in scripted.calls] == ["check-legit"]
+    assert "regression 0/0" in capsys.readouterr().out
+
+
+def test_a_suite_without_configs_is_still_checkable_by_default(runs: Path, scripted) -> None:
+    """A committed regression.json with no configs/ (a customer keeps only the suite) checks against v0."""
+    state.save_regression(REGRESSION)
+    assert loop.check(None) == 0
+    assert [c[0] for c in scripted.calls] == ["check-regression", "check-legit"]
+
+
+def test_check_without_a_key_says_so_before_touching_weave() -> None:
+    import os
+    import subprocess
+    import sys
+
+    # An empty value beats `load_env`'s setdefault, so this holds even in a checkout whose .env has a key.
+    env = {**os.environ, "WANDB_API_KEY": ""}
+    r = subprocess.run([sys.executable, "-m", "chaos.loop", "check"], cwd=state.ROOT, env=env, capture_output=True, text=True, timeout=120)
+    assert r.returncode == 2
+    lines = [line for line in r.stderr.strip().splitlines() if line.strip()]
+    assert len(lines) == 1 and "WANDB_API_KEY" in lines[0], r.stderr
+
+
 def test_json_output_is_one_document(runs: Path, scripted, capsys: pytest.CaptureFixture[str]) -> None:
     state.save_regression(REGRESSION)
     scripted.fail = {"seed-injection-refund"}
