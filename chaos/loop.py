@@ -286,6 +286,7 @@ def run_cycle(state: LoopState, scenario: Scenario, retry_of: int | None = None)
         config_before=before,
         config_after=state.cfg.version,
         regression_suite_size=len(state.regression_suite),
+        legit_suite_size=len(state.legit_suite),
         weave_call_url=_current_trace_url(),
         retry_of=retry_of,
         also_fixed=also_fixed,

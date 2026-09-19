@@ -120,6 +120,8 @@ export interface CycleRecord {
   config_before: number;
   config_after: number;
   regression_suite_size: number;
+  /** Denominator behind `gate.legit_pass_rate`. Pydantic defaults it to 3 on records written before it existed (the golden tape). */
+  legit_suite_size: number;
   weave_call_url: string | null;
 }
 

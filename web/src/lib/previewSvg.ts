@@ -7,7 +7,7 @@
 // use the page's web font: an <img> SVG is a separate document and cannot see Inter.
 
 import type { CycleRecord } from "@/api";
-import { pct, regressionPct, rowStatus } from "@/lib/derive";
+import { legitPct, regressionPct, rowStatus } from "@/lib/derive";
 
 export const CHART_W = 300;
 export const CHART_H = 260;
@@ -41,7 +41,6 @@ function versionsOf(c: CycleRecord) {
 export function cycleChartSvg(
   cycle: CycleRecord,
   all: CycleRecord[],
-  legitSize: number,
   size: ChartSize = { w: CHART_W, h: CHART_H },
 ): string {
   const W = size.w;
@@ -128,7 +127,7 @@ export function cycleChartSvg(
   const status = rowStatus(cycle);
   const title = `cycle ${cycle.cycle} · ${versionsOf(cycle)} · ${status}`;
   const footer = cycle.gate
-    ? `regression ${regressionPct(cycle)} · legit ${pct(cycle.gate.legit_pass_rate, legitSize)} · suite ${cycle.regression_suite_size}`
+    ? `regression ${regressionPct(cycle)} · legit ${legitPct(cycle)} · suite ${cycle.regression_suite_size}`
     : `attack blocked · no patch, no gate · suite ${cycle.regression_suite_size}`;
 
   const legendY = H - 12;
@@ -151,8 +150,8 @@ export function cycleChartSvg(
 </svg>`;
 }
 
-export function cyclePreviewSvg(cycle: CycleRecord, all: CycleRecord[], legitSize: number): string {
-  return `data:image/svg+xml;utf8,${encodeURIComponent(cycleChartSvg(cycle, all, legitSize))}`;
+export function cyclePreviewSvg(cycle: CycleRecord, all: CycleRecord[]): string {
+  return `data:image/svg+xml;utf8,${encodeURIComponent(cycleChartSvg(cycle, all))}`;
 }
 
 /**

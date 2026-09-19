@@ -47,9 +47,6 @@ import { cycleChartSvg } from "@/lib/previewSvg";
 import { replace, type Route } from "@/lib/routes";
 import { cn } from "@/lib/utils";
 
-// Size of the fixed legit-user suite (chaos/scenarios.py LEGIT_SCENARIOS); /api/manifest does not carry it yet.
-const LEGIT_SIZE = 3;
-
 // At 1× the recording's 47 s gates look frozen; 3× plays the 7-cycle golden run in ~5.5 min with a visible
 // phase change every few seconds. The controls label the speed so nothing is passed off as real time.
 const REPLAY_SPEED = 3;
@@ -343,9 +340,9 @@ export default function Run({
     repairColors.current = orbs.repair === "thinking" ? ORB_COLORS.repair : ORB_GREY;
   }, [orbs.chaos, orbs.target, orbs.judge, orbs.repair]);
 
-  const sum = runSummary(cycles ?? [], LEGIT_SIZE);
+  const sum = runSummary(cycles ?? []);
   const verb = phaseVerb(status);
-  const views = useMemo(() => cycleViews(cycles ?? [], status, LEGIT_SIZE), [cycles, status]);
+  const views = useMemo(() => cycleViews(cycles ?? [], status), [cycles, status]);
   const ordered = useMemo(() => (cycles ? [...cycles].reverse() : []), [cycles]);
   const items: InteractiveListItem[] = useMemo(
     () => [
@@ -354,7 +351,7 @@ export default function Run({
         client: `cycle ${r.cycle} · ${shortTitle(r)}`,
         status: rowStatus(r),
         services: r.config_before === r.config_after ? `v${r.config_after}` : `v${r.config_before} → v${r.config_after}`,
-        preview: cycleChartSvg(r, cycles ?? [], LEGIT_SIZE),
+        preview: cycleChartSvg(r, cycles ?? []),
       })),
     ],
     [previews, ordered, cycles, dismiss],

@@ -84,17 +84,9 @@ export function regressionPct(r: CycleRecord): string {
   return n === 0 ? "—" : pct(r.gate.regression_pass_rate, n);
 }
 
-/** `{patch layer} · {gate word} {numbers} · {config_before → config_after}` */
-export function servicesLine(r: CycleRecord, legitSize: number): string {
-  const layer = r.patch ? patchLayer(r.patch.kind) : "—";
-  const gate = r.gate
-    ? `${r.gate.accepted ? "accepted" : "rejected"} ${regressionPct(r)} ${pct(r.gate.legit_pass_rate, legitSize)}`
-    : "—";
-  const cfg =
-    r.config_before === r.config_after
-      ? `v${r.config_after}`
-      : `v${r.config_before} → v${r.config_after}`;
-  return `${layer} · ${gate} · ${cfg}`;
+/** `3/3` from the record's own legit denominator; `—` without a gate. */
+export function legitPct(r: CycleRecord): string {
+  return r.gate ? pct(r.gate.legit_pass_rate, r.legit_suite_size) : "—";
 }
 
 export interface Headline {
@@ -104,13 +96,13 @@ export interface Headline {
   lastGate: "accepted" | "rejected" | null;
 }
 
-export function headline(cycles: CycleRecord[], legitSize: number): Headline {
+function headline(cycles: CycleRecord[]): Headline {
   const last = cycles.at(-1);
   const lastWithGate = [...cycles].reverse().find((c) => c.gate);
   return {
     version: last?.config_after ?? null,
     suiteSize: last?.regression_suite_size ?? 0,
-    legit: lastWithGate?.gate ? pct(lastWithGate.gate.legit_pass_rate, legitSize) : "—",
+    legit: lastWithGate ? legitPct(lastWithGate) : "—",
     lastGate: lastWithGate?.gate ? (lastWithGate.gate.accepted ? "accepted" : "rejected") : null,
   };
 }
@@ -696,7 +688,7 @@ function subtask(id: string, title: string, description: string, status: string,
 }
 
 /** A finished cycle as one Plan task with the five steps as subtasks. */
-export function cycleToTask(r: CycleRecord, legitSize: number, isLast: boolean): Task {
+function cycleToTask(r: CycleRecord, isLast: boolean): Task {
   const id = String(r.cycle);
   const faults = r.scenario.faults.map((f) => `${f.tool}: ${f.mode}`).join(", ");
   const tc = r.verdict.evidence.tool_call;
@@ -743,7 +735,7 @@ export function cycleToTask(r: CycleRecord, legitSize: number, isLast: boolean):
     subtask(
       `${id}.gate`,
       r.gate
-        ? `Gate ${r.gate.accepted ? "accepted" : "rejected"} · regression ${regressionPct(r)} · legit ${pct(r.gate.legit_pass_rate, legitSize)}`
+        ? `Gate ${r.gate.accepted ? "accepted" : "rejected"} · regression ${regressionPct(r)} · legit ${legitPct(r)}`
         : "Gate not run",
       r.gate ? r.gate.reason : `Config stays at v${r.config_after}.`,
       r.gate ? (r.gate.accepted ? "completed" : "failed") : r.attack_succeeded ? "pending" : "completed",
@@ -837,8 +829,8 @@ const STEP_VERB: Record<Step, string> = {
  * before any attack, there is no cycle to show), and a status naming a cycle whose record already
  * exists (a loop that died mid-phase leaves status.json behind; the record is the truth).
  */
-export function cyclesToTasks(cycles: CycleRecord[], status: Status | null, legitSize: number): Task[] {
-  const tasks = cycles.map((r, i) => cycleToTask(r, legitSize, i === cycles.length - 1)).reverse();
+function cyclesToTasks(cycles: CycleRecord[], status: Status | null): Task[] {
+  const tasks = cycles.map((r, i) => cycleToTask(r, i === cycles.length - 1)).reverse();
   if (isRunning(status)) {
     const cycle = status.cycle ?? 0;
     const startOfRun = status.phase === "baseline" && cycle === 0;
@@ -931,7 +923,7 @@ export function patchArtifact(p: Patch): string {
 }
 
 /** Sub-timeline nodes for one step, from the record. */
-function stepChildren(step: Step, r: CycleRecord, legitSize: number): SubItem[] | undefined {
+function stepChildren(step: Step, r: CycleRecord): SubItem[] | undefined {
   if (step === "chaos") {
     const faults = r.scenario.faults.map((f) => ({ label: `${f.tool} · ${f.mode}`, code: true }));
     return faults.length ? faults : undefined;
@@ -957,7 +949,7 @@ function stepChildren(step: Step, r: CycleRecord, legitSize: number): SubItem[] 
     return [
       { label: "fixes the new failure", detail: fixLine(g) ?? undefined, tone: ok(g.fixes_new_failure) },
       { label: "no past fix reintroduced", detail: `regression ${regressionPct(r)}`, tone: ok(regressionOk) },
-      { label: "no legit flow newly broken", detail: `legit ${pct(g.legit_pass_rate, legitSize)}`, tone: ok(legitOk) },
+      { label: "no legit flow newly broken", detail: `legit ${legitPct(r)}`, tone: ok(legitOk) },
     ];
   }
   return undefined;
@@ -993,7 +985,7 @@ function stepDetail(step: Step, r: CycleRecord): StepView["detail"] {
   return undefined;
 }
 
-function taskToView(t: Task, r: CycleRecord | undefined, status: Status | null, legitSize: number): CycleView {
+function taskToView(t: Task, r: CycleRecord | undefined, status: Status | null): CycleView {
   const live = !r;
   // A blocked attack never reaches Repair or Gate; the Task mapping marks them "completed" for
   // the plan's checklist, but the timeline should not claim work that did not happen.
@@ -1009,7 +1001,7 @@ function taskToView(t: Task, r: CycleRecord | undefined, status: Status | null, 
       headline: r ? stepHeadline(step, r, s.title) : s.title,
       evidence: r && !skipped ? stepEvidence(step, r, s.description) : s.description,
       detail: r && !skipped ? stepDetail(step, r) : undefined,
-      children: r && !skipped ? stepChildren(step, r, legitSize) : undefined,
+      children: r && !skipped ? stepChildren(step, r) : undefined,
       since: state === "active" && isRunning(status) ? status.since : undefined,
     };
   });
@@ -1034,9 +1026,9 @@ function taskToView(t: Task, r: CycleRecord | undefined, status: Status | null, 
 }
 
 /** Newest first; the in-flight cycle (if any) is first and has `live: true`. */
-export function cycleViews(cycles: CycleRecord[], status: Status | null, legitSize: number): CycleView[] {
+export function cycleViews(cycles: CycleRecord[], status: Status | null): CycleView[] {
   const byCycle = new Map(cycles.map((c) => [c.cycle, c]));
-  return cyclesToTasks(cycles, status, legitSize).map((t) => taskToView(t, byCycle.get(Number(t.id)), status, legitSize));
+  return cyclesToTasks(cycles, status).map((t) => taskToView(t, byCycle.get(Number(t.id)), status));
 }
 
 export interface RunSummary {
@@ -1050,8 +1042,8 @@ export interface RunSummary {
 }
 
 /** The numbers the hero states: where the config ended up and how it got there. */
-export function runSummary(cycles: CycleRecord[], legitSize: number): RunSummary {
-  const h = headline(cycles, legitSize);
+export function runSummary(cycles: CycleRecord[]): RunSummary {
+  const h = headline(cycles);
   return {
     version: h.version,
     accepted: cycles.filter((c) => c.gate?.accepted).length,
@@ -1138,7 +1130,7 @@ function patchVerb(p: Patch): string {
   return "rewrote the system prompt";
 }
 
-export function cycleSteps(r: CycleRecord, legitSize: number): CycleStep[] {
+export function cycleSteps(r: CycleRecord): CycleStep[] {
   const calls = recordCalls(r);
   const marks = previewCalls(calls, r.verdict.evidence.tool_call, r.verdict.passed);
   const cited = marks.find((m) => m.tone === "danger");
@@ -1191,7 +1183,7 @@ export function cycleSteps(r: CycleRecord, legitSize: number): CycleStep[] {
         step: "gate",
         label: "Gate",
         headline: g.accepted ? `accepted · v${r.config_before} → v${r.config_after}` : `rejected · v${r.config_after} stays`,
-        line: [firstSentence(g.reason), fixed, `regression ${regressionPct(r)}`, `legit ${pct(g.legit_pass_rate, legitSize)}`]
+        line: [firstSentence(g.reason), fixed, `regression ${regressionPct(r)}`, `legit ${legitPct(r)}`]
           .filter(Boolean)
           .join(" · "),
         tone: g.accepted ? "ok" : "danger",
@@ -1228,13 +1220,6 @@ export function emptyStateFor(health: Health | null): EmptyState {
 }
 
 // --- Home, Runs, Replays (docs/plans/00-overview.md Block 4, lane 4A) ------------------------------------
-
-/**
- * Size of the legit-user suite the golden tape was recorded against (chaos/scenarios.py LEGIT_SCENARIOS at
- * the time); the chart footer's "legit N/M" reads it. The one copy — the run-page files (`Run`, `Cycle`,
- * lane 4B) still declare their own `LEGIT_SIZE = 3` and should import this one once the branches merge.
- */
-export const LEGIT_SIZE = 3;
 
 /** The `?source=` that reads a runs-list row: `live` and `golden` are themselves; anything else is a history folder. */
 export function runSource(id: string): ReadSource {

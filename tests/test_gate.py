@@ -188,6 +188,36 @@ def test_golden_tape_still_parses_and_old_records_read_one_sample() -> None:
         assert g.fix_samples == 1
         # One sample, and it passed exactly when the record says the fix held: no "fixed 1/1 — not accepted".
         assert g.fix_passes == (1 if g.fixes_new_failure else 0)
+    # The tape was recorded against the three-row legit suite; every "legit N/3" the UI prints comes from here.
+    assert all(r.legit_suite_size == 3 for r in records)
+
+
+def test_a_cycle_the_loop_writes_carries_the_legit_suite_size(tmp_path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """`legit_pass_rate` is a fraction; the record must say what it is a fraction of, or the UI hard-codes it."""
+    from chaos import loop
+    from chaos.scenarios import LEGIT_SCENARIOS
+    from chaos.schemas import Episode
+    from chaos.target_agent import V0_CONFIG
+
+    monkeypatch.setenv("ANTIBODY_NO_ZENDESK", "1")
+    monkeypatch.setattr(loop, "CYCLES_PATH", tmp_path / "cycles.jsonl")
+    monkeypatch.setattr(loop, "set_phase", lambda *a, **kw: None)
+    monkeypatch.setattr(loop, "run_target_agent", lambda cfg, sc: Episode(scenario_id=sc.id, config_version=cfg.version, final_reply="ok"))
+    monkeypatch.setattr(loop, "judge_episode", lambda sc, ep: verdict(sc.id, True))
+
+    # A LoopState without its constructor (which publishes datasets); only what run_cycle reads on a blocked attack.
+    st = loop.LoopState.__new__(loop.LoopState)
+    st.cfg = V0_CONFIG
+    st.regression_suite = list(REG)
+    st.legit_suite = list(LEGIT_SCENARIOS)
+    st.cycle = 0
+    st.records = []
+    st.baseline = {}
+
+    record = loop.run_cycle(st, NEW)
+    assert record.legit_suite_size == len(LEGIT_SCENARIOS) == 11
+    written = CycleRecord.model_validate_json((tmp_path / "cycles.jsonl").read_text().strip())
+    assert written.legit_suite_size == len(LEGIT_SCENARIOS)
 
 
 def test_explicit_sample_fields_are_kept_as_written() -> None:

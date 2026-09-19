@@ -216,6 +216,9 @@ class CycleRecord(BaseModel):
     config_before: int
     config_after: int
     regression_suite_size: int
+    # The gate's `legit_pass_rate` is a fraction; this is the denominator behind it. Records written before
+    # the field existed (the golden tape) ran against the three-row legit suite of the time, hence the default.
+    legit_suite_size: int = 3
     weave_call_url: str | None = None
     retry_of: int | None = Field(
         default=None,
