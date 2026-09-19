@@ -550,7 +550,7 @@ export function targetDanger(status: Status | null): boolean {
   );
 }
 
-/** The idle/done orb colours (the component's grey preset). Active hues live in RunLive.tsx ORB_COLORS. */
+/** The idle/done orb colours (the component's grey preset). Active hues live in Run.tsx ORB_COLORS. */
 export const ORB_GREY: [string, string] = ["#E5E7EB", "#9CA3AF"];
 
 /** Headline text after the dot: running → `cycle 2 · judge is scoring`; idle → `v3 · 4 tests · legit 3/3 · idle`. */
@@ -560,52 +560,6 @@ export function agentsHeadline(status: Status | null, h: Headline): string {
   }
   if (h.version === null) return "no cycles yet · idle";
   return `v${h.version} · ${h.suiteSize} ${h.suiteSize === 1 ? "test" : "tests"} · legit ${h.legit} · idle`;
-}
-
-export interface GateCriterion {
-  label: string;
-  /** null = not yet evaluated (no gate has run) or currently being evaluated */
-  ok: boolean | null;
-  detail?: string;
-}
-
-export interface GateLine {
-  /** `verifying`, `accepted`, `rejected`, or null before any gate has run */
-  word: "verifying" | "accepted" | "rejected" | null;
-  /** `v2 → v3` for the last decided gate */
-  versions?: string;
-  criteria: GateCriterion[];
-  reason?: string;
-}
-
-/**
- * The gate line under the orbs. The three criteria are fixed (they are the gate's contract in
- * chaos/gate.py); the marks come from the latest decided gate, or are blank while one is running.
- */
-export function gateLine(status: Status | null, cycles: CycleRecord[], legitSize: number): GateLine {
-  const labels = ["fixes the new failure", "every past failure still fixed", "legit users ≥ baseline"];
-  if (isRunning(status) && status.phase === "gate") {
-    return { word: "verifying", criteria: labels.map((label) => ({ label, ok: null })) };
-  }
-  const last = [...cycles].reverse().find((c) => c.gate);
-  if (!last?.gate) {
-    return { word: null, criteria: labels.map((label) => ({ label, ok: null })) };
-  }
-  const g = last.gate;
-  // gate.py only reports the failing criterion in `reason`; the rates alone cannot tell a
-  // pre-existing legit flaw (tolerated) from a newly broken one (rejected).
-  const legitOk = g.accepted || !g.reason.startsWith("breaks a legit");
-  const regressionOk = g.accepted || !g.reason.startsWith("reintroduces");
-  return {
-    word: g.accepted ? "accepted" : "rejected",
-    versions: `v${last.config_before} → v${last.config_after}`,
-    criteria: [
-      { label: labels[0], ok: g.fixes_new_failure, detail: fixLine(g) ?? undefined },
-      { label: labels[1], ok: regressionOk, detail: regressionPct(last) },
-      { label: labels[2], ok: legitOk, detail: pct(g.legit_pass_rate, legitSize) },
-    ],
-    reason: g.reason,
-  };
 }
 
 /**
@@ -846,12 +800,7 @@ export function inFlightTask(status: Status & { phase: Exclude<Phase, "idle"> },
   });
   return {
     id,
-    title:
-      status.phase === "baseline"
-        ? status.measuring === "vulnerability"
-          ? `Cycle ${cycle} · run complete, measuring vulnerability`
-          : `Cycle ${cycle} · patch accepted, re-measuring baseline`
-        : `Cycle ${cycle} · in progress`,
+    title: status.phase === "baseline" ? `Cycle ${cycle} · patch accepted, re-measuring baseline` : `Cycle ${cycle} · in progress`,
     description: "Scenario text arrives with the record once the cycle is written.",
     status: "in-progress",
     priority: "high",
@@ -1057,9 +1006,7 @@ function taskToView(t: Task, r: CycleRecord | undefined, status: Status | null, 
     title: r
       ? r.scenario.title
       : status?.phase === "baseline"
-        ? status.measuring === "vulnerability"
-          ? "Run complete, measuring vulnerability"
-          : "Patch accepted, re-measuring baseline"
+        ? "Patch accepted, re-measuring baseline"
         : "Scenario in progress",
     message: r ? r.scenario.user_message : null,
     kind: r ? humanizeKind(r.scenario.kind) : null,
