@@ -675,16 +675,13 @@ export function runAgentName(row: Pick<RunRow, "agent" | "target">): string {
 
 /**
  * The finished header: `started Sep 18, 10:31 PM · demo agent · mock · --chaos-cycles 5 --seeds 2 · v0 → v3`.
- * Only the facts the row has; a legacy archive without run.json drops its guessed world and flags.
+ * Only the facts the row has (a legacy archive lists no flags).
  */
 export function runHeaderLine(row: RunRow): string {
   const parts: string[] = [];
   if (row.started_at) parts.push(`started ${fmtDateTime(row.started_at)}`);
-  parts.push(runAgentName(row));
-  if (!row.synthesized) {
-    parts.push(row.world);
-    if (row.flags.length) parts.push(row.flags.join(" "));
-  }
+  parts.push(runAgentName(row), row.world);
+  if (row.flags.length) parts.push(row.flags.join(" "));
   const first = row.versions[0] ?? 0;
   const last = row.final_version ?? row.versions.at(-1) ?? first;
   parts.push(first === last ? `v${last}` : `v${first} → v${last}`);

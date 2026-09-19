@@ -1,16 +1,19 @@
 import { useEffect, useState } from "react";
 
-import { api, type AgentConfig, type CycleRecord } from "@/api";
+import { api, type AgentConfig, type CycleRecord, type ReadSource } from "@/api";
 import { configDiff, type DiffLine } from "@/lib/derive";
 
 const COLLAPSE_AT = 12;
 
 export default function ConfigDiff({
   cycle,
+  source,
   collapseAt = COLLAPSE_AT,
   onSettled,
 }: {
   cycle: CycleRecord;
+  /** Whose config tree the two versions are read from; a history run's cycle must diff that run's files, not live's. */
+  source: ReadSource;
   collapseAt?: number;
   /** Fires once the diff has its final height: configs loaded, failed, or nothing to load. */
   onSettled?: () => void;
@@ -32,7 +35,7 @@ export default function ConfigDiff({
     setAfter(null);
     setFailed(false);
     setOpen(false);
-    Promise.all([api.config(cycle.config_before), api.config(cycle.config_after)])
+    Promise.all([api.config(cycle.config_before, source), api.config(cycle.config_after, source)])
       .then(([b, a]) => {
         if (alive) {
           setBefore(b);
@@ -51,7 +54,7 @@ export default function ConfigDiff({
     // onSettled is a notification, not an input; re-running the fetch when the parent re-renders
     // with a new callback identity would be wrong.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [changed, cycle.config_before, cycle.config_after]);
+  }, [changed, cycle.config_before, cycle.config_after, source]);
 
   if (!changed) {
     return (

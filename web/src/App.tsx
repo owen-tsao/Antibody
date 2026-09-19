@@ -4,16 +4,16 @@ import { api, ApiError, type LoopState, type ReplayInfo } from "@/api";
 import ErrorBoundary from "@/components/ErrorBoundary";
 import Shell from "@/components/Shell";
 import SplashBackdrop from "@/components/ui/splash-backdrop";
-import { HOME, LIVE_RUN, linkProps, navigate, type Route, useRoute } from "@/lib/routes";
+import { HOME, LIVE_RUN, navigate, type Route, useRoute } from "@/lib/routes";
 import { loadSettings, saveSettings, toStartBody, type RunSettings } from "@/lib/settings";
 import Intro, { type StartMode } from "@/pages/Intro";
 import Heal from "@/pages/Heal";
 import Home from "@/pages/Home";
 import AgentsList from "@/pages/Agents";
 import Onboarding from "@/pages/Onboarding";
-import RunLive from "@/pages/RunLive";
-import Results from "@/pages/Results";
+import Run from "@/pages/Run";
 import Cycle from "@/pages/Cycle";
+import { replayIsFor } from "@/lib/derive";
 
 // Replay is the demo fallback for a slow live loop, so it must not be equally slow: at 1× the
 // recording's 47 s gates look frozen. 3× plays the 7-cycle golden run in ~5.5 min with a visible
@@ -62,22 +62,23 @@ export default function App() {
 function AppPages({ route, settings, onSettingsChange }: { route: Route; settings: RunSettings; onSettingsChange: (next: RunSettings) => void }) {
   const [startError, setStartError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
-  // Set when Replay could not start because a live loop is running; the run page shows the live run
-  // with this note instead of a "replay · recorded" label that would be false.
-  const [replayNote, setReplayNote] = useState<string | null>(null);
+  // Set when Replay could not start because a live loop is running. Only the old Heal page's start path
+  // writes it now; the run page reports its own 409. Goes with Heal (Block 4.7).
+  const [, setReplayNote] = useState<string | null>(null);
 
-  // Nothing plays off-screen: whenever the screen is not the live run — a shell link, browser Back, or
-  // a deep link arriving with a tape still playing — a playing replay is frozen where it is, so the
-  // runs page can honestly offer "Resume replay". Decided on the API's fresh answer, never a stale
-  // flag, so a tape that was just stopped is left alone.
-  const onLiveRun = route.kind === "run" && route.id === "live";
+  // Nothing plays off-screen (Block 4's replay rule): whenever the run on screen changes — a shell link,
+  // browser Back, another run's page — a tape that is not that run's is stopped, so the rail's "Current
+  // run" only ever reports what is visible. Decided on the API's fresh answer, never a stale poll. A
+  // `/replay` arrival is left to the run page, which swaps tapes itself before starting its own.
+  const runOnScreen = route.kind === "run" || route.kind === "cycle" ? route.id : null;
+  const arrivingToWatch = route.kind === "run" && route.replay === true;
   useEffect(() => {
-    if (onLiveRun) return;
+    if (arrivingToWatch) return;
     api
       .replay()
-      .then((info) => (info.active && !info.paused ? api.replayPause() : undefined))
+      .then((info) => (info.active && !replayIsFor(info, runOnScreen) ? api.replayStop() : undefined))
       .catch(() => undefined);
-  }, [onLiveRun]);
+  }, [runOnScreen, arrivingToWatch]);
 
   const start = async (mode: StartMode, loop: LoopState | null, replay: ReplayInfo | null, refresh: () => void) => {
     setReplayNote(null);
@@ -161,17 +162,11 @@ function AppPages({ route, settings, onSettingsChange }: { route: Route; setting
               />
             );
           case "run":
-            if (route.id !== "live") return <HistoryRunPlaceholder id={route.id} />;
-            // While something is playing the run is the four agents at work; once it is over, the proof.
-            return loop?.running || replay?.active ? (
-              <RunLive replayNote={replayNote} loop={loop} status={status} statusError={statusError} refresh={refresh} />
-            ) : (
-              <Results loop={loop} onCycle={(n) => navigate({ kind: "cycle", id: "live", n })} />
-            );
+            return <Run id={route.id} replay={route.replay === true} shell={{ loop, replay, status, statusError, health, refresh }} navigate={navigate} />;
           case "cycle":
-            if (route.id !== "live") return <HistoryRunPlaceholder id={route.id} />;
             return (
               <Cycle
+                id={route.id}
                 n={route.n}
                 onBack={() => navigate({ kind: "run", id: route.id })}
                 onCycle={(n) => navigate({ kind: "cycle", id: route.id, n })}
@@ -193,24 +188,5 @@ function Placeholder({ title, body, children }: { title: string; body?: string; 
         {children}
       </div>
     </main>
-  );
-}
-
-/**
- * `/app/runs/<id>` for an archived run. The read routes already serve any run (`?source=run:<id>`), but
- * today's pages read only the live files; showing them here would label the wrong run. Block 4 builds
- * the real run page. Until then this says so instead of guessing.
- */
-function HistoryRunPlaceholder({ id }: { id: string }) {
-  return (
-    <Placeholder title={id === "golden" ? "Demo tape" : `Run ${id}`}>
-      <p className="mt-4 max-w-[56ch] text-[13px] leading-[1.6] text-[var(--muted)]">
-        Past runs open here in a later step. Until then, the{" "}
-        <a {...linkProps(LIVE_RUN)} className="group rounded text-[var(--muted)] transition-colors hover:text-[var(--fg)]">
-          <span className="u-line">current run</span>
-        </a>{" "}
-        is the one on screen.
-      </p>
-    </Placeholder>
   );
 }

@@ -2,30 +2,37 @@ import { motion, useReducedMotion } from "framer-motion";
 import { ArrowUpRight } from "lucide-react";
 import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
 
-import { api, type CycleRecord } from "@/api";
+import { api, type CycleRecord, type ReadSource } from "@/api";
 import ApiDown from "@/components/ApiDown";
 import ConfigDiff from "@/components/ConfigDiff";
 import { usePoll } from "@/hooks/usePoll";
-import { cycleSteps, fmtTime, humanizeKind, ticketLink } from "@/lib/derive";
+import { cycleSteps, fmtTime, humanizeKind, readSource, runTitle, ticketLink } from "@/lib/derive";
 import { CHART_H, CHART_W, cycleChartSvg } from "@/lib/previewSvg";
 import { cn } from "@/lib/utils";
 
 // One cycle, full page. Left: the five steps as short rows, each a plain-language headline and one
 // line of what happened. Right: the gate history chart, drawn at the exact size of the left list so
 // the two columns share top and bottom edges. Below: the config diff, when the config changed.
+// Every read names the run (`source`): a history run's cycle is read from that run's files, and a
+// tape playing elsewhere cannot change what this page shows.
 
 const LEGIT_SIZE = 3;
 
 export default function Cycle({
+  id,
   n,
   onBack,
   onCycle,
 }: {
+  /** The run this cycle belongs to (`live`, `golden` or a history id). */
+  id: string;
   n: number;
   onBack: () => void;
   onCycle: (n: number) => void;
 }) {
-  const { data: cycles, error, refresh } = usePoll(api.cycles, 10_000);
+  const source: ReadSource = readSource(id);
+  const cyclesFn = useCallback(() => api.cycles(source), [source]);
+  const { data: cycles, error, refresh } = usePoll(cyclesFn, 10_000);
   const reduced = useReducedMotion();
   const r = cycles?.find((c) => c.cycle === n);
 
@@ -38,7 +45,7 @@ export default function Cycle({
       {/* The shell's "Runs" goes to the list; the way back to this run is the page's own, in text. */}
       <nav className="mx-auto w-full max-w-6xl pb-6 text-[13px]">
         <button type="button" onClick={onBack} className="group rounded text-[var(--muted)] transition-colors hover:text-[var(--fg)]">
-          ← <span className="u-line">back to the run</span>
+          ← <span className="u-line">back to {runTitle(id).toLowerCase()}</span>
         </button>
       </nav>
       <motion.div
@@ -54,7 +61,7 @@ export default function Cycle({
         ) : (
           <>
             <Header r={r} />
-            <Body key={r.cycle} r={r} all={cycles} />
+            <Body key={r.cycle} r={r} all={cycles} source={source} />
 
             <nav className="mt-14 flex items-center justify-between border-t border-[var(--border)] pt-5 text-[13px]">
               {prev ? (
@@ -147,7 +154,7 @@ const CHART_MIN_H = 288;
 // How long the reveal runs; after this the animation class comes off so resizes do not replay it.
 const REVEAL_MS = 1400;
 
-function Body({ r, all }: { r: CycleRecord; all: CycleRecord[] }) {
+function Body({ r, all, source }: { r: CycleRecord; all: CycleRecord[]; source: ReadSource }) {
   const steps = cycleSteps(r, LEGIT_SIZE);
   const changed = r.config_before !== r.config_after;
   const reduced = useReducedMotion();
@@ -251,7 +258,7 @@ function Body({ r, all }: { r: CycleRecord; all: CycleRecord[] }) {
 
         {changed && (
           <div className="mt-10 border-t border-[var(--border)] pt-5">
-            <ConfigDiff cycle={r} collapseAt={6} onSettled={settle} />
+            <ConfigDiff cycle={r} source={source} collapseAt={6} onSettled={settle} />
           </div>
         )}
       </div>
