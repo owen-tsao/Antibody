@@ -101,6 +101,10 @@ export interface GateResult {
   reason: string;
   /** Weave evaluation URLs (gate-new, gate-regression, gate-legit). Absent on golden records. */
   weave_eval_urls?: string[];
+  /** How many times the new failure was re-run against the candidate (GATE_FIX_SAMPLES); 1 on records gated before sampling. */
+  fix_samples: number;
+  /** How many of those samples the candidate fixed; `fixes_new_failure` is `fix_passes === fix_samples`. */
+  fix_passes: number;
 }
 
 export interface CycleRecord {
@@ -309,6 +313,8 @@ export interface Status {
   attack_succeeded?: boolean | null;
   /** Repair/gate only: which repair attempt this is (chaos/status.py passes it as an extra). */
   attempt?: number;
+  /** `baseline` only: the end-of-run vulnerability measurement lights the same orb as the start-of-run baseline. */
+  measuring?: "baseline" | "vulnerability";
   /** Set by /api/status while a recorded run is being replayed (api/replay.py). */
   replay?: boolean;
   recorded_at?: string;

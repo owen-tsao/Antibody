@@ -10,6 +10,7 @@ import type {
   AttackToolCall,
   CycleRecord,
   FailureKind,
+  GateResult,
   Health,
   LoopState,
   Manifest,
@@ -17,6 +18,9 @@ import type {
   PatchKind,
   Phase,
   PingResult,
+  ReadSource,
+  RecordingInfo,
+  ReplayInfo,
   RunRow,
   ScenarioKind,
   Status,
@@ -460,6 +464,15 @@ const PHASE_VERB: Record<Exclude<Phase, "idle">, string> = {
   gate: "gate is verifying",
 };
 
+/**
+ * The phase's verb, with the one exception the status row spells out: the end-of-run vulnerability
+ * measurement reuses the `baseline` phase (same orb, same legit traffic) and tags itself `measuring`.
+ */
+function phaseLabel(status: Status & { phase: Exclude<Phase, "idle"> }): string {
+  if (status.phase === "baseline" && status.measuring === "vulnerability") return "measuring vulnerability";
+  return PHASE_VERB[status.phase];
+}
+
 export function isRunning(status: Status | null): status is Status & { phase: Exclude<Phase, "idle"> } {
   return !!status && status.phase !== "idle";
 }
@@ -543,7 +556,7 @@ export const ORB_GREY: [string, string] = ["#E5E7EB", "#9CA3AF"];
 /** Headline text after the dot: running → `cycle 2 · judge is scoring`; idle → `v3 · 4 tests · legit 3/3 · idle`. */
 export function agentsHeadline(status: Status | null, h: Headline): string {
   if (isRunning(status)) {
-    return `cycle ${status.cycle ?? "—"} · ${PHASE_VERB[status.phase]}`;
+    return `cycle ${status.cycle ?? "—"} · ${phaseLabel(status)}`;
   }
   if (h.version === null) return "no cycles yet · idle";
   return `v${h.version} · ${h.suiteSize} ${h.suiteSize === 1 ? "test" : "tests"} · legit ${h.legit} · idle`;
@@ -587,12 +600,116 @@ export function gateLine(status: Status | null, cycles: CycleRecord[], legitSize
     word: g.accepted ? "accepted" : "rejected",
     versions: `v${last.config_before} → v${last.config_after}`,
     criteria: [
-      { label: labels[0], ok: g.fixes_new_failure },
+      { label: labels[0], ok: g.fixes_new_failure, detail: fixLine(g) ?? undefined },
       { label: labels[1], ok: regressionOk, detail: regressionPct(last) },
       { label: labels[2], ok: legitOk, detail: pct(g.legit_pass_rate, legitSize) },
     ],
     reason: g.reason,
   };
+}
+
+/**
+ * The sampled-fix count as words: `fixed 2/2`, or `fixed 1/2 — not accepted` when a sample failed and the
+ * gate said no. Null when the gate ran the fix once (records from before sampling, or GATE_FIX_SAMPLES=1),
+ * where today's accepted/rejected wording already says everything the numbers would.
+ */
+export function fixLine(g: Pick<GateResult, "accepted" | "fix_samples" | "fix_passes">): string | null {
+  if (g.fix_samples <= 1) return null;
+  const n = `fixed ${g.fix_passes}/${g.fix_samples}`;
+  return !g.accepted && g.fix_passes < g.fix_samples ? `${n} — not accepted` : n;
+}
+
+// --- Run page (docs/plans/00-overview.md Block 4.6) ------------------------------------------------
+
+/** Where a run's files are read from: `live`, the committed `golden` tape, or one history folder (`run:<id>`). */
+export function readSource(id: string): ReadSource {
+  if (id === "live" || id === "golden") return id;
+  return `run:${id}`;
+}
+
+/** What `POST /api/replay/start` plays for this run; null for `live` (the live run is what a replay stands in for). */
+export function recordingFor(id: string): RecordingInfo["source"] | null {
+  return id === "live" ? null : readSource(id) as RecordingInfo["source"];
+}
+
+/**
+ * Whether the active replay is the one this page would show. A replay overrides only `live` reads, so on
+ * `/app/runs/live` any tape is what is on screen; a history run is on screen only when its own tape plays.
+ */
+export function replayIsFor(replay: Pick<ReplayInfo, "active" | "recording"> | null, id: string | null): boolean {
+  if (!replay?.active || id === null) return false;
+  return id === "live" || replay.recording?.source === recordingFor(id);
+}
+
+export type RunMode = "starting" | "live" | "finished" | "watching";
+
+/**
+ * Which of the run page's four faces to show. `watching` wins while this run's tape plays (reads flip to
+ * `live` for the duration); `live` needs `/app/runs/live` and a loop alive; `starting` is that loop before
+ * `run.json` lands (404 on the run row, never an error); everything else — a history row, or the un-archived
+ * run whose loop has exited — is `finished`.
+ */
+export function runMode(id: string, row: RunRow | null, loop: LoopState | null, replay: ReplayInfo | null): RunMode {
+  if (replayIsFor(replay, id)) return "watching";
+  if (id === "live" && loop?.running) return row ? "live" : "starting";
+  return "finished";
+}
+
+/** The page title: the run as an object, not the view of it. */
+export function runTitle(id: string): string {
+  if (id === "live") return "Current run";
+  if (id === "golden") return "Demo tape";
+  return `Run ${id}`;
+}
+
+/** `Sep 18, 10:31 PM` — for a run's start, where the day matters and the seconds do not. */
+export function fmtDateTime(iso: string): string {
+  return new Date(iso).toLocaleString([], { month: "short", day: "numeric", hour: "numeric", minute: "2-digit" });
+}
+
+/** The run's agent by name: the joined row's, else "demo agent" for the built-in target, else the stored target string. */
+export function runAgentName(row: Pick<RunRow, "agent" | "target">): string {
+  if (row.agent) return row.agent.name;
+  return row.target === "builtin" ? "demo agent" : row.target;
+}
+
+/**
+ * The finished header: `started Sep 18, 10:31 PM · demo agent · mock · --chaos-cycles 5 --seeds 2 · v0 → v3`.
+ * Only the facts the row has; a legacy archive without run.json drops its guessed world and flags.
+ */
+export function runHeaderLine(row: RunRow): string {
+  const parts: string[] = [];
+  if (row.started_at) parts.push(`started ${fmtDateTime(row.started_at)}`);
+  parts.push(runAgentName(row));
+  if (!row.synthesized) {
+    parts.push(row.world);
+    if (row.flags.length) parts.push(row.flags.join(" "));
+  }
+  const first = row.versions[0] ?? 0;
+  const last = row.final_version ?? row.versions.at(-1) ?? first;
+  parts.push(first === last ? `v${last}` : `v${first} → v${last}`);
+  return parts.join(" · ");
+}
+
+/** The stats plate's numbers as one line, for the finished view where no orbs sit under a plate. */
+export function summaryLine(s: RunSummary): string {
+  return [
+    `${s.accepted} ${s.accepted === 1 ? "patch" : "patches"} accepted`,
+    `${s.rejected} rejected`,
+    `${s.blocked} ${s.blocked === 1 ? "attack" : "attacks"} blocked`,
+    `${s.suiteSize} ${s.suiteSize === 1 ? "test" : "tests"} in suite`,
+    `legit users ${s.legit}`,
+  ].join(" · ");
+}
+
+/**
+ * Versions a finished run offers to roll back to: every config it saved, oldest first. `live` offers none — the
+ * API refuses it (400) because the live tree is what a rollback writes into; `--from-version` is the CLI's
+ * way there. Nothing while a loop runs either, since the loop owns the live config then.
+ */
+export function rollbackVersions(id: string, row: RunRow | null, loop: LoopState | null): number[] {
+  if (id === "live" || !row || loop?.running) return [];
+  return [...new Set(row.configs?.map((c) => c.version) ?? row.versions)].sort((a, b) => a - b);
 }
 
 // --- CycleRecord → Task ------------------------------------------------------------------------
@@ -732,7 +849,12 @@ export function inFlightTask(status: Status & { phase: Exclude<Phase, "idle"> },
   });
   return {
     id,
-    title: status.phase === "baseline" ? `Cycle ${cycle} · patch accepted, re-measuring baseline` : `Cycle ${cycle} · in progress`,
+    title:
+      status.phase === "baseline"
+        ? status.measuring === "vulnerability"
+          ? `Cycle ${cycle} · run complete, measuring vulnerability`
+          : `Cycle ${cycle} · patch accepted, re-measuring baseline`
+        : `Cycle ${cycle} · in progress`,
     description: "Scenario text arrives with the record once the cycle is written.",
     status: "in-progress",
     priority: "high",
@@ -874,7 +996,7 @@ function stepChildren(step: Step, r: CycleRecord, legitSize: number): SubItem[] 
     // gate.py tolerates regression/legit rows the production config already failed; only a
     // protected row breaking rejects. So "2/5" next to a pass is honest, and the labels say so.
     return [
-      { label: "fixes the new failure", tone: ok(g.fixes_new_failure) },
+      { label: "fixes the new failure", detail: fixLine(g) ?? undefined, tone: ok(g.fixes_new_failure) },
       { label: "no past fix reintroduced", detail: `regression ${regressionPct(r)}`, tone: ok(regressionOk) },
       { label: "no legit flow newly broken", detail: `legit ${pct(g.legit_pass_rate, legitSize)}`, tone: ok(legitOk) },
     ];
@@ -935,7 +1057,13 @@ function taskToView(t: Task, r: CycleRecord | undefined, status: Status | null, 
   return {
     cycle: Number(t.id),
     name: `Cycle ${t.id}`,
-    title: r ? r.scenario.title : status?.phase === "baseline" ? "Patch accepted, re-measuring baseline" : "Scenario in progress",
+    title: r
+      ? r.scenario.title
+      : status?.phase === "baseline"
+        ? status.measuring === "vulnerability"
+          ? "Run complete, measuring vulnerability"
+          : "Patch accepted, re-measuring baseline"
+        : "Scenario in progress",
     message: r ? r.scenario.user_message : null,
     kind: r ? humanizeKind(r.scenario.kind) : null,
     result: r ? rowStatus(r) : "running",
@@ -1034,7 +1162,7 @@ export function vulnerabilityLine(
 
 /** `judge is scoring` for the running phase, used under the hero while live. */
 export function phaseVerb(status: Status | null): string | null {
-  return isRunning(status) ? PHASE_VERB[status.phase] : null;
+  return isRunning(status) ? phaseLabel(status) : null;
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -1119,12 +1247,15 @@ export function cycleSteps(r: CycleRecord, legitSize: number): CycleStep[] {
     : { step: "repair", label: AGENT_LABEL.repair, headline: "not needed", line: "", tone: "skipped" };
 
   const g = r.gate;
+  const fixed = g ? fixLine(g) : null;
   const gate: CycleStep = g
     ? {
         step: "gate",
         label: "Gate",
         headline: g.accepted ? `accepted · v${r.config_before} → v${r.config_after}` : `rejected · v${r.config_after} stays`,
-        line: `${firstSentence(g.reason)} · regression ${regressionPct(r)} · legit ${pct(g.legit_pass_rate, legitSize)}`,
+        line: [firstSentence(g.reason), fixed, `regression ${regressionPct(r)}`, `legit ${pct(g.legit_pass_rate, legitSize)}`]
+          .filter(Boolean)
+          .join(" · "),
         tone: g.accepted ? "ok" : "danger",
       }
     : { step: "gate", label: "Gate", headline: "not run", line: "", tone: "skipped" };
