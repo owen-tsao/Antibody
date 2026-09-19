@@ -147,6 +147,8 @@ export interface LoopStartBody {
   /** Stop once N chaos attacks in a row are blocked; `chaos_cycles` becomes the cap. null = off. */
   until_quiet?: number | null;
   world?: World;
+  /** An agent id from GET /api/agents; null = the API process's own default (400 for an unknown id). */
+  target?: string | null;
 }
 
 export interface LoopState {
@@ -164,6 +166,8 @@ export interface LoopStarted {
   pid: number;
   started_at: string;
   settings: Required<LoopStartBody>;
+  /** The canonical target string the loop was given (`builtin` or `http:<url>`), not the agent id. */
+  target: string;
 }
 
 export interface Manifest {
@@ -197,6 +201,8 @@ export interface RunRow {
   world: "mock" | "zendesk";
   /** "builtin" or the target string as the loop stored it. */
   target: string;
+  /** The connected agent that target resolves to, or null when none matches (a deleted agent leaves its runs orphaned). */
+  agent: { id: string; name: string } | null;
   cycles: number;
   accepted: number;
   rejected: number;
@@ -219,6 +225,56 @@ export interface RollbackResult {
   config: AgentConfig;
   /** Scenarios in the merged live suite that the rolled-back run never had ("N tests are newer than this config"). */
   newer_tests: number;
+}
+
+// --- /api/agents (docs/plans/00-overview.md Block 1): connected support agents as stored objects.
+
+export interface AgentPing {
+  at: string;
+  ok: boolean;
+  latency_ms: number;
+}
+
+export interface AgentTool {
+  name: string;
+  description: string;
+}
+
+/** One row of GET /api/agents. `builtin` and `example` are synthetic (never stored, never deletable). */
+export interface Agent {
+  id: string;
+  name: string;
+  transport: "in-process" | "http";
+  /** null for the built-in agent (it runs inside the loop process). */
+  url: string | null;
+  created_at: string | null;
+  /** Stored rows only; synthetic rows never persist a ping. */
+  last_ping: AgentPing | null;
+  /** What the agent listed at GET /tools on its last ping; null when it does not list tools. */
+  tools: AgentTool[] | null;
+  synthetic: boolean;
+  /** The `example` row only: a live probe of port 8790. `starting` = spawned, port not answering yet. */
+  running?: boolean;
+  starting?: boolean;
+  pid?: number | null;
+}
+
+/** Which of the agent's tool names the sandbox storefront serves; null when the agent listed none. */
+export interface ToolMapping {
+  known: string[];
+  unknown: string[];
+}
+
+/** POST /api/agents/:id/ping — always 200 for a known agent; an unreachable agent is `ok: false`, not an error. */
+export type PingResult =
+  | { ok: true; latency_ms: number; reply_preview: string | null; tools: AgentTool[] | null; mapping: ToolMapping | null }
+  | { ok: false; latency_ms: number; error: string; tools: AgentTool[] | null; mapping: ToolMapping | null };
+
+export interface ExampleAgentState {
+  running: boolean;
+  url: string;
+  pid: number | null;
+  starting: boolean;
 }
 
 /** GET /api/health (plan 03 Step 1). Never carries the key itself, only whether one is set. */
@@ -354,6 +410,11 @@ async function post<T>(path: string, body?: unknown, signal?: AbortSignal): Prom
   return res.json() as Promise<T>;
 }
 
+async function del(path: string): Promise<void> {
+  const res = await fetch(path, { method: "DELETE" });
+  if (!res.ok) throw new ApiError(res.status, await detailOf(res));
+}
+
 // Read routes take `?source=`; `live` is the API's default, so it is only sent when a caller asks for
 // something else. A replay only ever overrides `live` (api/main.py), so an archive is always served as asked.
 const withSource = (path: string, source?: ReadSource) => (source && source !== "live" ? `${path}?source=${source}` : path);
@@ -391,4 +452,17 @@ export const api = {
   replay: () => get<ReplayInfo>("/api/replay"),
   /** Slow (real target + judge, 10–30 s). Pass a signal to give up client-side; the server 504s at ~40 s. */
   attack: (body: AttackBody, signal?: AbortSignal) => post<AttackResult>("/api/attack", body, signal),
+  /** `builtin`, `example`, then the connected agents. Each call probes port 8790 (1 s timeout), so poll at ≥ 3 s. */
+  agents: () => get<Agent[]>("/api/agents"),
+  /** 201 with the new row; 400 for a bad name or URL, 409 when that URL is already connected. */
+  agentCreate: (body: { name: string; url: string }) => post<Agent>("/api/agents", body),
+  /** 204; 404 for a synthetic or unknown id, 409 while any loop runs. */
+  agentDelete: (id: string) => del(`/api/agents/${id}`),
+  /** A hello `POST /episode` plus `GET /tools`; up to ~12 s. Records `last_ping`/`tools` on stored rows. */
+  agentPing: (id: string) => post<PingResult>(`/api/agents/${id}/ping`),
+  /** 202: spawned, `running` flips when 8790 answers (first start syncs a venv, up to a minute). 503 without a key, 409 if 8790 is taken. */
+  exampleStart: () => post<ExampleAgentState & { started_at: string }>("/api/agents/example/start"),
+  /** 404 when nothing runs; an agent on 8790 we did not spawn is left alone (`owned: false`). */
+  exampleStop: () => post<ExampleAgentState & { stopped: boolean; owned: boolean }>("/api/agents/example/stop"),
+  exampleLog: (tail = 200) => get<{ lines: string[] }>(`/api/agents/example/log?tail=${tail}`),
 };
