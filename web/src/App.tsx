@@ -9,6 +9,7 @@ import { loadSettings, saveSettings, toStartBody, type RunSettings } from "@/lib
 import Intro, { type StartMode } from "@/pages/Intro";
 import Heal from "@/pages/Heal";
 import AgentsList from "@/pages/Agents";
+import Onboarding from "@/pages/Onboarding";
 import RunLive from "@/pages/RunLive";
 import Results from "@/pages/Results";
 import Cycle from "@/pages/Cycle";
@@ -27,6 +28,13 @@ const REPLAY_BUSY_NOTE = "a live run is in progress · showing it instead";
  */
 export default function App() {
   const route = useRoute();
+  // The shape of the next run, edited in the settings drawer and the wizard's First run step. Read from
+  // localStorage once; written on every change (not on mount) so an untouched browser keeps no key.
+  const [settings, setSettings] = useState<RunSettings>(loadSettings);
+  const changeSettings = (next: RunSettings) => {
+    setSettings(next);
+    saveSettings(next);
+  };
   if (route.kind === "landing") {
     return (
       <>
@@ -37,28 +45,25 @@ export default function App() {
       </>
     );
   }
-  return <AppPages route={route} />;
+  // The wizard is a full screen of its own, like the landing: no rail until there is something to show in it.
+  if (route.kind === "onboarding") {
+    return <Onboarding step={route.step} settings={settings} onSettingsChange={changeSettings} />;
+  }
+  return <AppPages route={route} settings={settings} onSettingsChange={changeSettings} />;
 }
 
 /**
- * The pages under /app. Today's screens keep working at their new addresses until Blocks 3–4 replace
+ * The pages under /app. Today's screens keep working at their new addresses until Block 4 replaces
  * them: `runs` is the old Heal screen, `run` is the old Cycles view while something is playing and
  * the old Results view once it is done, `cycle` is the cycle page. State that must outlive one page
- * (the next run's settings, why a start failed) lives here, above the shell's per-route fade.
+ * (why a start failed) lives here, above the shell's per-route fade.
  */
-function AppPages({ route }: { route: Route }) {
+function AppPages({ route, settings, onSettingsChange }: { route: Route; settings: RunSettings; onSettingsChange: (next: RunSettings) => void }) {
   const [startError, setStartError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   // Set when Replay could not start because a live loop is running; the run page shows the live run
   // with this note instead of a "replay · recorded" label that would be false.
   const [replayNote, setReplayNote] = useState<string | null>(null);
-  // The shape of the next run, edited in the settings drawer. Read from localStorage once; written
-  // on every change (not on mount) so an untouched browser keeps no key and a cleared one means defaults.
-  const [settings, setSettings] = useState<RunSettings>(loadSettings);
-  const changeSettings = (next: RunSettings) => {
-    setSettings(next);
-    saveSettings(next);
-  };
 
   // Nothing plays off-screen: whenever the screen is not the live run — a shell link, browser Back, or
   // a deep link arriving with a tape still playing — a playing replay is frozen where it is, so the
@@ -132,7 +137,9 @@ function AppPages({ route }: { route: Route }) {
           case "home":
             return <Placeholder title="Home" />;
           case "onboarding":
-            return <Placeholder title="Connect your support agent" />;
+          case "landing":
+            // Rendered above the shell by App; never reached here.
+            return null;
           case "replays":
             return <Placeholder title="Replays" body="Watch a past run back. This page arrives in a later step." />;
           case "settings":
@@ -145,7 +152,7 @@ function AppPages({ route }: { route: Route }) {
                 onStart={(mode) => void start(mode, loop, replay, refresh)}
                 onStopReplay={() => api.replayStop().catch(() => undefined).finally(refresh)}
                 settings={settings}
-                onSettingsChange={changeSettings}
+                onSettingsChange={onSettingsChange}
                 loopRunning={loop?.running ?? false}
                 replay={replay}
                 error={startError}
@@ -169,8 +176,6 @@ function AppPages({ route }: { route: Route }) {
                 onCycle={(n) => navigate({ kind: "cycle", id: route.id, n })}
               />
             );
-          case "landing":
-            return null;
         }
       }}
     </Shell>
