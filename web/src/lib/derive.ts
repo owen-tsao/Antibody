@@ -590,6 +590,17 @@ export function recordingFor(id: string): RecordingInfo["source"] | null {
 }
 
 /**
+ * The run whose tape is playing, as a runs-list id (`golden`, or the history id behind `run:<id>`): the inverse
+ * of `recordingFor`, so the rail's "Current run" can point at the tape's own page rather than `/app/runs/live`.
+ * Null when nothing is playing.
+ */
+export function replayRunId(replay: Pick<ReplayInfo, "active" | "recording"> | null): string | null {
+  if (!replay?.active || !replay.recording) return null;
+  const src = replay.recording.source;
+  return src.startsWith("run:") ? src.slice("run:".length) : src;
+}
+
+/**
  * Whether the active replay is the one this page would show. A replay overrides only `live` reads, so on
  * `/app/runs/live` any tape is what is on screen; a history run is on screen only when its own tape plays.
  */

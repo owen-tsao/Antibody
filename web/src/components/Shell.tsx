@@ -6,7 +6,8 @@ import { api, type Health, type LoopState, type ReplayInfo, type Status } from "
 import ApiDown from "@/components/ApiDown";
 import { useModal } from "@/hooks/useModal";
 import { usePoll } from "@/hooks/usePoll";
-import { AGENTS, HOME, href, LANDING, LIVE_RUN, linkProps, REPLAYS, RUNS, SETTINGS, type Route } from "@/lib/routes";
+import { replayRunId } from "@/lib/derive";
+import { AGENTS, HOME, href, LANDING, linkProps, REPLAYS, RUNS, SETTINGS, type Route } from "@/lib/routes";
 import { NO_KEY_LINE } from "@/lib/ui";
 import { cn } from "@/lib/utils";
 
@@ -52,7 +53,13 @@ interface Item {
 }
 
 const HOME_ITEM: Item = { route: HOME, label: "Home", icon: House, active: (r) => r.kind === "home" };
-const CURRENT_RUN_ITEM: Item = { route: LIVE_RUN, label: "Current run", icon: Activity, active: (r) => r.kind === "run" && r.id === "live" };
+/** "Current run" points at whatever is on screen right now: the live loop, or the run whose tape is playing. */
+const currentRunItem = (id: string): Item => ({
+  route: { kind: "run", id },
+  label: "Current run",
+  icon: Activity,
+  active: (r) => r.kind === "run" && r.id === id,
+});
 const WORKSPACE: Item[] = [
   { route: AGENTS, label: "Agents", icon: Bot, active: (r) => r.kind === "agents" },
   // The live run is "Current run" above; Runs stays lit for it too, as the section it belongs to.
@@ -130,6 +137,8 @@ export default function Shell({ route, children }: { route: Route; children: (da
   const noKey = health !== null && !health.has_api_key;
   // A paused replay is still the current run, but the dot alone would read as "nothing happening".
   const currentRunLabel = replay?.active && replay.paused ? "Current run · paused" : "Current run";
+  // A playing tape is the current run, and its page is the tape's own (`/app/runs/golden`), not `live`.
+  const currentRun = currentRunItem(replayRunId(replay) ?? "live");
 
   const rail = (compact: boolean) => {
     const row = (it: Item, dot?: "live" | "idle", label = it.label) => {
@@ -172,7 +181,7 @@ export default function Shell({ route, children }: { route: Route; children: (da
         </div>
         <nav aria-label="Sections" className="mt-6 flex flex-col gap-0.5">
           {row(HOME_ITEM)}
-          {live && row(CURRENT_RUN_ITEM, loop?.running ? "live" : "idle", currentRunLabel)}
+          {live && row(currentRun, loop?.running ? "live" : "idle", currentRunLabel)}
           {!compact ? (
             <p className="mb-1 mt-5 px-2 text-[10.5px] font-medium uppercase tracking-[0.08em] text-[var(--faint)]">Workspace</p>
           ) : (
@@ -220,7 +229,7 @@ export default function Shell({ route, children }: { route: Route; children: (da
           Antibody
         </a>
         {live && (
-          <a {...linkProps(LIVE_RUN)} className="ml-auto inline-flex items-center gap-2 rounded text-[12px] text-[var(--muted)]">
+          <a {...linkProps(currentRun.route)} className="ml-auto inline-flex items-center gap-2 rounded text-[12px] text-[var(--muted)]">
             <span aria-hidden className={cn("h-1.5 w-1.5 rounded-full", loop?.running ? "bg-[var(--live)] motion-safe:animate-pulse" : "bg-[var(--faint)]")} />
             {currentRunLabel}
           </a>
