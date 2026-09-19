@@ -153,6 +153,8 @@ export interface LoopStartBody {
   world?: World;
   /** An agent id from GET /api/agents; null = the API process's own default (400 for an unknown id). */
   target?: string | null;
+  /** Measure attacks that land on v0 and the final version when the run ends (writes `vulnerability.json`). Default true. */
+  vulnerability?: boolean;
 }
 
 export interface LoopState {
@@ -185,6 +187,8 @@ export interface Manifest {
     transport?: string;
     url?: string | null;
   };
+  /** The model behind each role as this API process resolved them (`ANTIBODY_*_MODEL`), for the Settings page. */
+  models: { target: string; chaos: string; repair: string; judge: string; inference_url: string };
   tools: { name: string; description: string; side_effect: boolean; free_text_fields: string[] }[];
   families: { kind: ScenarioKind; title: string; seed_id: string | null }[];
   /** The run-settings defaults a start dialog begins from. */
@@ -215,6 +219,10 @@ export interface RunRow {
   flags: string[];
   /** A legacy archive with no run.json: world/target/flags are guesses. */
   synthesized: boolean;
+  /** The run can be played back (a timed phase log plus its cycles). Never true for the live row. */
+  recording: boolean;
+  /** Seconds from the first to the last recorded phase; elapsed so far on the live row; null with no phase log. */
+  duration_s: number | null;
   /** GET /api/runs/{id} only. */
   configs?: Pick<AgentConfig, "version" | "parent_version" | "patch_note">[];
 }
@@ -466,6 +474,8 @@ export const api = {
   agentDelete: (id: string) => del(`/api/agents/${id}`),
   /** A hello `POST /episode` plus `GET /tools`; up to ~12 s. Records `last_ping`/`tools` on stored rows. */
   agentPing: (id: string) => post<PingResult>(`/api/agents/${id}/ping`),
+  /** The same ping for a URL nobody has saved yet; stores nothing. 400 for a URL `POST /api/agents` would reject. */
+  agentPingUrl: (url: string) => post<PingResult>("/api/agents/ping", { url }),
   /** 202: spawned, `running` flips when 8790 answers (first start syncs a venv, up to a minute). 503 without a key, 409 if 8790 is taken. */
   exampleStart: () => post<ExampleAgentState & { started_at: string }>("/api/agents/example/start"),
   /** 404 when nothing runs; an agent on 8790 we did not spawn is left alone (`owned: false`). */

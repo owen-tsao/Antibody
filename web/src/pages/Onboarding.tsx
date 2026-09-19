@@ -19,11 +19,10 @@ import { cn } from "@/lib/utils";
  * route only changes `step`), and a refresh starts over at step 1 — a step that needs state it no longer
  * has sends the person back there.
  *
- * Ping has no by-URL route: Ping on the Connect step stores the row (`POST /api/agents`, or finds the
- * existing row on a 409) and pings that id. The wizard remembers the one row it created and keeps it
- * honest — a failed ping removes it, a re-ping with a different name or URL replaces it — so a typo never
- * leaves a dead agent behind. Save then only moves on. The example agent is started here too, its log's
- * last line shown while its venv syncs.
+ * Ping on the Connect step is `POST /api/agents/ping {url}`: nothing is stored until Save, so a typo or a
+ * dead address never leaves an agent row behind. Save then stores the row (`POST /api/agents`; a 409 means
+ * that URL is already connected under some name, and that row is used). The example agent is started here
+ * too, its log's last line shown while its venv syncs.
  */
 
 const STEPS = [
@@ -73,13 +72,6 @@ interface Chosen {
   mapping: ToolMapping | null;
 }
 
-/** The row the Connect step stored, so it can be corrected or removed before anyone else relies on it. */
-interface Created {
-  id: string;
-  name: string;
-  url: string;
-}
-
 const input =
   "h-9 w-full rounded-lg border border-[var(--border)] bg-[var(--inset)] px-3 text-[13px] text-[var(--fg)] outline-none transition-colors placeholder:text-[var(--faint)] focus:border-[var(--border-2)]";
 
@@ -116,14 +108,13 @@ export default function Onboarding({
   const [exampleBusy, setExampleBusy] = useState(false);
   const [logLine, setLogLine] = useState<string | null>(null);
 
-  // Step 2: the form. `ping` remembers what the result was for, so Save needs a fresh ping after an edit.
-  // `created` is a ref: bookkeeping for the async ping, not something the page renders.
+  // Step 2: the form. `ping` remembers which URL the result was for, so Save needs a fresh ping after an edit.
   const [name, setName] = useState("");
   const [url, setUrl] = useState("");
   const [pinging, setPinging] = useState(false);
-  const [ping, setPing] = useState<{ result: PingResult; id: string; name: string; url: string } | null>(null);
+  const [ping, setPing] = useState<{ result: PingResult; url: string } | null>(null);
   const [connectNote, setConnectNote] = useState<string | null>(null);
-  const created = useRef<Created | null>(null);
+  const [saving, setSaving] = useState(false);
 
   // Step 4.
   const [healing, setHealing] = useState(false);
@@ -194,54 +185,49 @@ export default function Onboarding({
   };
 
   const doPing = async () => {
-    const want = { name: name.trim(), url: url.trim() };
+    const want = url.trim();
     setPinging(true);
     setPing(null);
     setConnectNote(null);
     try {
-      // A row this wizard stored under a different name or URL is ours to correct: remove it rather than
-      // leave two agents (or one under a stale name) behind.
-      const prev = created.current;
-      if (prev && (prev.name !== want.name || !sameUrl(prev.url, want.url))) {
-        await api.agentDelete(prev.id).catch(() => undefined);
-        created.current = null;
-      }
-      let id = created.current?.id ?? null;
-      if (id === null) {
-        try {
-          const row = await api.agentCreate(want);
-          id = row.id;
-          created.current = { id, ...want };
-        } catch (e) {
-          if (!(e instanceof ApiError && e.status === 409)) throw e;
-          // Already connected, under some name: ping that row rather than refusing. The backend compares
-          // canonical targets (scheme, host, port, path); this compares the text typed, so when the two
-          // disagree (`localhost` vs `127.0.0.1`) the row is not found and the API's own 409 message shows.
-          const existing = (await api.agents()).find((a) => !a.synthetic && a.url !== null && sameUrl(a.url, want.url));
-          if (!existing) throw e;
-          id = existing.id;
-        }
-      }
-      const result = await api.agentPing(id);
-      // The cleanup must not wait on the component: navigating away mid-ping would otherwise leave the row.
-      if (!result.ok && created.current?.id === id) {
-        await api.agentDelete(id).catch(() => undefined);
-        created.current = null;
-      }
+      const result = await api.agentPingUrl(want);
       if (!alive.current) return;
-      setPing({ result, id, ...want });
+      setPing({ result, url: want });
     } catch (e) {
+      // A 400 is the API refusing the URL itself (not http(s), too long); its message says which.
       if (alive.current) setConnectNote(e instanceof Error ? e.message : String(e));
     } finally {
       if (alive.current) setPinging(false);
     }
   };
 
-  const canSave = !!ping && ping.result.ok && ping.name === name.trim() && ping.url === url.trim();
-  const save = () => {
+  const canSave = !!ping && ping.result.ok && ping.url === url.trim() && !!name.trim() && !saving;
+  const save = async () => {
     if (!ping || !ping.result.ok) return;
-    setChosen({ id: ping.id, name: ping.name, url: ping.url, mapping: ping.result.mapping });
-    go(3);
+    const want = { name: name.trim(), url: ping.url };
+    setSaving(true);
+    setConnectNote(null);
+    try {
+      let row: { id: string; name: string; url: string | null };
+      try {
+        row = await api.agentCreate(want);
+      } catch (e) {
+        if (!(e instanceof ApiError && e.status === 409)) throw e;
+        // Already connected, under some name: use that row rather than refusing. The backend compares
+        // canonical targets (scheme, host, port, path); this compares the text typed, so when the two
+        // disagree (`localhost` vs `127.0.0.1`) the row is not found and the API's own 409 message shows.
+        const existing = (await api.agents()).find((a) => !a.synthetic && a.url !== null && sameUrl(a.url, want.url));
+        if (!existing) throw e;
+        row = existing;
+      }
+      if (!alive.current) return;
+      setChosen({ id: row.id, name: row.name, url: row.url, mapping: ping.result.mapping });
+      go(3);
+    } catch (e) {
+      if (alive.current) setConnectNote(e instanceof Error ? e.message : String(e));
+    } finally {
+      if (alive.current) setSaving(false);
+    }
   };
 
   const noKey = health !== null && !health.has_api_key;
@@ -351,7 +337,7 @@ export default function Onboarding({
               </label>
             </div>
             <div className="mt-4 flex items-baseline gap-4">
-              <button type="button" onClick={() => void doPing()} disabled={pinging || !name.trim() || !url.trim()} className={textButton}>
+              <button type="button" onClick={() => void doPing()} disabled={pinging || !url.trim()} className={textButton}>
                 <span className="u-line">{pinging ? "pinging…" : "Ping"}</span>
               </button>
               {ping && (
@@ -367,8 +353,14 @@ export default function Onboarding({
             </div>
             <Contract />
             <Footer onBack={() => go(1)}>
-              <button type="button" onClick={save} disabled={!canSave} title={canSave ? undefined : "ping the agent first"} className={primaryButton}>
-                Save
+              <button
+                type="button"
+                onClick={() => void save()}
+                disabled={!canSave}
+                title={canSave ? undefined : !name.trim() ? "name the agent first" : "ping the agent first"}
+                className={primaryButton}
+              >
+                {saving ? "Saving…" : "Save"}
               </button>
             </Footer>
           </>
