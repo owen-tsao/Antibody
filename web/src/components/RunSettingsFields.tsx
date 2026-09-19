@@ -1,4 +1,5 @@
 import { CHAOS_CYCLES, REPAIR_ATTEMPTS, SEEDS, UNTIL_QUIET, type RunSettings } from "@/lib/settings";
+import { textButton } from "@/lib/ui";
 import { cn } from "@/lib/utils";
 
 /**
@@ -8,9 +9,6 @@ import { cn } from "@/lib/utils";
  * already has (lib/settings.ts). `world` left the fields: the API default `auto` resolves to the mock
  * storefront without Zendesk credentials, which is the only world the sandbox runs in.
  */
-
-export const textButton =
-  "group rounded text-[13px] text-[var(--muted)] transition-colors hover:text-[var(--fg)] disabled:cursor-default disabled:text-[var(--faint)] disabled:hover:text-[var(--faint)]";
 
 export default function RunSettingsFields({
   settings,
@@ -34,6 +32,7 @@ export default function RunSettingsFields({
   const setChaos = (chaosCycles: number) =>
     set({ chaosCycles, untilQuiet: settings.untilQuiet === null ? null : chaosCycles === 0 ? null : Math.min(settings.untilQuiet, chaosCycles) });
   const quietMax = Math.min(UNTIL_QUIET.max, settings.chaosCycles);
+  const untilQuiet = settings.untilQuiet;
 
   return (
     <div className="divide-y divide-[var(--border)] border-y border-[var(--border)]">
@@ -79,7 +78,7 @@ export default function RunSettingsFields({
         </button>
       </Row>
       <Row label="Until quiet" hint="stop early once this many chaos attacks in a row are blocked">
-        {settings.untilQuiet === null ? (
+        {untilQuiet === null ? (
           <button
             type="button"
             role="switch"
@@ -94,11 +93,11 @@ export default function RunSettingsFields({
         ) : (
           <div className="flex items-baseline gap-3">
             <Stepper
-              value={settings.untilQuiet}
-              onDown={() => set({ untilQuiet: settings.untilQuiet! - 1 })}
-              onUp={() => set({ untilQuiet: settings.untilQuiet! + 1 })}
-              downDisabled={settings.untilQuiet <= UNTIL_QUIET.min}
-              upDisabled={settings.untilQuiet >= quietMax}
+              value={untilQuiet}
+              onDown={() => set({ untilQuiet: untilQuiet - 1 })}
+              onUp={() => set({ untilQuiet: untilQuiet + 1 })}
+              downDisabled={untilQuiet <= UNTIL_QUIET.min}
+              upDisabled={untilQuiet >= quietMax}
               name="blocked attacks in a row"
             />
             <button type="button" onClick={() => set({ untilQuiet: null })} className={cn(textButton, "text-[12px]")}>

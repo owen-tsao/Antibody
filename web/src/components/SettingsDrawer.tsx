@@ -2,8 +2,11 @@ import { motion, useReducedMotion } from "framer-motion";
 import { useEffect, useId, useRef, useState } from "react";
 
 import { api, type Manifest } from "@/api";
-import RunSettingsFields, { textButton } from "@/components/RunSettingsFields";
+import RunSettingsFields from "@/components/RunSettingsFields";
+import { useModal } from "@/hooks/useModal";
+import { seedCount } from "@/lib/derive";
 import { DEFAULT_SETTINGS, estimateLabel, isDefaultSettings, type RunSettings } from "@/lib/settings";
+import { textButton } from "@/lib/ui";
 import { cn } from "@/lib/utils";
 
 /**
@@ -15,8 +18,9 @@ import { cn } from "@/lib/utils";
  * The parent owns the settings (it sends them with POST /api/loop/start and persists them); this only
  * edits them. It is mounted while open, so the manifest is fetched per opening (cheap: the API caches it).
  *
- * Keyboard: focus moves into the panel on open and is trapped there (Tab wraps), Esc closes, and focus
- * returns to whatever opened it. Motion is a short slide, or nothing under prefers-reduced-motion.
+ * Keyboard: `useModal` — focus moves into the panel on open and is trapped there (Tab wraps), Esc closes,
+ * the page behind stops scrolling, focus returns to whatever opened it. Motion is a short slide, or nothing
+ * under prefers-reduced-motion.
  */
 
 interface Props {
@@ -25,18 +29,11 @@ interface Props {
   onClose: () => void;
 }
 
-const FOCUSABLE = 'button:not([disabled]), [href], input:not([disabled]), select:not([disabled]), [tabindex]:not([tabindex="-1"])';
-
 export default function SettingsDrawer({ settings, onChange, onClose }: Props) {
   const reduced = useReducedMotion();
   const titleId = useId();
   const panel = useRef<HTMLDivElement>(null);
-  // The trap is installed once per opening; reading the latest onClose through a ref keeps a re-render
-  // (every stepper click) from re-running the effect and yanking focus back to the panel.
-  const closeRef = useRef(onClose);
-  useEffect(() => {
-    closeRef.current = onClose;
-  }, [onClose]);
+  useModal(panel, onClose);
 
   const [manifest, setManifest] = useState<Manifest | null>(null);
   useEffect(() => {
@@ -50,40 +47,7 @@ export default function SettingsDrawer({ settings, onChange, onClose }: Props) {
     };
   }, []);
 
-  useEffect(() => {
-    const el = panel.current;
-    if (!el) return;
-    const opener = document.activeElement instanceof HTMLElement ? document.activeElement : null;
-    el.focus();
-    const onKey = (e: KeyboardEvent) => {
-      if (e.key === "Escape") {
-        e.preventDefault();
-        closeRef.current();
-        return;
-      }
-      if (e.key !== "Tab") return;
-      const items = Array.from(el.querySelectorAll<HTMLElement>(FOCUSABLE));
-      if (items.length === 0) return;
-      const first = items[0];
-      const last = items[items.length - 1];
-      const active = document.activeElement;
-      const inside = active instanceof Node && el.contains(active);
-      if (e.shiftKey && (active === first || active === el || !inside)) {
-        e.preventDefault();
-        last.focus();
-      } else if (!e.shiftKey && (active === last || !inside)) {
-        e.preventDefault();
-        first.focus();
-      }
-    };
-    document.addEventListener("keydown", onKey);
-    return () => {
-      document.removeEventListener("keydown", onKey);
-      opener?.focus();
-    };
-  }, []);
-
-  const seedCount = manifest ? manifest.families.filter((f) => f.seed_id).length : null;
+  const seeds = seedCount(manifest);
 
   const slide = reduced
     ? { initial: { opacity: 0 }, animate: { opacity: 1 }, exit: { opacity: 0 }, transition: { duration: 0 } }
@@ -125,11 +89,11 @@ export default function SettingsDrawer({ settings, onChange, onClose }: Props) {
         </header>
 
         <div className="mt-6">
-          <RunSettingsFields settings={settings} onChange={onChange} seedCount={seedCount} />
+          <RunSettingsFields settings={settings} onChange={onChange} seedCount={seeds} />
         </div>
 
         <div className="tabular mt-4 flex items-baseline justify-between text-[12px] text-[var(--faint)]">
-          <span>{estimateLabel(settings, seedCount)}</span>
+          <span>{estimateLabel(settings, seeds)}</span>
           {!isDefaultSettings(settings) && (
             <button
               type="button"

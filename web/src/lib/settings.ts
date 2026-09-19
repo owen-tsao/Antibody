@@ -66,7 +66,8 @@ export function normalizeSettings(raw: unknown): RunSettings {
     secondPass: typeof r.secondPass === "boolean" ? r.secondPass : DEFAULT_SETTINGS.secondPass,
     // The API rejects `until_quiet` above `chaos_cycles` (400), so the cap is enforced here too.
     untilQuiet: typeof r.untilQuiet === "number" && chaosCycles > 0 ? clampInt(r.untilQuiet, UNTIL_QUIET.min, Math.min(UNTIL_QUIET.max, chaosCycles), 1) : null,
-    world: r.world === "mock" ? "mock" : "auto",
+    // `world` has no field any more; a "mock" persisted by an older build must not keep steering runs unseen.
+    world: "auto",
     target: typeof r.target === "string" && r.target ? r.target : null,
   };
 }

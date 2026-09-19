@@ -166,7 +166,7 @@ function AppPages({ route, settings, onSettingsChange }: { route: Route; setting
             return loop?.running || replay?.active ? (
               <RunLive replayNote={replayNote} loop={loop} status={status} statusError={statusError} refresh={refresh} />
             ) : (
-              <Results onCycle={(n) => navigate({ kind: "cycle", id: "live", n })} />
+              <Results loop={loop} onCycle={(n) => navigate({ kind: "cycle", id: "live", n })} />
             );
           case "cycle":
             if (route.id !== "live") return <HistoryRunPlaceholder id={route.id} />;

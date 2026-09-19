@@ -349,12 +349,20 @@ function dangerCall(calls: CallLike[], evidence?: CallLike | null, passed?: bool
 }
 
 /**
- * The seed-attack preview replays a scripted scenario against the built-in agent in-process. An external
- * agent has its own tools and state, so the preview would say nothing true about it; hide it there.
+ * The seed-attack preview replays a scripted scenario against the built-in agent in-process. It says nothing
+ * true about an external agent, so the run page hides it unless both the API's default target (the manifest)
+ * and the run on screen (`loop.settings.target`, null when the run took the default) are the built-in agent.
  * Unknown (manifest still loading) reads as unavailable so the buttons never flash in and out.
  */
-export function seedAttackAvailable(manifest: Manifest | null): boolean {
-  return manifest?.target.transport === "in-process";
+export function seedAttackAvailable(manifest: Manifest | null, loop: LoopState | null): boolean {
+  if (manifest?.target.transport !== "in-process") return false;
+  const target = loop?.settings?.target ?? null;
+  return target === null || target === "builtin";
+}
+
+/** How many seed scenarios the manifest lists; null while it has not loaded. Bounds the seeds stepper. */
+export function seedCount(manifest: Manifest | null): number | null {
+  return manifest ? manifest.families.filter((f) => f.seed_id).length : null;
 }
 
 export function attackPreview(res: AttackResult): AttackPreview {
@@ -1132,14 +1140,13 @@ export interface EmptyState {
 }
 
 /**
- * What a list says when it has nothing to show, by page and by whether the API can run live. Copy speaks
+ * What the runs list says when it has nothing to show, by whether the API can run live. Copy speaks
  * support ("your support agent", "the demo agent"), never "target". `health` null means unknown: the
  * page has not heard from /api/health yet, so the copy does not mention the key either way. The agents
  * page always has its two built-in rows, so its empty state is one line in the page, not an entry here.
  */
-export function emptyStateFor(kind: "runs", health: Health | null): EmptyState {
+export function emptyStateFor(health: Health | null): EmptyState {
   const noKey = health !== null && !health.has_api_key;
-  void kind;
   return noKey
     ? {
         title: "No runs yet",
@@ -1216,6 +1223,11 @@ export function mappingLine(m: ToolMapping | null): string {
   return `${m.known.length} of ${total} tools map to the sandbox storefront; ${m.unknown.join(", ")} will be unavailable during attacks.`;
 }
 
+/** The Tools step's rows: every listed tool with whether the sandbox storefront serves it, mapped ones first. */
+export function mappingRows(m: ToolMapping): { name: string; served: boolean }[] {
+  return [...m.known.map((name) => ({ name, served: true })), ...m.unknown.map((name) => ({ name, served: false }))];
+}
+
 /** Runs per agent id from the runs list. The demo tape is a recording, not a run someone started, so it is left out. */
 export function runsByAgent(runs: RunRow[]): Map<string, number> {
   const out = new Map<string, number>();
@@ -1233,6 +1245,28 @@ export function exampleState(a: Pick<AgentRow, "running" | "starting">): Example
   if (a.running) return "running";
   if (a.starting) return "starting";
   return "stopped";
+}
+
+/**
+ * The faint line under an agent's name: `demo agent · in-process`, `starting… · HTTP` / `running · HTTP` for
+ * the example agent (`starting` covers the seconds between the click and the next poll), `HTTP` otherwise.
+ */
+export function agentSubline(a: Pick<AgentRow, "id" | "running" | "starting">, starting: boolean): string {
+  if (a.id === "builtin") return "demo agent · in-process";
+  if (a.id === "example") return `${starting ? "starting…" : exampleState(a)} · HTTP`;
+  return "HTTP";
+}
+
+/** `2 agents · none of your own yet` / `3 agents`: the count line under the Agents title. */
+export function agentsCountLine(agents: Pick<AgentRow, "synthetic">[]): string {
+  const own = agents.some((a) => !a.synthetic);
+  return `${agents.length} ${agents.length === 1 ? "agent" : "agents"}${own ? "" : " · none of your own yet"}`;
+}
+
+/** Whether two typed URLs name the same agent: whitespace and trailing slashes aside. */
+export function sameUrl(a: string, b: string): boolean {
+  const norm = (u: string) => u.trim().replace(/\/+$/, "");
+  return norm(a) === norm(b);
 }
 
 /**

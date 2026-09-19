@@ -3,12 +3,13 @@ import { Check, Copy, Globe, Server, Sparkles } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 
 import { api, ApiError, type PingResult, type ToolMapping } from "@/api";
-import RunSettingsFields, { textButton } from "@/components/RunSettingsFields";
+import RunSettingsFields from "@/components/RunSettingsFields";
 import WizardRail from "@/components/WizardRail";
 import { usePoll } from "@/hooks/usePoll";
-import { mappingLine, pingResultLine } from "@/lib/derive";
+import { mappingLine, mappingRows, pingResultLine, sameUrl, seedCount } from "@/lib/derive";
 import { HOME, href, LIVE_RUN, linkProps, navigate, onboarding, type OnboardingStep, replace, skipOnboarding } from "@/lib/routes";
 import { estimateLabel, toStartBody, type RunSettings } from "@/lib/settings";
+import { NO_KEY_LINE, primaryButton, textButton } from "@/lib/ui";
 import { cn } from "@/lib/utils";
 
 /**
@@ -19,8 +20,10 @@ import { cn } from "@/lib/utils";
  * has sends the person back there.
  *
  * Ping has no by-URL route: Ping on the Connect step stores the row (`POST /api/agents`, or finds the
- * existing row on a 409) and pings that id; a failed ping removes a row this step created. Save then only
- * moves on. The example agent is started here too, its log's last line shown while its venv syncs.
+ * existing row on a 409) and pings that id. The wizard remembers the one row it created and keeps it
+ * honest — a failed ping removes it, a re-ping with a different name or URL replaces it — so a typo never
+ * leaves a dead agent behind. Save then only moves on. The example agent is started here too, its log's
+ * last line shown while its venv syncs.
  */
 
 const STEPS = [
@@ -58,9 +61,8 @@ GET /tools
 // Polling while the example agent boots: the row's `running` flips when 8790 answers; the log shows progress.
 const EXAMPLE_POLL_MS = 3_000;
 const EXAMPLE_TIMEOUT_MS = 180_000;
-const HEALTH_MS = 60_000;
-// Same words as the rail footer (Shell.tsx): the example agent calls inference, so starting it needs the key too.
-const NO_KEY = "Set WANDB_API_KEY to run live; replays still play";
+// Whether a key is set is static for the API's lifetime; the manifest is too.
+const STATIC_MS = 60_000;
 
 type Choice = "builtin" | "example" | "own";
 
@@ -71,12 +73,22 @@ interface Chosen {
   mapping: ToolMapping | null;
 }
 
-const primary =
-  "inline-flex h-9 items-center rounded-lg bg-[var(--fg)] px-4 text-[13px] font-medium text-[var(--bg)] transition-opacity hover:opacity-85 disabled:cursor-default disabled:opacity-40 disabled:hover:opacity-40";
+/** The row the Connect step stored, so it can be corrected or removed before anyone else relies on it. */
+interface Created {
+  id: string;
+  name: string;
+  url: string;
+}
+
 const input =
   "h-9 w-full rounded-lg border border-[var(--border)] bg-[var(--inset)] px-3 text-[13px] text-[var(--fg)] outline-none transition-colors placeholder:text-[var(--faint)] focus:border-[var(--border-2)]";
 
-const sameUrl = (a: string, b: string) => a.trim().replace(/\/+$/, "") === b.trim().replace(/\/+$/, "");
+/** Rail tiles the chosen path never visits (zero-based): Demo goes straight to First run, Example skips Connect. */
+function skippedSteps(chosen: Chosen | null): number[] {
+  if (chosen?.id === "builtin") return [1, 2];
+  if (chosen?.id === "example") return [1];
+  return [];
+}
 
 export default function Onboarding({
   step,
@@ -88,24 +100,30 @@ export default function Onboarding({
   onSettingsChange: (next: RunSettings) => void;
 }) {
   const reduced = useReducedMotion();
-  const { data: health } = usePoll(api.health, HEALTH_MS);
+  const { data: health } = usePoll(api.health, STATIC_MS);
+  const { data: manifest } = usePoll(api.manifest, STATIC_MS);
   const [furthest, setFurthest] = useState<OnboardingStep>(step);
-  if (step > furthest) setFurthest(step);
-
   const [choice, setChoice] = useState<Choice | null>(step === 2 ? "own" : null);
   const [chosen, setChosen] = useState<Chosen | null>(null);
+  // Derived during render, not in an effect: `furthest` follows the step reached, except when the step
+  // reached is one the session cannot show (below), which resets it.
+  const needsAgent = (step === 3 || step === 4) && chosen === null;
+  if (needsAgent && furthest !== 1) setFurthest(1);
+  else if (!needsAgent && step > furthest) setFurthest(step);
 
   // Step 1: the example agent's boot.
   const [exampleNote, setExampleNote] = useState<string | null>(null);
   const [exampleBusy, setExampleBusy] = useState(false);
   const [logLine, setLogLine] = useState<string | null>(null);
 
-  // Step 2: the form. `pinged` remembers what the result was for, so Save needs a fresh ping after an edit.
+  // Step 2: the form. `ping` remembers what the result was for, so Save needs a fresh ping after an edit.
+  // `created` is a ref: bookkeeping for the async ping, not something the page renders.
   const [name, setName] = useState("");
   const [url, setUrl] = useState("");
   const [pinging, setPinging] = useState(false);
   const [ping, setPing] = useState<{ result: PingResult; id: string; name: string; url: string } | null>(null);
   const [connectNote, setConnectNote] = useState<string | null>(null);
+  const created = useRef<Created | null>(null);
 
   // Step 4.
   const [healing, setHealing] = useState(false);
@@ -120,7 +138,6 @@ export default function Onboarding({
   }, []);
 
   // A step that needs an agent this session has not chosen (a refresh, a typed address) restarts.
-  const needsAgent = (step === 3 || step === 4) && chosen === null;
   useEffect(() => {
     if (needsAgent) replace(onboarding(1));
   }, [needsAgent]);
@@ -142,8 +159,10 @@ export default function Onboarding({
       const rows = await api.agents();
       const row = rows.find((a) => a.id === "example");
       if (!row) throw new Error("the example agent is not available on this API");
+      // Already `starting` (from the Agents page a moment ago): the port is taken by its own boot, and
+      // asking again would 409. Just wait for it.
+      if (!row.running && !row.starting) await api.exampleStart();
       if (!row.running) {
-        await api.exampleStart();
         const t0 = Date.now();
         for (;;) {
           await new Promise((r) => setTimeout(r, EXAMPLE_POLL_MS));
@@ -161,7 +180,7 @@ export default function Onboarding({
       setChosen({ id: "example", name: row.name, url: row.url, mapping: r.mapping });
       go(3);
     } catch (e) {
-      // A 409 means 8790 is already taken — by the agent itself or something else; the message says which.
+      // A 409 means 8790 is taken by something that is not the example agent; the API's message says so.
       if (alive.current) setExampleNote(e instanceof Error ? e.message : String(e));
     } finally {
       if (alive.current) setExampleBusy(false);
@@ -175,27 +194,42 @@ export default function Onboarding({
   };
 
   const doPing = async () => {
+    const want = { name: name.trim(), url: url.trim() };
     setPinging(true);
     setPing(null);
     setConnectNote(null);
-    let id: string | null = null;
-    let created = false;
     try {
-      try {
-        const row = await api.agentCreate({ name: name.trim(), url: url.trim() });
-        id = row.id;
-        created = true;
-      } catch (e) {
-        if (!(e instanceof ApiError && e.status === 409)) throw e;
-        // Already connected under some name: ping that row rather than refusing.
-        const existing = (await api.agents()).find((a) => !a.synthetic && a.url !== null && sameUrl(a.url, url));
-        if (!existing) throw e;
-        id = existing.id;
+      // A row this wizard stored under a different name or URL is ours to correct: remove it rather than
+      // leave two agents (or one under a stale name) behind.
+      const prev = created.current;
+      if (prev && (prev.name !== want.name || !sameUrl(prev.url, want.url))) {
+        await api.agentDelete(prev.id).catch(() => undefined);
+        created.current = null;
+      }
+      let id = created.current?.id ?? null;
+      if (id === null) {
+        try {
+          const row = await api.agentCreate(want);
+          id = row.id;
+          created.current = { id, ...want };
+        } catch (e) {
+          if (!(e instanceof ApiError && e.status === 409)) throw e;
+          // Already connected, under some name: ping that row rather than refusing. The backend compares
+          // canonical targets (scheme, host, port, path); this compares the text typed, so when the two
+          // disagree (`localhost` vs `127.0.0.1`) the row is not found and the API's own 409 message shows.
+          const existing = (await api.agents()).find((a) => !a.synthetic && a.url !== null && sameUrl(a.url, want.url));
+          if (!existing) throw e;
+          id = existing.id;
+        }
       }
       const result = await api.agentPing(id);
+      // The cleanup must not wait on the component: navigating away mid-ping would otherwise leave the row.
+      if (!result.ok && created.current?.id === id) {
+        await api.agentDelete(id).catch(() => undefined);
+        created.current = null;
+      }
       if (!alive.current) return;
-      if (!result.ok && created) await api.agentDelete(id).catch(() => undefined);
-      setPing({ result, id, name: name.trim(), url: url.trim() });
+      setPing({ result, id, ...want });
     } catch (e) {
       if (alive.current) setConnectNote(e instanceof Error ? e.message : String(e));
     } finally {
@@ -211,12 +245,16 @@ export default function Onboarding({
   };
 
   const noKey = health !== null && !health.has_api_key;
+  const seeds = seedCount(manifest);
   const heal = async () => {
     if (!chosen) return;
     setHealing(true);
     setHealNote(null);
+    // The choice outlives the wizard: the settings drawer and Heal on /app/runs start against it too.
+    const next = { ...settings, target: chosen.id };
+    onSettingsChange(next);
     try {
-      await api.loopStart(toStartBody({ ...settings, target: chosen.id }));
+      await api.loopStart(toStartBody(next));
       navigate(LIVE_RUN);
     } catch (e) {
       // 409 = a loop is already running; watching it is the right outcome.
@@ -235,13 +273,22 @@ export default function Onboarding({
 
   const eyebrow = `Step ${step} of ${STEPS.length} · ${STEPS[step - 1].label}`;
 
+  // The redirect above is on its way; painting an empty step 3 or 4 first would flash.
+  if (needsAgent) return null;
+
   return (
     <div className="flex min-h-screen flex-col px-6 py-4 text-[var(--fg)]">
       <header className="grid grid-cols-[1fr_auto_1fr] items-center">
         <a {...linkProps(HOME)} className="display w-fit rounded text-[20px] leading-none" aria-label="Antibody — home">
           A
         </a>
-        <WizardRail steps={[...STEPS]} index={step - 1} furthest={furthest - 1} onGoTo={(i) => go((i + 1) as OnboardingStep)} />
+        <WizardRail
+          steps={[...STEPS]}
+          index={step - 1}
+          furthest={furthest - 1}
+          skipped={skippedSteps(chosen)}
+          onGoTo={(i) => go((i + 1) as OnboardingStep)}
+        />
         <a
           href={href(HOME)}
           onClick={(e) => {
@@ -268,8 +315,8 @@ export default function Onboarding({
                 body="An OpenAI Agents SDK agent we start for you on this machine."
                 selected={choice === "example"}
                 onSelect={() => setChoice("example")}
-                disabled={exampleBusy}
-                title2={noKey ? `${NO_KEY}; the example agent calls inference` : undefined}
+                disabled={exampleBusy || noKey}
+                reason={noKey ? `${NO_KEY_LINE}; the example agent calls inference` : undefined}
               />
               <ChoiceCard icon={Globe} title="Your own" body="Any agent that answers POST /episode over HTTP." selected={choice === "own"} onSelect={() => setChoice("own")} disabled={exampleBusy} />
             </div>
@@ -283,7 +330,7 @@ export default function Onboarding({
               </p>
             )}
             <Footer>
-              <button type="button" onClick={continueFrom1} disabled={!choice || exampleBusy} className={primary}>
+              <button type="button" onClick={continueFrom1} disabled={!choice || exampleBusy} className={primaryButton}>
                 {exampleBusy ? "Starting…" : "Continue"}
               </button>
             </Footer>
@@ -320,7 +367,7 @@ export default function Onboarding({
             </div>
             <Contract />
             <Footer onBack={() => go(1)}>
-              <button type="button" onClick={save} disabled={!canSave} title={canSave ? undefined : "ping the agent first"} className={primary}>
+              <button type="button" onClick={save} disabled={!canSave} title={canSave ? undefined : "ping the agent first"} className={primaryButton}>
                 Save
               </button>
             </Footer>
@@ -332,16 +379,16 @@ export default function Onboarding({
             <Title sub={mappingLine(chosen.mapping)}>Which of its tools the sandbox serves</Title>
             {chosen.mapping && chosen.mapping.known.length + chosen.mapping.unknown.length > 0 && (
               <ul className="mt-10 divide-y divide-[var(--border)] border-y border-[var(--border)] text-[13px]">
-                {[...chosen.mapping.known.map((n) => [n, true] as const), ...chosen.mapping.unknown.map((n) => [n, false] as const)].map(([n, known]) => (
+                {mappingRows(chosen.mapping).map(({ name: n, served }) => (
                   <li key={n} className="flex items-baseline justify-between py-2.5">
                     <span className="code">{n}</span>
-                    <span className={known ? "text-[var(--muted)]" : "text-[var(--faint)]"}>{known ? "sandbox storefront" : "unavailable during attacks"}</span>
+                    <span className={served ? "text-[var(--muted)]" : "text-[var(--faint)]"}>{served ? "sandbox storefront" : "unavailable during attacks"}</span>
                   </li>
                 ))}
               </ul>
             )}
             <Footer onBack={() => go(choice === "own" ? 2 : 1)}>
-              <button type="button" onClick={() => go(4)} className={primary}>
+              <button type="button" onClick={() => go(4)} className={primaryButton}>
                 Continue
               </button>
             </Footer>
@@ -358,20 +405,20 @@ export default function Onboarding({
                 {chosen.url && <span className="code ml-2 text-[12px] text-[var(--faint)]">{chosen.url}</span>}
               </span>
             </p>
-            <RunSettingsFields settings={settings} onChange={onSettingsChange} seedCount={null} />
-            <p className="tabular mt-3 text-[12px] text-[var(--faint)]">{estimateLabel(settings, null)}</p>
+            <RunSettingsFields settings={settings} onChange={onSettingsChange} seedCount={seeds} />
+            <p className="tabular mt-3 text-[12px] text-[var(--faint)]">{estimateLabel(settings, seeds)}</p>
             {healNote && (
               <p role="alert" className="mt-3 text-[12px] text-[var(--danger)]">
                 could not start: {healNote}
               </p>
             )}
-            <Footer onBack={() => go(3)}>
+            <Footer onBack={() => go(skippedSteps(chosen).includes(2) ? 1 : 3)}>
               <button
                 type="button"
                 onClick={() => void heal()}
                 disabled={healing || noKey}
-                title={noKey ? NO_KEY : undefined}
-                className={primary}
+                title={noKey ? NO_KEY_LINE : undefined}
+                className={primaryButton}
               >
                 {healing ? "Starting…" : "Heal"}
               </button>
@@ -415,7 +462,7 @@ function ChoiceCard({
   selected,
   onSelect,
   disabled,
-  title2,
+  reason,
 }: {
   icon: typeof Globe;
   title: string;
@@ -423,8 +470,8 @@ function ChoiceCard({
   selected: boolean;
   onSelect: () => void;
   disabled?: boolean;
-  /** Hover text, e.g. why choosing this will not work right now. */
-  title2?: string;
+  /** Hover text saying why the card is disabled. */
+  reason?: string;
 }) {
   return (
     <button
@@ -433,10 +480,11 @@ function ChoiceCard({
       aria-checked={selected}
       onClick={onSelect}
       disabled={disabled}
-      title={title2}
+      title={reason}
       className={cn(
         "relative flex flex-col items-stretch rounded-xl border bg-[var(--card)] p-4 text-left transition-colors disabled:cursor-default",
         selected ? "border-[var(--fg)]" : "border-[var(--border)] hover:border-[var(--border-2)]",
+        disabled && !selected && "opacity-50 hover:border-[var(--border)]",
       )}
     >
       <span className="flex items-start justify-between">

@@ -1,11 +1,13 @@
 import { AnimatePresence, motion, useReducedMotion } from "framer-motion";
-import { Activity, Bot, History, House, KeyRound, Menu, PanelLeft, Play, Settings, X } from "lucide-react";
-import { type ReactNode, useCallback, useEffect, useState } from "react";
+import { Activity, Bot, History, House, KeyRound, Menu, PanelLeft, Play, Settings, Unplug, X } from "lucide-react";
+import { type ReactNode, useCallback, useEffect, useRef, useState } from "react";
 
 import { api, type Health, type LoopState, type ReplayInfo, type Status } from "@/api";
 import ApiDown from "@/components/ApiDown";
+import { useModal } from "@/hooks/useModal";
 import { usePoll } from "@/hooks/usePoll";
 import { AGENTS, HOME, href, LANDING, LIVE_RUN, linkProps, REPLAYS, RUNS, SETTINGS, type Route } from "@/lib/routes";
+import { NO_KEY_LINE } from "@/lib/ui";
 import { cn } from "@/lib/utils";
 
 /**
@@ -29,8 +31,6 @@ const FADE_S = 0.12;
 const RAIL_W = 240;
 const RAIL_COLLAPSED_W = 48;
 const RAIL_KEY = "antibody.rail.v1";
-
-export const NO_KEY_LINE = "Set WANDB_API_KEY to run live; replays still play";
 
 export interface ShellData {
   loop: LoopState | null;
@@ -113,26 +113,24 @@ export default function Shell({ route, children }: { route: Route; children: (da
   }, [toggle]);
 
   // Below md the rail is an overlay. It is open *for one address*, so navigating anywhere closes it
-  // without an effect; Esc and the backdrop close it too.
+  // without an effect; the backdrop closes it too, and `useModal` handles Esc, focus and scroll.
   const address = href(route);
   const [menuOpenAt, setMenuOpenAt] = useState<string | null>(null);
   const menuOpen = menuOpenAt === address;
   const setMenuOpen = useCallback((open: boolean) => setMenuOpenAt(open ? href(route) : null), [route]);
-  useEffect(() => {
-    if (!menuOpen) return;
-    const onKey = (e: KeyboardEvent) => e.key === "Escape" && setMenuOpen(false);
-    window.addEventListener("keydown", onKey);
-    return () => window.removeEventListener("keydown", onKey);
-  }, [menuOpen, setMenuOpen]);
+  const closeMenu = useCallback(() => setMenuOpen(false), [setMenuOpen]);
+  const menuPanel = useRef<HTMLElement>(null);
+  useModal(menuPanel, closeMenu, menuOpen);
 
   // One page-level key per screen: cycle 3 → cycle 4 is a new screen, the run's live/finished swap is not.
-  const key =
-    route.kind === "cycle" ? `cycle-${route.id}-${route.n}` : route.kind === "run" ? `run-${route.id}` : route.kind === "onboarding" ? `onboarding-${route.step}` : route.kind;
+  const key = route.kind === "cycle" ? `cycle-${route.id}-${route.n}` : route.kind === "run" ? `run-${route.id}` : route.kind;
 
   const noKey = health !== null && !health.has_api_key;
+  // A paused replay is still the current run, but the dot alone would read as "nothing happening".
+  const currentRunLabel = replay?.active && replay.paused ? "Current run · paused" : "Current run";
 
   const rail = (compact: boolean) => {
-    const row = (it: Item, dot?: "live" | "idle") => {
+    const row = (it: Item, dot?: "live" | "idle", label = it.label) => {
       const active = it.active(route);
       const Icon = it.icon;
       return (
@@ -140,7 +138,7 @@ export default function Shell({ route, children }: { route: Route; children: (da
           key={it.label}
           {...linkProps(it.route)}
           aria-current={active ? "page" : undefined}
-          title={compact ? it.label : undefined}
+          title={compact ? label : undefined}
           className={cn(
             "flex h-7 items-center gap-2.5 rounded-md text-[13px] transition-colors",
             compact ? "justify-center px-0" : "px-2",
@@ -159,7 +157,7 @@ export default function Shell({ route, children }: { route: Route; children: (da
               />
             )}
           </span>
-          {!compact && <span className="truncate">{it.label}</span>}
+          {!compact && <span className="truncate">{label}</span>}
         </a>
       );
     };
@@ -172,7 +170,7 @@ export default function Shell({ route, children }: { route: Route; children: (da
         </div>
         <nav aria-label="Sections" className="mt-6 flex flex-col gap-0.5">
           {row(HOME_ITEM)}
-          {live && row(CURRENT_RUN_ITEM, loop?.running ? "live" : "idle")}
+          {live && row(CURRENT_RUN_ITEM, loop?.running ? "live" : "idle", currentRunLabel)}
           {!compact ? (
             <p className="mb-1 mt-5 px-2 text-[10.5px] font-medium uppercase tracking-[0.08em] text-[var(--faint)]">Workspace</p>
           ) : (
@@ -183,8 +181,8 @@ export default function Shell({ route, children }: { route: Route; children: (da
         <div className={cn("mt-auto flex flex-col gap-2 text-[12px] leading-[1.5]", compact ? "items-center" : "px-2")}>
           {down ? (
             compact ? (
-              <button type="button" onClick={refresh} title="API unreachable · retry" className="rounded p-1 text-[var(--faint)] hover:text-[var(--muted)]">
-                <X className="h-[15px] w-[15px]" strokeWidth={1.75} aria-hidden />
+              <button type="button" onClick={refresh} title="api unreachable · retry" aria-label="API unreachable. Retry" className="rounded p-1 text-[var(--faint)] hover:text-[var(--muted)]">
+                <Unplug className="h-[15px] w-[15px]" strokeWidth={1.75} aria-hidden />
               </button>
             ) : (
               <ApiDown onRetry={refresh} />
@@ -195,9 +193,7 @@ export default function Shell({ route, children }: { route: Route; children: (da
                 <KeyRound className="h-[15px] w-[15px]" strokeWidth={1.75} aria-hidden />
               </span>
             ) : (
-              <p className="text-[var(--faint)]">
-                Set <span className="code">WANDB_API_KEY</span> to run live; replays still play
-              </p>
+              <p className="text-[var(--faint)]">{NO_KEY_LINE}</p>
             )
           ) : null}
         </div>
@@ -224,7 +220,7 @@ export default function Shell({ route, children }: { route: Route; children: (da
         {live && (
           <a {...linkProps(LIVE_RUN)} className="ml-auto inline-flex items-center gap-2 rounded text-[12px] text-[var(--muted)]">
             <span aria-hidden className={cn("h-1.5 w-1.5 rounded-full", loop?.running ? "bg-[var(--live)] motion-safe:animate-pulse" : "bg-[var(--faint)]")} />
-            Current run
+            {currentRunLabel}
           </a>
         )}
       </header>
@@ -238,16 +234,19 @@ export default function Shell({ route, children }: { route: Route; children: (da
             exit={{ opacity: 0 }}
             transition={{ duration: reduced ? 0 : FADE_S }}
           >
-            <div className="absolute inset-0 bg-black/50" onClick={() => setMenuOpen(false)} aria-hidden />
+            <div className="absolute inset-0 bg-[var(--scrim)]" onClick={closeMenu} aria-hidden />
             <aside
+              ref={menuPanel}
               role="dialog"
+              aria-modal="true"
               aria-label="Sections"
-              className="absolute inset-y-0 left-0 flex w-[240px] flex-col border-r border-[var(--border-2)] bg-[var(--bg-rail)] px-3 py-4"
+              tabIndex={-1}
+              className="absolute inset-y-0 left-0 flex w-[240px] flex-col border-r border-[var(--border-2)] bg-[var(--bg-rail)] px-3 py-4 outline-none"
             >
               {rail(false)}
               <button
                 type="button"
-                onClick={() => setMenuOpen(false)}
+                onClick={closeMenu}
                 aria-label="Close menu"
                 className="absolute right-2 top-3 rounded-md p-1 text-[var(--muted)] hover:text-[var(--fg)]"
               >

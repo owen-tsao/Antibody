@@ -3,8 +3,9 @@ import { useState } from "react";
 import { api, ApiError, type Health, type PingResult } from "@/api";
 import ApiDown from "@/components/ApiDown";
 import { usePoll } from "@/hooks/usePoll";
-import { exampleState, pingLabel, pingResultLine, runsByAgent, toolMapping, toolsMappedLabel } from "@/lib/derive";
+import { agentsCountLine, agentSubline, exampleState, pingLabel, pingResultLine, runsByAgent, toolMapping, toolsMappedLabel } from "@/lib/derive";
 import { linkProps, onboarding } from "@/lib/routes";
+import { NO_KEY_LINE, primaryButton } from "@/lib/ui";
 import { cn } from "@/lib/utils";
 
 /**
@@ -20,12 +21,8 @@ import { cn } from "@/lib/utils";
 const AGENTS_MS = 3_000;
 const RUNS_MS = 10_000;
 
-export const NO_KEY_REASON = "Set WANDB_API_KEY to run live";
-
 const quiet =
   "group rounded text-[12px] text-[var(--muted)] transition-colors hover:text-[var(--fg)] disabled:cursor-default disabled:text-[var(--faint)] disabled:hover:text-[var(--faint)]";
-export const primaryButton =
-  "inline-flex h-8 items-center rounded-lg bg-[var(--fg)] px-3 text-[13px] font-medium text-[var(--bg)] transition-opacity hover:opacity-85 disabled:cursor-default disabled:opacity-40 disabled:hover:opacity-40";
 
 type Pinging = PingResult | "pending";
 
@@ -109,7 +106,6 @@ export default function AgentsList({ health }: { health: Health | null }) {
   };
 
   const noKey = health !== null && !health.has_api_key;
-  const connected = (agents ?? []).filter((a) => !a.synthetic);
 
   return (
     <main className="px-6 pb-16 pt-8 md:px-10 md:pt-7">
@@ -123,7 +119,7 @@ export default function AgentsList({ health }: { health: Health | null }) {
 
         <p className="mt-4 min-h-[1.25rem] text-[13px] text-[var(--muted)]">
           {agents ? (
-            `${agents.length} ${agents.length === 1 ? "agent" : "agents"}${connected.length === 0 ? " · none of your own yet" : ""}`
+            agentsCountLine(agents)
           ) : error ? (
             <ApiDown onRetry={refresh} />
           ) : (
@@ -165,9 +161,12 @@ export default function AgentsList({ health }: { health: Health | null }) {
                   <tr key={a.id} className="align-top">
                     <td className="py-3 pr-4">
                       <div className="font-medium text-[var(--fg)]">{a.name}</div>
-                      <div className="mt-0.5 text-[12px] text-[var(--faint)]">
-                        {a.id === "builtin" ? "demo agent · in-process" : isExample ? `${starting ? "starting…" : state} · HTTP` : "HTTP"}
-                      </div>
+                      <div className="mt-0.5 text-[12px] text-[var(--faint)]">{agentSubline(a, starting)}</div>
+                      {notes[a.id] && (
+                        <div role="alert" className="mt-1 text-[12px] text-[var(--danger)]">
+                          {notes[a.id]}
+                        </div>
+                      )}
                     </td>
                     <td className="code py-3 pr-4 text-[12px] text-[var(--muted)]">{a.url ?? "—"}</td>
                     <td className="py-3 pr-4 text-[var(--muted)]">
@@ -177,11 +176,6 @@ export default function AgentsList({ health }: { health: Health | null }) {
                         <span className={cn(!inSession.ok && "text-[var(--danger)]")}>{pingResultLine(inSession)}</span>
                       ) : (
                         <span className={cn(a.last_ping && !a.last_ping.ok && "text-[var(--danger)]")}>{pingLabel(a.last_ping)}</span>
-                      )}
-                      {notes[a.id] && (
-                        <div role="alert" className="mt-1 text-[12px] text-[var(--danger)]">
-                          {notes[a.id]}
-                        </div>
                       )}
                     </td>
                     <td className="tabular py-3 pr-4 text-right text-[var(--muted)]">{toolsMappedLabel(mapping)}</td>
@@ -202,8 +196,8 @@ export default function AgentsList({ health }: { health: Health | null }) {
                             <button
                               type="button"
                               onClick={() => void startExample()}
-                              disabled={starting}
-                              title={noKey ? `${NO_KEY_REASON}; the example agent calls inference` : undefined}
+                              disabled={starting || noKey}
+                              title={noKey ? `${NO_KEY_LINE}; the example agent calls inference` : undefined}
                               className={quiet}
                             >
                               <span className="u-line">{starting ? "starting…" : "start"}</span>
@@ -231,16 +225,6 @@ export default function AgentsList({ health }: { health: Health | null }) {
               })}
             </tbody>
           </table>
-        )}
-
-        {agents && connected.length === 0 && (
-          <p className="mt-6 text-[13px] text-[var(--muted)]">
-            Only the built-in agents so far.{" "}
-            <a {...linkProps(onboarding(1))} className="group rounded text-[var(--muted)] transition-colors hover:text-[var(--fg)]">
-              <span className="u-line">Connect your support agent</span>
-            </a>{" "}
-            to attack it in the sandbox storefront.
-          </p>
         )}
       </div>
     </main>
