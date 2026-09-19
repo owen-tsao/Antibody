@@ -13,6 +13,10 @@
   --faint: #5f5f68;
   --live: #4ade80;   /* signals only */
   --danger: #f87171; /* signals only */
+  /* The rail sits a shade above the page so its edge reads as an edge, not a rule on black. */
+  --bg-rail: #09090b;
+  /* The tint behind a modal surface (the menu below md). */
+  --scrim: rgba(0, 0, 0, 0.5);
 }
 
 /*

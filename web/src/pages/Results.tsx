@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
-import { api, ApiError } from "@/api";
+import { api, ApiError, type LoopState } from "@/api";
 import ApiDown from "@/components/ApiDown";
 import { previewListItem } from "@/components/PreviewRow";
 import InteractiveListPreview, { type InteractiveListItem } from "@/components/ui/interactive-list-preview";
@@ -10,6 +10,7 @@ import {
   headline,
   replayedPreview,
   rowStatus,
+  seedAttackAvailable,
   shortTitle,
   storyLine,
   ticketLink,
@@ -34,8 +35,9 @@ const DEMO_SEED_TITLE = "Injected instructions in order notes trigger a refund o
 // the backstop for anyone who raises this.
 export const ATTACK_TIMEOUT_MS = 20_000;
 
-export default function Results({ onCycle }: { onCycle: (cycle: number) => void }) {
+export default function Results({ onCycle, loop }: { onCycle: (cycle: number) => void; loop: LoopState | null }) {
   const { data: state, refresh: refreshState } = usePoll(api.state, 10_000);
+  const { data: manifest } = usePoll(api.manifest, 60_000);
   // §3: cycles every 2 s while the loop runs (a new record should land within a beat), 10 s otherwise.
   // A replay lands records on the recording's schedule, so it gets the same cadence.
   const {
@@ -166,20 +168,23 @@ export default function Results({ onCycle }: { onCycle: (cycle: number) => void 
       {/* Slice 3 (docs/FRONTEND.md §4.3): the seed attack, live, against v0 and against the current config.
           Under the list, where a result can land as a preview row without competing with the
           history above it. Quiet text buttons; the page's one raised element is the list's hover
-          bar. Both disable while either runs because /api/attack is one-at-a-time. */}
-      <footer className="mx-auto mt-4 w-full max-w-6xl px-6 md:px-10">
-        <div className="flex flex-wrap items-baseline gap-x-6 gap-y-2">
-          <span className="text-[13px] text-[var(--faint)]">Try the seed attack live</span>
-          <button type="button" className={quietButton} disabled={busy} onClick={() => void runAttack(0)}>
-            <span className="u-line">{attacking === 0 ? "attacking…" : "against v0"}</span>
-          </button>
-          {latest !== null && latest > 0 && (
-            <button type="button" className={quietButton} disabled={busy} onClick={() => void runAttack(latest)}>
-              <span className="u-line">{attacking === latest ? "attacking…" : `against v${latest}`}</span>
+          bar. Both disable while either runs because /api/attack is one-at-a-time. Only when the run on
+          screen was against the built-in agent (`seedAttackAvailable`). */}
+      {seedAttackAvailable(manifest, loop) && (
+        <footer className="mx-auto mt-4 w-full max-w-6xl px-6 md:px-10">
+          <div className="flex flex-wrap items-baseline gap-x-6 gap-y-2">
+            <span className="text-[13px] text-[var(--faint)]">Try the seed attack live</span>
+            <button type="button" className={quietButton} disabled={busy} onClick={() => void runAttack(0)}>
+              <span className="u-line">{attacking === 0 ? "attacking…" : "against v0"}</span>
             </button>
-          )}
-        </div>
-      </footer>
+            {latest !== null && latest > 0 && (
+              <button type="button" className={quietButton} disabled={busy} onClick={() => void runAttack(latest)}>
+                <span className="u-line">{attacking === latest ? "attacking…" : `against v${latest}`}</span>
+              </button>
+            )}
+          </div>
+        </footer>
+      )}
     </main>
   );
 }

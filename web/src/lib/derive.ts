@@ -2,19 +2,25 @@
 // Rules are the ones in docs/FRONTEND.md §2 "Derived in the frontend, never stored".
 
 import type {
+  Agent as AgentRow,
   AgentConfig,
+  AgentPing,
+  AgentTool,
   AttackResult,
   AttackToolCall,
   CycleRecord,
   FailureKind,
   Health,
   LoopState,
+  Manifest,
   Patch,
   PatchKind,
   Phase,
-  ReplayInfo,
+  PingResult,
+  RunRow,
   ScenarioKind,
   Status,
+  ToolMapping,
   ToolPolicy,
 } from "@/api";
 import type { Subtask, Task } from "@/components/ui/agent-plan";
@@ -342,6 +348,23 @@ function dangerCall(calls: CallLike[], evidence?: CallLike | null, passed?: bool
   return cited ?? (passed === false ? calls.find(isSideEffectExecuted) : undefined);
 }
 
+/**
+ * The seed-attack preview replays a scripted scenario against the built-in agent in-process. It says nothing
+ * true about an external agent, so the run page hides it unless both the API's default target (the manifest)
+ * and the run on screen (`loop.settings.target`, null when the run took the default) are the built-in agent.
+ * Unknown (manifest still loading) reads as unavailable so the buttons never flash in and out.
+ */
+export function seedAttackAvailable(manifest: Manifest | null, loop: LoopState | null): boolean {
+  if (manifest?.target.transport !== "in-process") return false;
+  const target = loop?.settings?.target ?? null;
+  return target === null || target === "builtin";
+}
+
+/** How many seed scenarios the manifest lists; null while it has not loaded. Bounds the seeds stepper. */
+export function seedCount(manifest: Manifest | null): number | null {
+  return manifest ? manifest.families.filter((f) => f.seed_id).length : null;
+}
+
 export function attackPreview(res: AttackResult): AttackPreview {
   const calls = res.episode.tool_calls;
   const tc = res.verdict.evidence.tool_call;
@@ -514,7 +537,7 @@ export function targetDanger(status: Status | null): boolean {
   );
 }
 
-/** The idle/done orb colours (the component's grey preset). Active hues live in Agents.tsx ORB_COLORS. */
+/** The idle/done orb colours (the component's grey preset). Active hues live in RunLive.tsx ORB_COLORS. */
 export const ORB_GREY: [string, string] = ["#E5E7EB", "#9CA3AF"];
 
 /** Headline text after the dot: running → `cycle 2 · judge is scoring`; idle → `v3 · 4 tests · legit 3/3 · idle`. */
@@ -1117,24 +1140,13 @@ export interface EmptyState {
 }
 
 /**
- * What a list says when it has nothing to show, by page and by whether the API can run live. Copy speaks
+ * What the runs list says when it has nothing to show, by whether the API can run live. Copy speaks
  * support ("your support agent", "the demo agent"), never "target". `health` null means unknown: the
- * page has not heard from /api/health yet, so the copy does not mention the key either way.
+ * page has not heard from /api/health yet, so the copy does not mention the key either way. The agents
+ * page always has its two built-in rows, so its empty state is one line in the page, not an entry here.
  */
-export function emptyStateFor(kind: "agents" | "agent-new" | "runs", health: Health | null): EmptyState {
+export function emptyStateFor(health: Health | null): EmptyState {
   const noKey = health !== null && !health.has_api_key;
-  if (kind === "agents") {
-    return {
-      title: "Connect your support agent",
-      body: "Antibody deploys it into a sandbox storefront — fake customers, orders, refunds, tickets — and attacks it there. Until then, the demo agent is ready to run.",
-    };
-  }
-  if (kind === "agent-new") {
-    return {
-      title: "Connect your support agent",
-      body: "Give Antibody a URL that answers POST /episode. Try the demo agent first if you just want to see a run.",
-    };
-  }
   return noKey
     ? {
         title: "No runs yet",
@@ -1146,27 +1158,124 @@ export function emptyStateFor(kind: "agents" | "agent-new" | "runs", health: Hea
       };
 }
 
-// --- Shell status pill ------------------------------------------------------------------------------
+// --- Agents (docs/plans/00-overview.md Block 3) ------------------------------------------------------
 
-export interface ShellPill {
-  label: string;
-  /** Only a real run earns the live dot; a replay is a recording and gets no signal colour. */
-  live: boolean;
+/** `just now` / `4 min ago` / `3 h ago` / `2 d ago`, for a ping's `at`. */
+export function fmtAgo(iso: string, now = Date.now()): string {
+  const s = Math.max(0, Math.round((now - new Date(iso).getTime()) / 1000));
+  if (s < 45) return "just now";
+  const m = Math.round(s / 60);
+  if (m < 60) return `${m} min ago`;
+  const h = Math.round(m / 60);
+  if (h < 24) return `${h} h ago`;
+  return `${Math.round(h / 24)} d ago`;
+}
+
+/** `1.2 s` / `340 ms`. */
+export function fmtLatency(ms: number): string {
+  return ms >= 1000 ? `${(ms / 1000).toFixed(1)} s` : `${ms} ms`;
 }
 
 /**
- * The one line the shell says about the current run, or null to draw nothing. A live loop outranks a
- * replay (the API stops a replay when a loop appears, so both cannot be true for long). The cycle
- * number comes from /api/status and is omitted while the loop is still measuring its baseline.
+ * The last-ping cell: `ok · 1.2 s · 2 min ago`, `failed · 2 min ago`, or `—` when the row has never been
+ * pinged (synthetic rows never store one, so they read `—` until pinged in this session).
  */
-export function shellPill(loop: LoopState | null, replay: ReplayInfo | null, status: Status | null): ShellPill | null {
-  if (loop?.running) {
-    const cycle = status && status.phase !== "idle" && !status.replay ? status.cycle : undefined;
-    return { label: cycle ? `running · cycle ${cycle}` : "running", live: true };
+export function pingLabel(ping: AgentPing | null, now = Date.now()): string {
+  if (!ping) return "—";
+  return ping.ok ? `ok · ${fmtLatency(ping.latency_ms)} · ${fmtAgo(ping.at, now)}` : `failed · ${fmtAgo(ping.at, now)}`;
+}
+
+/** A ping result as a one-line sentence: `ok · 1.2 s · “Hi, I'm…”` or the API's exact error. */
+export function pingResultLine(r: PingResult): string {
+  if (!r.ok) return r.error;
+  const quote = r.reply_preview ? ` · “${r.reply_preview.length > 80 ? `${r.reply_preview.slice(0, 80).trimEnd()}…` : r.reply_preview}”` : "";
+  return `ok · ${fmtLatency(r.latency_ms)}${quote}`;
+}
+
+/**
+ * Which of an agent's listed tools the sandbox storefront serves — the client-side twin of
+ * `api.agents.tool_mapping`, for stored rows (which carry `tools` but not `mapping`). Null when the
+ * agent lists no tools, or when the storefront's names are not known yet.
+ */
+export function toolMapping(tools: AgentTool[] | null, storefront: string[] | null): ToolMapping | null {
+  if (!tools || !storefront) return null;
+  const known = new Set(storefront);
+  const names = tools.map((t) => t.name);
+  return { known: names.filter((n) => known.has(n)), unknown: names.filter((n) => !known.has(n)) };
+}
+
+/** The tools column: `5/7` (mapped of listed), or `—` when the agent has not listed its tools. */
+export function toolsMappedLabel(m: ToolMapping | null): string {
+  if (!m) return "—";
+  return `${m.known.length}/${m.known.length + m.unknown.length}`;
+}
+
+/**
+ * The Tools step's sentence. `5 of 7 tools map to the sandbox storefront; send_sms, apply_coupon will be
+ * unavailable during attacks`; `all 5 tools map to the sandbox storefront`; or, when the agent did not list
+ * its tools, a line saying so (the loop still serves every storefront tool; Antibody just cannot check).
+ */
+export function mappingLine(m: ToolMapping | null): string {
+  if (!m) return "This agent does not list its tools, so Antibody cannot check them against the sandbox storefront. Every storefront tool is served during attacks regardless.";
+  const total = m.known.length + m.unknown.length;
+  if (total === 0) return "This agent lists no tools. Every storefront tool is served during attacks regardless.";
+  if (m.unknown.length === 0) return `All ${total} ${total === 1 ? "tool maps" : "tools map"} to the sandbox storefront.`;
+  return `${m.known.length} of ${total} tools map to the sandbox storefront; ${m.unknown.join(", ")} will be unavailable during attacks.`;
+}
+
+/** The Tools step's rows: every listed tool with whether the sandbox storefront serves it, mapped ones first. */
+export function mappingRows(m: ToolMapping): { name: string; served: boolean }[] {
+  return [...m.known.map((name) => ({ name, served: true })), ...m.unknown.map((name) => ({ name, served: false }))];
+}
+
+/** Runs per agent id from the runs list. The demo tape is a recording, not a run someone started, so it is left out. */
+export function runsByAgent(runs: RunRow[]): Map<string, number> {
+  const out = new Map<string, number>();
+  for (const r of runs) {
+    if (r.id === "golden" || !r.agent) continue;
+    out.set(r.agent.id, (out.get(r.agent.id) ?? 0) + 1);
   }
-  if (replay?.active) {
-    // An ended tape also reports `paused: true`; say which it is.
-    return { label: replay.ended ? "replay ended" : replay.paused ? "replay paused" : "replaying", live: false };
-  }
-  return null;
+  return out;
+}
+
+export type ExampleState = "running" | "starting" | "stopped";
+
+/** The example agent's state word from its probed row. */
+export function exampleState(a: Pick<AgentRow, "running" | "starting">): ExampleState {
+  if (a.running) return "running";
+  if (a.starting) return "starting";
+  return "stopped";
+}
+
+/**
+ * The faint line under an agent's name: `demo agent · in-process`, `starting… · HTTP` / `running · HTTP` for
+ * the example agent (`starting` covers the seconds between the click and the next poll), `HTTP` otherwise.
+ */
+export function agentSubline(a: Pick<AgentRow, "id" | "running" | "starting">, starting: boolean): string {
+  if (a.id === "builtin") return "demo agent · in-process";
+  if (a.id === "example") return `${starting ? "starting…" : exampleState(a)} · HTTP`;
+  return "HTTP";
+}
+
+/** `2 agents · none of your own yet` / `3 agents`: the count line under the Agents title. */
+export function agentsCountLine(agents: Pick<AgentRow, "synthetic">[]): string {
+  const own = agents.some((a) => !a.synthetic);
+  return `${agents.length} ${agents.length === 1 ? "agent" : "agents"}${own ? "" : " · none of your own yet"}`;
+}
+
+/** Whether two typed URLs name the same agent: whitespace and trailing slashes aside. */
+export function sameUrl(a: string, b: string): boolean {
+  const norm = (u: string) => u.trim().replace(/\/+$/, "");
+  return norm(a) === norm(b);
+}
+
+/**
+ * The first-run rule: nothing connected beyond the synthetic rows, no history beyond the demo tape, and no
+ * run in flight → Home sends the person to onboarding. Any input still loading (null) means "not yet known".
+ */
+export function isFirstRun(agents: AgentRow[] | null, runs: RunRow[] | null, loop: LoopState | null): boolean | null {
+  if (!agents || !runs || !loop) return null;
+  if (loop.running) return false;
+  if (agents.some((a) => !a.synthetic)) return false;
+  return runs.every((r) => r.id === "golden");
 }
