@@ -6,10 +6,13 @@ import { useCallback, useEffect, useRef, useState } from "react";
  * JSON-identical to the current one keeps the previous reference, so memos and children keyed on
  * `data` do not re-run every tick while nothing has changed. `refresh()` polls now and restarts
  * the interval, for right after an action whose effect the next tick would otherwise show late.
+ * `failing` counts consecutive failed ticks (0 after any success), so a caller holding last-good data
+ * can still tell a one-tick hiccup from an API that has gone away.
  */
 export function usePoll<T>(fn: () => Promise<T>, intervalMs: number) {
   const [data, setData] = useState<T | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [failing, setFailing] = useState(0);
   const fnRef = useRef(fn);
   const tickRef = useRef<() => void>(() => undefined);
   useEffect(() => {
@@ -32,9 +35,13 @@ export function usePoll<T>(fn: () => Promise<T>, intervalMs: number) {
           if (alive && g === gen) {
             setData((prev) => (prev !== null && JSON.stringify(prev) === JSON.stringify(next) ? prev : next));
             setError(null);
+            setFailing(0);
           }
         } catch (e) {
-          if (alive && g === gen) setError(e instanceof Error ? e.message : String(e));
+          if (alive && g === gen) {
+            setError(e instanceof Error ? e.message : String(e));
+            setFailing((n) => n + 1);
+          }
         }
       }
       if (alive && g === gen) timer = setTimeout(() => tick(g), intervalMs);
@@ -59,5 +66,5 @@ export function usePoll<T>(fn: () => Promise<T>, intervalMs: number) {
   }, [intervalMs]);
 
   const refresh = useCallback(() => tickRef.current(), []);
-  return { data, error, refresh };
+  return { data, error, failing, refresh };
 }

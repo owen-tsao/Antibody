@@ -85,8 +85,8 @@ function isTyping(target: EventTarget | null): boolean {
 
 export default function Shell({ route, children }: { route: Route; children: (data: ShellData) => ReactNode }) {
   const reduced = useReducedMotion();
-  const { data: loop, error: loopError, refresh: refreshLoop } = usePoll(api.loop, POLL_MS);
-  const { data: replay, error: replayError, refresh: refreshReplay } = usePoll(api.replay, POLL_MS);
+  const { data: loop, error: loopError, failing: loopFailing, refresh: refreshLoop } = usePoll(api.loop, POLL_MS);
+  const { data: replay, error: replayError, failing: replayFailing, refresh: refreshReplay } = usePoll(api.replay, POLL_MS);
   const live = !!loop?.running || !!replay?.active;
   const { data: status, error: statusError, refresh: refreshStatus } = usePoll(api.status, live ? LIVE_STATUS_MS : POLL_MS);
   const { data: health } = usePoll(api.health, HEALTH_MS);
@@ -96,8 +96,10 @@ export default function Shell({ route, children }: { route: Route; children: (da
     refreshStatus();
   }, [refreshLoop, refreshReplay, refreshStatus]);
 
-  // Down means neither poll has ever answered; a hiccup after first contact keeps the last value.
-  const down = !loop && !replay && !!loopError && !!replayError;
+  // Down means the API never answered, or both polls have now missed two ticks in a row (~4 s): one miss
+  // is a hiccup and keeps the last value silently; a page already open keeps its last-good data either way.
+  const neverAnswered = !loop && !replay && !!loopError && !!replayError;
+  const down = neverAnswered || (loopFailing >= 2 && replayFailing >= 2);
 
   const [collapsed, setCollapsed] = useState(readCollapsed);
   const toggle = useCallback(() => setCollapsed((c) => !c), []);

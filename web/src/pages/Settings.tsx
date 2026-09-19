@@ -1,5 +1,6 @@
 import { api } from "@/api";
 import type { Health } from "@/api";
+import ApiDown from "@/components/ApiDown";
 import RunSettingsFields from "@/components/RunSettingsFields";
 import { usePoll } from "@/hooks/usePoll";
 import { seedCount } from "@/lib/derive";
@@ -28,7 +29,7 @@ export default function Settings({
   onSettingsChange: (next: RunSettings) => void;
   health: Health | null;
 }) {
-  const { data: manifest } = usePoll(api.manifest, STATIC_MS);
+  const { data: manifest, error: manifestError, refresh: refreshManifest } = usePoll(api.manifest, STATIC_MS);
   const seeds = seedCount(manifest);
   const models = manifest?.models;
   const weave = typeof health?.weave === "string" ? health.weave : null;
@@ -73,7 +74,11 @@ export default function Settings({
               </div>
             ))}
           </dl>
-          <p className="mt-3 text-[12px] text-[var(--faint)]">Set with ANTIBODY_*_MODEL in the API's environment; read once at start.</p>
+          {/* The manifest polls once a minute (it is static for the API's lifetime), so a page opened while the
+              API was down would otherwise show "…" for up to 60 s after it comes back; retry polls now. */}
+          <p className="mt-3 text-[12px] text-[var(--faint)]">
+            {!manifest && manifestError ? <ApiDown onRetry={refreshManifest} /> : "Set with ANTIBODY_*_MODEL in the API's environment; read once at start."}
+          </p>
         </section>
 
         <section className="mt-12">
