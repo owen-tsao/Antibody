@@ -115,25 +115,6 @@ export function toStartBody(s: RunSettings): LoopStartBody {
   };
 }
 
-function plural(n: number, one: string, many = `${one}s`): string {
-  return `${n} ${n === 1 ? one : many}`;
-}
-
-/**
- * The parts of the Heal label that differ from the defaults, in field order: `["1 seed", "2 cycles"]`.
- * Empty when nothing differs, so the orb just says "Heal".
- */
-export function settingsSummary(s: RunSettings): string[] {
-  const parts: string[] = [];
-  if (s.seeds !== DEFAULT_SETTINGS.seeds) parts.push(s.seeds === 0 ? "no seeds" : plural(s.seeds ?? 0, "seed"));
-  if (s.chaosCycles !== DEFAULT_SETTINGS.chaosCycles) parts.push(s.chaosCycles === 0 ? "no chaos" : plural(s.chaosCycles, "cycle"));
-  if (s.repairAttempts !== DEFAULT_SETTINGS.repairAttempts) parts.push(plural(s.repairAttempts, "repair"));
-  if (s.secondPass !== DEFAULT_SETTINGS.secondPass) parts.push(s.secondPass ? "second pass" : "no second pass");
-  if (s.untilQuiet !== DEFAULT_SETTINGS.untilQuiet) parts.push(`quiet after ${s.untilQuiet}`);
-  if (s.world !== DEFAULT_SETTINGS.world) parts.push(s.world);
-  return parts;
-}
-
 /**
  * Cycles the run will attempt: seeds (all → `seedCount`, or the API cap when unknown; `--seeds N` past the
  * count just runs them all) plus chaos cycles. 0 means A1 answers 400 "nothing to run". With `untilQuiet`

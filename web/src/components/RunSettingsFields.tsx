@@ -4,8 +4,8 @@ import { cn } from "@/lib/utils";
 
 /**
  * The run-settings rows — Seeds · Chaos cycles · Repair attempts · Second pass · Until quiet — as one block
- * of hairline rows, shared by the settings drawer, the onboarding wizard's First run step and (Block 4) the
- * start dialog. The parent owns the values; this only edits them. Every field is a flag `chaos.loop run`
+ * of hairline rows, shared by the start dialog, the Settings page's run defaults and the onboarding wizard's
+ * First run step. The parent owns the values; this only edits them. Every field is a flag `chaos.loop run`
  * already has (lib/settings.ts). `world` left the fields: the API default `auto` resolves to the mock
  * storefront without Zendesk credentials, which is the only world the sandbox runs in.
  */
