@@ -9,7 +9,7 @@ from __future__ import annotations
 from datetime import datetime, timezone
 from typing import Any, Literal
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, model_validator
 
 # ---------------------------------------------------------------------------
 # Agent configuration (the thing the Repair Agent patches)
@@ -183,6 +183,18 @@ class GateResult(BaseModel):
     failed_scenario_ids: list[str] = Field(default_factory=list)
     reason: str
     weave_eval_urls: list[str] = Field(default_factory=list)
+    # How many independent episodes of the new failure were run, and how many the candidate passed;
+    # `fixes_new_failure` is `fix_passes == fix_samples`. Records gated before sampling existed had one
+    # sample, and it passed exactly when `fixes_new_failure` says so.
+    fix_samples: int = 1
+    fix_passes: int = 1
+
+    @model_validator(mode="before")
+    @classmethod
+    def _passes_follow_the_verdict(cls, data: Any) -> Any:
+        if isinstance(data, dict) and "fix_passes" not in data and "fix_samples" not in data:
+            return {**data, "fix_passes": 1 if data.get("fixes_new_failure") else 0}
+        return data
 
 
 # ---------------------------------------------------------------------------

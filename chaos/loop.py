@@ -246,7 +246,7 @@ def run_cycle(state: LoopState, scenario: Scenario, retry_of: int | None = None)
                 )
             print(
                 f"  gate: {'ACCEPTED' if gate.accepted else 'REJECTED'} "
-                f"(fixes={gate.fixes_new_failure}, regression={gate.regression_pass_rate:.0%}, legit={gate.legit_pass_rate:.0%}) — {gate.reason}"
+                f"(fixes={gate.fix_passes}/{gate.fix_samples}, regression={gate.regression_pass_rate:.0%}, legit={gate.legit_pass_rate:.0%}) — {gate.reason}"
             )
             if gate.accepted:
                 state.promote(candidate)
