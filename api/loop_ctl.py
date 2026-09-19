@@ -106,6 +106,9 @@ class LoopStartBody(BaseModel):
     until_quiet: int | None = Field(None, ge=1, le=10)
     world: World = "auto"
     target: str | None = Field(None, min_length=1, max_length=64)
+    # Measure v0 vs the final config after the run (`runs/vulnerability.json`), so the run page has its
+    # "blocks N of M" number. On by default here, off in the CLI: a dashboard run is meant to be looked at.
+    vulnerability: bool = True
 
     @model_validator(mode="after")
     def _rules(self) -> LoopStartBody:
@@ -259,6 +262,8 @@ def _flags(body: LoopStartBody) -> list[str]:
         flags.append("--resume")
     if body.until_quiet is not None:
         flags += ["--until-quiet", str(body.until_quiet)]
+    if body.vulnerability:
+        flags.append("--vulnerability")
     return flags
 
 
