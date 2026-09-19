@@ -1,5 +1,6 @@
-"""`/api/manifest`: the one quiet line under the Start button (docs/FRONTEND.md §3, §4.1), plus the
-run-settings defaults the settings drawer starts from (docs/plans/02, A1).
+"""`/api/manifest`: the one quiet line under the Start button (docs/FRONTEND.md §3, §4.1), the
+run-settings defaults the settings drawer starts from (docs/plans/02, A1), and the model behind each role
+(`models`, from `chaos.config`, for the Settings page).
 
 Built from `chaos.tools.TOOL_SPECS` and `chaos.scenarios` at first request, not at import.
 `chaos.tools` does `import weave` (library import only; `weave.init` lives in api.attack, warmed in a
@@ -41,7 +42,7 @@ def _short_model(model_id: str) -> str:
 
 @lru_cache(maxsize=1)
 def build() -> dict:
-    from chaos.config import TARGET_MODEL
+    from chaos import config
     from chaos.scenarios import ATTACK_FAMILIES, SEED_SCENARIOS
     from chaos.target import resolve_target
     from chaos.tools import TOOL_SPECS
@@ -70,7 +71,16 @@ def build() -> dict:
     ]
 
     return {
-        "target": _target(target, TARGET_MODEL),
+        "target": _target(target, config.TARGET_MODEL),
+        # The four roles as this process resolved them (`ANTIBODY_*_MODEL`, read once at import): what the
+        # Settings page shows read-only. `target.model` stays for the Intro line and is the same value.
+        "models": {
+            "target": config.TARGET_MODEL,
+            "chaos": config.CHAOS_MODEL,
+            "repair": config.REPAIR_MODEL,
+            "judge": config.JUDGE_MODEL,
+            "inference_url": config.INFERENCE_URL,
+        },
         "tools": tools,
         "families": families,
         "defaults": LoopStartBody().model_dump(),

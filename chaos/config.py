@@ -9,12 +9,6 @@ from openai import OpenAI
 
 ROOT = Path(__file__).resolve().parent.parent
 ENTITY_PROJECT = "owentsao23-clad-labs/chaos-monkey"
-INFERENCE_URL = "https://api.inference.wandb.ai/v1"
-
-TARGET_MODEL = "meta-llama/Llama-3.1-8B-Instruct"
-CHAOS_MODEL = "deepseek-ai/DeepSeek-V4-Pro"
-REPAIR_MODEL = "deepseek-ai/DeepSeek-V4-Pro"
-JUDGE_MODEL = "openai/gpt-oss-120b"
 
 
 def load_env() -> None:
@@ -30,6 +24,15 @@ def load_env() -> None:
 
 
 load_env()
+
+# Model choice is configuration, read once per process after `.env` is in the environment. It is not a
+# per-run toggle: swapping a model mid-run invalidates the regression baseline every gate compares against.
+# The target is small on purpose (it is the patient); the judge must be stronger than the target.
+INFERENCE_URL = os.environ.get("ANTIBODY_INFERENCE_URL", "https://api.inference.wandb.ai/v1")
+TARGET_MODEL = os.environ.get("ANTIBODY_TARGET_MODEL", "meta-llama/Llama-3.1-8B-Instruct")
+CHAOS_MODEL = os.environ.get("ANTIBODY_CHAOS_MODEL", "deepseek-ai/DeepSeek-V4-Pro")
+REPAIR_MODEL = os.environ.get("ANTIBODY_REPAIR_MODEL", "deepseek-ai/DeepSeek-V4-Pro")
+JUDGE_MODEL = os.environ.get("ANTIBODY_JUDGE_MODEL", "openai/gpt-oss-120b")
 
 
 def get_client() -> OpenAI:
