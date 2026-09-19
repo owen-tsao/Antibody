@@ -9,29 +9,35 @@ Decisions already made (do not reopen): React app is the product; three pages �
 ## Routes (added Sep 18, 2026 — supersedes the `?page=` navigation described below)
 
 The app is split into a landing page at `/` and the tool under `/app`, inside a persistent shell
-(`components/Shell.tsx`: left rail from `md` up, top bar below; Agents · Runs; wordmark → `/`; one status
-line linking to the current run). Routing is `lib/routes.ts` — `parse(pathname)`, `href(route)`,
-`navigate(route)` (pushState), `useRoute()` (popstate) — no router dependency. The API serves
-`web/dist/index.html` for every `/app` path so a hard refresh works (`api/main.py`, "Built dashboard";
-`tests/test_static.py`). Old `?page=…&n=…` links are rewritten once on load (`redirectLegacy()` in `main.tsx`).
+(`components/Shell.tsx`: a Linear-style left rail from `md` up — Home · Current run (only while a run or
+replay is on screen) · *Workspace*: Agents · Runs · Replays · Settings — collapsible to a 48 px icon rail
+with `[`, the state kept in localStorage; below `md` a top bar with a menu button). The onboarding wizard
+renders outside the shell, full-screen like the landing. Routing is `lib/routes.ts` — `parse(pathname)`,
+`href(route)`, `navigate(route)` (pushState), `replace(route)` (replaceState), `useRoute()` (popstate) — no
+router dependency. The API serves `web/dist/index.html` for every `/app` path so a hard refresh works
+(`api/main.py`, "Built dashboard"; `tests/test_static.py`). Old `?page=…&n=…` links are rewritten once on
+load (`redirectLegacy()` in `main.tsx`).
 
-| Path | Component today (Blocks 3–4 replace the ones marked *temporary*) | Data it polls |
+| Path | Component today (Block 4 replaces the ones marked *temporary*) | Data it polls |
 | --- | --- | --- |
 | `/` | `pages/Intro` + `ui/splash-backdrop` (the only page with the shaders) | nothing |
-| `/app` | → `/app/runs` | — |
-| `/app/agents` | titled empty state from `emptyStateFor("agents")` in `App.tsx` *(temporary)* | `/api/health` (60 s) |
-| `/app/agents/new` | titled empty state from `emptyStateFor("agent-new")` *(temporary)* | `/api/health` (60 s) |
+| `/app`, `/app/home` | `pages/Home` — minimal titled page; owns the first-run rule (nothing connected, no history beyond `golden`, nothing running → `replace` to `/app/onboarding/1`; "Skip for now" is remembered for the tab's session) | `/api/agents` 15 s, `/api/runs` 15 s, `loop` from the shell |
+| `/app/onboarding/:step` | `pages/Onboarding` (outside the shell) — Choose · Connect · Tools · First run, rail from `components/WizardRail`; bad step → 1 | `/api/health` 60 s; `/api/agents` + `/api/agents/example/log` every 3 s while the example agent starts |
+| `/app/agents` | `pages/Agents` — the list: name · transport · url · last ping · tools mapped · runs; Ping, start/stop the example agent, delete with inline confirm; **Connect agent** → the wizard | `/api/agents` 3 s, `/api/runs` 10 s |
+| `/app/agents/new` | → `/app/onboarding/2` | — |
 | `/app/runs` | `pages/Heal` — start a run, settings drawer, resume/stop replay *(temporary)* | via the shell |
-| `/app/runs/live` | `pages/Agents` while `loop.running` or a replay is active, else `pages/Results` — *temporary* | Agents: `loop` + `status` from the shell, `/api/cycles` 2–10 s, `/api/state` 2–10 s; Results: `/api/state` 10 s, `/api/cycles` 2–10 s |
+| `/app/runs/live` | `pages/RunLive` while `loop.running` or a replay is active, else `pages/Results` — *temporary* | RunLive: `loop` + `status` from the shell, `/api/cycles` 2–10 s, `/api/state` 2–10 s; Results: `/api/state` 10 s, `/api/cycles` 2–10 s, `/api/manifest` 60 s (seed-attack preview shown only for the in-process agent) |
 | `/app/runs/live/cycles/:n` | `pages/Cycle` | `/api/cycles` 10 s, `/api/configs/{v}` ×2 for the diff |
 | `/app/runs/:id`, `/app/runs/:id/cycles/:n` (any other id) | placeholder in `App.tsx` naming the run; Block 4 builds the page | nothing |
+| `/app/replays`, `/app/settings` | titled placeholders in `App.tsx`; Block 4 builds the pages | nothing |
 | unknown under `/app` | → `/app/runs` | — |
 | unknown elsewhere | → `/` | — |
 
-The shell itself polls `/api/loop` and `/api/replay` every 2 s and `/api/status` every 1 s while something
-is running or replaying (2 s otherwise), for its status line ("running · cycle N" / "replaying" / "replay
-paused" / "replay ended" / hidden) and hands `loop`, `replay`, `status` and a `refresh()` to the page
-underneath — no page polls those three routes itself. `ApiDown` renders in the shell's status slot when both
+The shell itself polls `/api/loop` and `/api/replay` every 2 s, `/api/status` every 1 s while something
+is running or replaying (2 s otherwise), and `/api/health` every 60 s, for its "Current run" item ("running ·
+cycle N" / "replaying" / "replay paused" / hidden), the no-key line in the rail footer, and hands `loop`,
+`replay`, `status`, `health` and a `refresh()` to the page underneath — no page polls those routes itself.
+`ApiDown` renders in the shell's status slot when both
 `/api/loop` and `/api/replay` have never answered. Content fades 120 ms on route change (off under reduced
 motion); nothing slides. Page titles keep the serif `display` class at 48 px; everything else is Inter.
 

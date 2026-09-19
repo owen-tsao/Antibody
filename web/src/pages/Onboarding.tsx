@@ -59,6 +59,8 @@ GET /tools
 const EXAMPLE_POLL_MS = 3_000;
 const EXAMPLE_TIMEOUT_MS = 180_000;
 const HEALTH_MS = 60_000;
+// Same words as the rail footer (Shell.tsx): the example agent calls inference, so starting it needs the key too.
+const NO_KEY = "Set WANDB_API_KEY to run live; replays still play";
 
 type Choice = "builtin" | "example" | "own";
 
@@ -260,7 +262,15 @@ export default function Onboarding({
             <Title sub="Antibody deploys it into a sandbox storefront and attacks it there. Pick one to start with.">Which support agent should Antibody attack?</Title>
             <div className="mt-10 grid gap-3 sm:grid-cols-3">
               <ChoiceCard icon={Sparkles} title="Demo agent" body="Built in. See a full heal in minutes with nothing to set up." selected={choice === "builtin"} onSelect={() => setChoice("builtin")} disabled={exampleBusy} />
-              <ChoiceCard icon={Server} title="Example agent" body="An OpenAI Agents SDK agent we start for you on this machine." selected={choice === "example"} onSelect={() => setChoice("example")} disabled={exampleBusy} />
+              <ChoiceCard
+                icon={Server}
+                title="Example agent"
+                body="An OpenAI Agents SDK agent we start for you on this machine."
+                selected={choice === "example"}
+                onSelect={() => setChoice("example")}
+                disabled={exampleBusy}
+                title2={noKey ? `${NO_KEY}; the example agent calls inference` : undefined}
+              />
               <ChoiceCard icon={Globe} title="Your own" body="Any agent that answers POST /episode over HTTP." selected={choice === "own"} onSelect={() => setChoice("own")} disabled={exampleBusy} />
             </div>
             {(exampleBusy || exampleNote) && (
@@ -360,7 +370,7 @@ export default function Onboarding({
                 type="button"
                 onClick={() => void heal()}
                 disabled={healing || noKey}
-                title={noKey ? "Set WANDB_API_KEY to run live; replays still play" : undefined}
+                title={noKey ? NO_KEY : undefined}
                 className={primary}
               >
                 {healing ? "Starting…" : "Heal"}
@@ -405,6 +415,7 @@ function ChoiceCard({
   selected,
   onSelect,
   disabled,
+  title2,
 }: {
   icon: typeof Globe;
   title: string;
@@ -412,6 +423,8 @@ function ChoiceCard({
   selected: boolean;
   onSelect: () => void;
   disabled?: boolean;
+  /** Hover text, e.g. why choosing this will not work right now. */
+  title2?: string;
 }) {
   return (
     <button
@@ -420,6 +433,7 @@ function ChoiceCard({
       aria-checked={selected}
       onClick={onSelect}
       disabled={disabled}
+      title={title2}
       className={cn(
         "relative flex flex-col items-stretch rounded-xl border bg-[var(--card)] p-4 text-left transition-colors disabled:cursor-default",
         selected ? "border-[var(--fg)]" : "border-[var(--border)] hover:border-[var(--border-2)]",
