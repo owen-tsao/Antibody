@@ -33,6 +33,11 @@ interface Props {
   refresh: () => void;
 }
 
+/** Whether an agent can be attacked right now: the example agent only answers while its process is up. */
+function selectable(a: Agent): boolean {
+  return a.id !== "example" || exampleState(a) === "running";
+}
+
 export default function StartDialog({ settings, onChange, onClose, health, loop, refresh }: Props) {
   const reduced = useReducedMotion();
   const titleId = useId();
@@ -41,6 +46,8 @@ export default function StartDialog({ settings, onChange, onClose, health, loop,
 
   const [manifest, setManifest] = useState<Manifest | null>(null);
   const [agents, setAgents] = useState<Agent[] | null>(null);
+  const [agentsError, setAgentsError] = useState<string | null>(null);
+  const [attempt, setAttempt] = useState(0);
   useEffect(() => {
     let alive = true;
     api
@@ -50,11 +57,11 @@ export default function StartDialog({ settings, onChange, onClose, health, loop,
     api
       .agents()
       .then((a) => alive && setAgents(a))
-      .catch(() => alive && setAgents(null));
+      .catch((e: unknown) => alive && setAgentsError(e instanceof Error ? e.message : String(e)));
     return () => {
       alive = false;
     };
-  }, []);
+  }, [attempt]);
 
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -63,8 +70,11 @@ export default function StartDialog({ settings, onChange, onClose, health, loop,
   const noKey = health !== null && !health.has_api_key;
   const running = loop?.running ?? false;
   // null means the API's own default, which is the built-in agent; the picker shows it as such and writes
-  // the id explicitly on the first choice so the start body always names its agent.
-  const selected = settings.target ?? "builtin";
+  // the id explicitly on the first choice so the start body always names its agent. A saved choice that
+  // the list no longer offers (the agent was deleted, or the example agent is stopped) falls back to the
+  // built-in one for both the checked row and the start body, so a stale id is never submitted.
+  const saved = settings.target ?? "builtin";
+  const selected = agents === null || agents.some((a) => a.id === saved && selectable(a)) ? saved : "builtin";
 
   const heal = async () => {
     if (running) {
@@ -124,21 +134,37 @@ export default function StartDialog({ settings, onChange, onClose, health, loop,
         </header>
 
         <p className="mb-2 mt-5 text-[10.5px] font-medium uppercase tracking-[0.08em] text-[var(--faint)]">Agent</p>
-        <div role="radiogroup" aria-label="Agent to attack" className="divide-y divide-[var(--border)] border-y border-[var(--border)]">
+        <div role="group" aria-label="Agent to attack" className="divide-y divide-[var(--border)] border-y border-[var(--border)]">
           {agents === null ? (
-            <p className="py-3 text-[12px] text-[var(--faint)]">loading…</p>
+            <p className="py-3 text-[12px] text-[var(--faint)]">
+              {agentsError === null ? (
+                "loading…"
+              ) : (
+                <>
+                  could not load agents ·{" "}
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setAgentsError(null);
+                      setAttempt((n) => n + 1);
+                    }}
+                    className={cn(textButton, "text-[12px]")}
+                  >
+                    <span className="u-line">retry</span>
+                  </button>
+                </>
+              )}
+            </p>
           ) : (
             agents.map((a) => {
-              // The example agent only answers while its process is up; offering it stopped would start a
-              // run whose every episode fails to connect.
-              const stopped = a.id === "example" && exampleState(a) !== "running";
+              // Offering the example agent stopped would start a run whose every episode fails to connect.
+              const stopped = !selectable(a);
               const on = a.id === selected;
               return (
                 <button
                   key={a.id}
                   type="button"
-                  role="radio"
-                  aria-checked={on}
+                  aria-pressed={on}
                   disabled={stopped}
                   title={stopped ? "start the example agent from the Agents page first" : undefined}
                   onClick={() => onChange({ ...settings, target: a.id })}
