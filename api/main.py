@@ -5,15 +5,16 @@ serves the built dashboard from web/dist (mounted at "/" after every /api route,
 directory exists), so `make demo` is one server. Read routes serve the loop's files with a golden
 fallback (api.store) from one of three sources, `live`, `golden` or `run:<id>` (a past run under
 history/); /api/runs lists those runs with their manifests and names the agent each ran against.
-/api/agents/* is the list of connected agents: add one by URL, ping it, delete it, or start and stop the
-bundled example agent (api.agents, api.example_agent). /api/loop/* spawns and controls the loop
-as a subprocess with the settings in the request body, including which agent to attack (api.loop_ctl);
-/api/manifest describes the default target for the Intro line and carries the settings defaults;
-/api/attack runs one seed scenario in-process as a preview (api.attack); /api/replay/* plays a recorded
+/api/agents/* is the list of connected agents: add one by URL, ping it (or ping a bare URL before saving it),
+delete it, or start and stop the bundled example agent (api.agents, api.example_agent). /api/loop/* spawns
+and controls the loop as a subprocess with the settings in the request body, including which agent to
+attack (api.loop_ctl); there is no reset route — wiping runs/ is the CLI's `chaos.loop reset`;
+/api/manifest describes the default target and the models for the Intro line and carries the settings defaults;
+/api/attack runs one seed scenario in-process as a preview, against the running loop's agent when there is
+one (api.attack); /api/replay/* plays a recorded
 run (golden, or any past run) into /api/status and /api/cycles on its original schedule (api.replay);
 /api/rollback copies a past run's config version in as the next live version (api.rollback); /api/health
-is what the Makefile waits on and where the UI learns whether a key is set. /api/loop/reset is planned
-(docs/FRONTEND.md §3) and does not exist yet.
+is what the Makefile waits on and where the UI learns whether a key is set.
 
 Without WANDB_API_KEY the API is Replay-only: /api/attack and POST /api/loop/start answer 503
 instead of spawning work that would die on `get_client()`.
@@ -382,6 +383,20 @@ def agent_ping(agent_id: str) -> dict:
     if agent is None:
         raise HTTPException(404, f"no agent {agent_id!r}")
     return agents.ping(agent)
+
+
+class PingUrlBody(BaseModel):
+    url: str
+
+
+@app.post("/api/agents/ping")
+def agent_ping_url(body: PingUrlBody) -> dict:
+    """The same `PingResult` for a URL that is not connected yet, so the connect form can test before saving.
+    400 for a URL `POST /api/agents` would reject; nothing is stored."""
+    try:
+        return agents.ping_url(body.url)
+    except ValueError as e:
+        raise HTTPException(400, str(e))
 
 
 @app.post("/api/agents/example/start", status_code=202)

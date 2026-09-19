@@ -278,6 +278,35 @@ def test_ping_builtin_is_always_ok(world: dict[str, Path]) -> None:
     assert out["ok"] is True and out["mapping"]["unknown"] == [] and len(out["mapping"]["known"]) == 5
 
 
+def test_ping_by_url_is_the_same_result_and_stores_nothing(world: dict[str, Path]) -> None:
+    fake = FakeAgent(tools=FIVE_TOOLS)
+    try:
+        out = agents.ping_url(fake.url + "/")
+    finally:
+        fake.close()
+    assert out["ok"] is True and out["mapping"] == {"known": [t["name"] for t in FIVE_TOOLS], "unknown": []}
+    assert set(out) == {"ok", "latency_ms", "reply_preview", "tools", "mapping"}
+    assert not (world["history"] / "agents.json").exists(), "a bare URL has no row to record the ping on"
+    closed = FakeAgent()
+    closed.close()
+    assert agents.ping_url(closed.url)["ok"] is False
+
+
+def test_ping_by_url_rejects_what_add_would(world: dict[str, Path]) -> None:
+    for url in ("http://", "ftp://x", "http://h/x?y=1"):
+        with pytest.raises(ValueError):
+            agents.ping_url(url)
+
+
+def test_ping_by_url_route(client: TestClient, fake_agent: FakeAgent) -> None:
+    r = client.post("/api/agents/ping", json={"url": fake_agent.url})
+    assert r.status_code == 200 and r.json()["ok"] is True
+    assert client.post("/api/agents/ping", json={"url": "http://h/x?y=1"}).status_code == 400
+    assert client.post("/api/agents/ping", json={}).status_code == 422
+    # The literal path never shadows a stored agent's ping: ids are random tokens, never "ping".
+    assert client.post("/api/agents/ping/ping").status_code == 404
+
+
 # --- routes -----------------------------------------------------------------------------------------
 
 

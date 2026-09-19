@@ -341,9 +341,17 @@ def ping(agent: dict) -> dict:
     return result
 
 
-def _record_ping(agent_id: str, result: dict) -> None:
-    """`last_ping: {at, ok, latency_ms}` and `tools` on the stored row; synthetic rows have nowhere to keep it."""
-    if agent_id in RESERVED_IDS:
+def ping_url(url: str) -> dict:
+    """`ping` for a URL that is not (yet) a stored agent — the connect form's "test before you save".
+
+    ValueError for a URL `add_agent` would also reject. Nothing is persisted: there is no row to keep it on.
+    """
+    return ping({"id": None, "name": "", "url": _validate_url(url)})
+
+
+def _record_ping(agent_id: str | None, result: dict) -> None:
+    """`last_ping: {at, ok, latency_ms}` and `tools` on the stored row; synthetic rows and a bare URL (`None`) have nowhere to keep it."""
+    if agent_id is None or agent_id in RESERVED_IDS:
         return
     with _store_lock:
         rows = _read()
