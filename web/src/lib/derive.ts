@@ -7,9 +7,12 @@ import type {
   AttackToolCall,
   CycleRecord,
   FailureKind,
+  Health,
+  LoopState,
   Patch,
   PatchKind,
   Phase,
+  ReplayInfo,
   ScenarioKind,
   Status,
   ToolPolicy,
@@ -1104,4 +1107,66 @@ export function cycleSteps(r: CycleRecord, legitSize: number): CycleStep[] {
     : { step: "gate", label: "Gate", headline: "not run", line: "", tone: "skipped" };
 
   return [chaos, target, judge, repair, gate];
+}
+
+// --- Empty states (docs/plans/00-overview.md Block 2.8) --------------------------------------------
+
+export interface EmptyState {
+  title: string;
+  body: string;
+}
+
+/**
+ * What a list says when it has nothing to show, by page and by whether the API can run live. Copy speaks
+ * support ("your support agent", "the demo agent"), never "target". `health` null means unknown: the
+ * page has not heard from /api/health yet, so the copy does not mention the key either way.
+ */
+export function emptyStateFor(kind: "agents" | "agent-new" | "runs", health: Health | null): EmptyState {
+  const noKey = health !== null && !health.has_api_key;
+  if (kind === "agents") {
+    return {
+      title: "Connect your support agent",
+      body: "Antibody deploys it into a sandbox storefront — fake customers, orders, refunds, tickets — and attacks it there. Until then, the demo agent is ready to run.",
+    };
+  }
+  if (kind === "agent-new") {
+    return {
+      title: "Connect your support agent",
+      body: "Give Antibody a URL that answers POST /episode. Try the demo agent first if you just want to see a run.",
+    };
+  }
+  return noKey
+    ? {
+        title: "No runs yet",
+        body: "Set WANDB_API_KEY to run live; the demo tape plays without it.",
+      }
+    : {
+        title: "No runs yet",
+        body: "Start one against the demo agent, or connect your own support agent first.",
+      };
+}
+
+// --- Shell status pill ------------------------------------------------------------------------------
+
+export interface ShellPill {
+  label: string;
+  /** Only a real run earns the live dot; a replay is a recording and gets no signal colour. */
+  live: boolean;
+}
+
+/**
+ * The one line the shell says about the current run, or null to draw nothing. A live loop outranks a
+ * replay (the API stops a replay when a loop appears, so both cannot be true for long). The cycle
+ * number comes from /api/status and is omitted while the loop is still measuring its baseline.
+ */
+export function shellPill(loop: LoopState | null, replay: ReplayInfo | null, status: Status | null): ShellPill | null {
+  if (loop?.running) {
+    const cycle = status && status.phase !== "idle" && !status.replay ? status.cycle : undefined;
+    return { label: cycle ? `running · cycle ${cycle}` : "running", live: true };
+  }
+  if (replay?.active) {
+    // An ended tape also reports `paused: true`; say which it is.
+    return { label: replay.ended ? "replay ended" : replay.paused ? "replay paused" : "replaying", live: false };
+  }
+  return null;
 }

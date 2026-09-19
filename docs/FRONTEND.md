@@ -6,6 +6,41 @@ Decisions already made (do not reopen): React app is the product; three pages �
 
 ---
 
+## Routes (added Sep 18, 2026 — supersedes the `?page=` navigation described below)
+
+The app is split into a landing page at `/` and the tool under `/app`, inside a persistent shell
+(`components/Shell.tsx`: left rail from `md` up, top bar below; Agents · Runs; wordmark → `/`; one status
+line linking to the current run). Routing is `lib/routes.ts` — `parse(pathname)`, `href(route)`,
+`navigate(route)` (pushState), `useRoute()` (popstate) — no router dependency. The API serves
+`web/dist/index.html` for every `/app` path so a hard refresh works (`api/main.py`, "Built dashboard";
+`tests/test_static.py`). Old `?page=…&n=…` links are rewritten once on load (`redirectLegacy()` in `main.tsx`).
+
+| Path | Component today (Blocks 3–4 replace the ones marked *temporary*) | Data it polls |
+| --- | --- | --- |
+| `/` | `pages/Intro` + `ui/splash-backdrop` (the only page with the shaders) | nothing |
+| `/app` | → `/app/runs` | — |
+| `/app/agents` | titled empty state from `emptyStateFor("agents")` in `App.tsx` *(temporary)* | `/api/health` (60 s) |
+| `/app/agents/new` | titled empty state from `emptyStateFor("agent-new")` *(temporary)* | `/api/health` (60 s) |
+| `/app/runs` | `pages/Heal` — start a run, settings drawer, resume/stop replay *(temporary)* | via the shell |
+| `/app/runs/live` | `pages/Agents` while `loop.running` or a replay is active, else `pages/Results` — *temporary* | Agents: `loop` + `status` from the shell, `/api/cycles` 2–10 s, `/api/state` 2–10 s; Results: `/api/state` 10 s, `/api/cycles` 2–10 s |
+| `/app/runs/live/cycles/:n` | `pages/Cycle` | `/api/cycles` 10 s, `/api/configs/{v}` ×2 for the diff |
+| `/app/runs/:id`, `/app/runs/:id/cycles/:n` (any other id) | placeholder in `App.tsx` naming the run; Block 4 builds the page | nothing |
+| unknown under `/app` | → `/app/runs` | — |
+| unknown elsewhere | → `/` | — |
+
+The shell itself polls `/api/loop` and `/api/replay` every 2 s and `/api/status` every 1 s while something
+is running or replaying (2 s otherwise), for its status line ("running · cycle N" / "replaying" / "replay
+paused" / "replay ended" / hidden) and hands `loop`, `replay`, `status` and a `refresh()` to the page
+underneath — no page polls those three routes itself. `ApiDown` renders in the shell's status slot when both
+`/api/loop` and `/api/replay` have never answered. Content fades 120 ms on route change (off under reduced
+motion); nothing slides. Page titles keep the serif `display` class at 48 px; everything else is Inter.
+
+Nothing plays off-screen: whenever the route is anything but `/app/runs/live` (a shell link, browser Back,
+or a deep link arriving with a tape still playing), `App` asks `/api/replay` and pauses a replay that is
+`active && !paused`. One mechanism, decided on the fresh answer, so a tape that was just stopped is left alone.
+
+---
+
 ## 1. What we are building
 
 Three pages that tell one story: **press start → watch the agents work → see the proof.** Plus an optional fourth tab.
@@ -17,7 +52,7 @@ Three pages that tell one story: **press start → watch the agents work → see
 | Results | `/results` | Interactive List Preview of cycles — hover slides a white bar and floats that cycle's chart, click opens the detail (handoffs, gate numbers, config diff, Weave buttons) — plus run-attack buttons | **Run seed attack against v0** |
 | Analysis (optional) | `/analysis` | marimo notebook in an iframe reading Weave | none |
 
-Screen-level state (`useState`) switches pages; no router. The agents never run inside the browser. A ~140-line FastAPI adapter (`api/`) sits between React and `chaos/`; it spawns the loop as a subprocess and reads the same files the CLI writes.
+Screen-level state (`useState`) switches pages; no router. *(Replaced Sep 18 by path routes — see "Routes" above; still no router dependency.)* The agents never run inside the browser. A ~140-line FastAPI adapter (`api/`) sits between React and `chaos/`; it spawns the loop as a subprocess and reads the same files the CLI writes.
 
 ```
 web/  (Vite + React + TS + Tailwind)  ──HTTP──▶  api/main.py (FastAPI)  ──import/subprocess──▶  chaos/
@@ -265,8 +300,8 @@ web/
   public/perlin.png  downloaded once from the cdn.21st.dev URL in the Orb prompt
   public/intro-poster.png   reduced-motion fallback for the liquid-metal splash
   src/
-    main.tsx  App.tsx (page state: intro | agents | results | analysis; `?page=agents|results` deep-links for
-                       demos and screenshots, `?demo=<component>` renders one ui component standalone)
+    main.tsx  App.tsx (REPLACED Sep 18 — see "Routes" above. Was: page state intro | agents | results | analysis;
+                       `?page=agents|results` deep-links, `?demo=<component>` standalone renders. Both are gone.)
     styles.css         tokens as CSS variables (from the UI standard, dark set) + Tailwind v4 `@theme inline` that maps the shadcn
                        semantic names every pasted component uses (--background --foreground --card --border --muted --muted-foreground
                        --secondary --secondary-foreground --primary --primary-foreground --accent --input --ring) onto those values.

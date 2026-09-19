@@ -1,7 +1,9 @@
-// Run settings for the Heal screen (docs/plans/02-run-settings-and-history.md, A2). Every field maps
-// to a flag `chaos.loop run` already has; the API contract is A1's `LoopStartBody`. No flag, no field.
+// Run settings for the start screen (docs/plans/02-run-settings-and-history.md, A2). Every field maps
+// to a flag `chaos.loop run` already has; the API contract is `LoopStartBody` in api.ts. No flag, no field.
 
-export type World = "auto" | "mock";
+import type { LoopStartBody, World } from "@/api";
+
+export type { World };
 
 export interface RunSettings {
   /** `--seeds N`; null = all seeds (the CLI default). */
@@ -13,15 +15,6 @@ export interface RunSettings {
   /** false → `--no-second-pass`. */
   secondPass: boolean;
   /** "mock" → `ANTIBODY_NO_ZENDESK=1` in the loop's environment. */
-  world: World;
-}
-
-/** The A1 request body for POST /api/loop/start. `target` is not here on purpose: it is an env decision. */
-export interface RunStartBody {
-  chaos_cycles: number;
-  seeds: number | null;
-  repair_attempts: number;
-  second_pass: boolean;
   world: World;
 }
 
@@ -94,7 +87,8 @@ export function isDefaultSettings(s: RunSettings): boolean {
   );
 }
 
-export function toStartBody(s: RunSettings): RunStartBody {
+/** The POST /api/loop/start body for these settings. `target` is not here yet: Block 4 adds the agent picker. */
+export function toStartBody(s: RunSettings): LoopStartBody {
   return {
     chaos_cycles: s.chaosCycles,
     seeds: s.seeds,

@@ -2,7 +2,6 @@ import { AnimatePresence, motion, useReducedMotion } from "framer-motion";
 import { useState } from "react";
 
 import type { ReplayInfo } from "@/api";
-import BackLink from "@/components/BackLink";
 import OrbButton from "@/components/OrbButton";
 import SettingsDrawer from "@/components/SettingsDrawer";
 import { fmtClock, fmtTimeShort } from "@/lib/derive";
@@ -42,7 +41,6 @@ function replayLabel(replay: ReplayInfo | null): string {
 // shape the next run).
 export default function Heal({
   onStart,
-  onBack,
   onStopReplay,
   settings,
   onSettingsChange,
@@ -52,7 +50,6 @@ export default function Heal({
   busy = false,
 }: {
   onStart: (mode: StartMode) => void;
-  onBack: () => void;
   /** "stop replay" beside the resume link; the parent re-reads /api/replay afterwards. */
   onStopReplay?: () => void;
   /** What the next Heal press will send; edited in the settings drawer. */
@@ -83,8 +80,6 @@ export default function Heal({
 
   return (
     <section className="relative flex min-h-screen flex-col items-center justify-center px-6 text-center text-white">
-      <BackLink onClick={onBack} label="Back to intro" tone="light" />
-
       <motion.h2
         {...fade(0.1)}
         className="text-center font-normal leading-[1] tracking-[-0.02em]"

@@ -33,7 +33,7 @@ export default class ErrorBoundary extends Component<
               type="button"
               className="rounded underline underline-offset-2 hover:text-[var(--fg)]"
               onClick={() => {
-                window.location.search = "?page=intro";
+                window.location.href = "/";
               }}
             >
               Back to start

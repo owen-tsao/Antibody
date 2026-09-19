@@ -45,7 +45,7 @@ from typing import Literal
 from fastapi import FastAPI, HTTPException, Query, Request
 from fastapi.exception_handlers import request_validation_exception_handler
 from fastapi.exceptions import RequestValidationError
-from fastapi.responses import JSONResponse
+from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
@@ -604,8 +604,17 @@ def loop_log(tail: int = Query(200, ge=1, le=5000)) -> dict:
 
 
 # --- Built dashboard -------------------------------------------------------------------
-# Must stay last: Starlette matches in registration order, so every /api route above wins over the
-# catch-all mount. `html=True` serves index.html for "/"; the app routes by query string, so no SPA
-# fallback is needed. Skipped when web/dist is absent (dev via Vite, or a clone that never built).
+# Must stay last: Starlette matches in registration order, so every /api route above wins over these.
+# The dashboard routes by path (`/app/runs/live`, docs/FRONTEND.md "Routes"), and `StaticFiles(html=True)`
+# only serves index.html for directory URLs, so a hard refresh on any /app path would 404 through the
+# mount alone. The explicit /app routes below are registered *before* the mount so they win; they are
+# limited to /app so a missing asset or a typo outside the app is still an honest 404, not an HTML page.
+# Skipped when web/dist is absent (dev via Vite, or a clone that never built).
 if WEB_DIST.is_dir():
+
+    @app.get("/app", include_in_schema=False)
+    @app.get("/app/{rest:path}", include_in_schema=False)
+    def spa_index(rest: str = "") -> FileResponse:
+        return FileResponse(WEB_DIST / "index.html")
+
     app.mount("/", StaticFiles(directory=WEB_DIST, html=True), name="web")
