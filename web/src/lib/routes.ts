@@ -1,33 +1,53 @@
-// Hand-rolled routing (docs/plans/00-overview.md, Block 2): the app has six addresses and no router
-// dependency. `parse` and `href` are pure and inverse of each other; `navigate` is pushState plus a
+// Hand-rolled routing (docs/plans/00-overview.md, Blocks 2–3): the app has a dozen addresses and no
+// router dependency. `parse` and `href` are pure and inverse of each other; `navigate` is pushState plus a
 // notification; `useRoute` is the one subscription. Everything the UI knows about the URL is here.
 
 import { type MouseEvent, useSyncExternalStore } from "react";
 
+export type OnboardingStep = 1 | 2 | 3 | 4;
+
 export type Route =
   | { kind: "landing" }
+  | { kind: "home" }
+  | { kind: "onboarding"; step: OnboardingStep }
   | { kind: "agents" }
-  | { kind: "agent-new" }
   | { kind: "runs" }
   | { kind: "run"; id: string }
-  | { kind: "cycle"; id: string; n: number };
+  | { kind: "cycle"; id: string; n: number }
+  | { kind: "replays" }
+  | { kind: "settings" };
 
 export const LANDING: Route = { kind: "landing" };
+export const HOME: Route = { kind: "home" };
 export const RUNS: Route = { kind: "runs" };
 export const AGENTS: Route = { kind: "agents" };
+export const REPLAYS: Route = { kind: "replays" };
+export const SETTINGS: Route = { kind: "settings" };
 
 /** `/app/runs/live` is the current run: running, or finished and not yet archived (Block 4's identity rule). */
 export const LIVE_RUN: Route = { kind: "run", id: "live" };
 
+export const onboarding = (step: OnboardingStep): Route => ({ kind: "onboarding", step });
+
 // Run ids are history folder names, `live` or `golden` (api/store.py); the same shape the API accepts.
 const RUN_ID = /^[A-Za-z0-9T_-]+$/;
 
-/** `/app` and anything unknown under it → runs; anything unknown elsewhere → landing. */
+function onboardingStep(raw: string | undefined): OnboardingStep {
+  const n = Number(raw);
+  return n === 2 || n === 3 || n === 4 ? n : 1;
+}
+
+/** `/app` → home; anything unknown under it → runs; anything unknown elsewhere → landing. */
 export function parse(pathname: string): Route {
   const parts = pathname.split("/").filter(Boolean);
   if (parts[0] !== "app") return LANDING;
   const [, section, id, sub, n] = parts;
-  if (section === "agents") return id === "new" ? { kind: "agent-new" } : AGENTS;
+  if (section === undefined || section === "home") return HOME;
+  if (section === "onboarding") return onboarding(onboardingStep(id));
+  // The pre-wizard connect address; the wizard's Connect step is what it meant.
+  if (section === "agents") return id === "new" ? onboarding(2) : AGENTS;
+  if (section === "replays") return REPLAYS;
+  if (section === "settings") return SETTINGS;
   if (section === "runs" && id && RUN_ID.test(id)) {
     if (sub === "cycles" && n !== undefined) {
       const cycle = Number(n);
@@ -42,16 +62,22 @@ export function href(route: Route): string {
   switch (route.kind) {
     case "landing":
       return "/";
+    case "home":
+      return "/app/home";
+    case "onboarding":
+      return `/app/onboarding/${route.step}`;
     case "agents":
       return "/app/agents";
-    case "agent-new":
-      return "/app/agents/new";
     case "runs":
       return "/app/runs";
     case "run":
       return `/app/runs/${route.id}`;
     case "cycle":
       return `/app/runs/${route.id}/cycles/${route.n}`;
+    case "replays":
+      return "/app/replays";
+    case "settings":
+      return "/app/settings";
   }
 }
 
@@ -79,9 +105,12 @@ export function legacyRoute(search: string): Route | null {
   }
 }
 
-/** Called once before the first render: rewrites a legacy `?page=` URL in place, leaving no history entry behind. */
+/**
+ * Called once before the first render: rewrites a legacy `?page=` URL, or the pre-wizard `/app/agents/new`,
+ * in place, leaving no history entry behind.
+ */
 export function redirectLegacy(): void {
-  const target = legacyRoute(window.location.search);
+  const target = legacyRoute(window.location.search) ?? (window.location.pathname === "/app/agents/new" ? onboarding(2) : null);
   if (target) window.history.replaceState(null, "", href(target));
 }
 
@@ -95,6 +124,13 @@ export function navigate(route: Route): void {
     // A new screen starts at its top; Back/Forward keep the browser's own scroll restoration.
     window.scrollTo(0, 0);
   }
+  notify();
+}
+
+/** Like `navigate`, but the current entry is rewritten: Back never returns to the address being left (redirects). */
+export function replace(route: Route): void {
+  const to = href(route);
+  if (to !== window.location.pathname) window.history.replaceState(null, "", to);
   notify();
 }
 

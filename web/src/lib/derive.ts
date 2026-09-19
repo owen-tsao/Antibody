@@ -1121,18 +1121,12 @@ export interface EmptyState {
  * support ("your support agent", "the demo agent"), never "target". `health` null means unknown: the
  * page has not heard from /api/health yet, so the copy does not mention the key either way.
  */
-export function emptyStateFor(kind: "agents" | "agent-new" | "runs", health: Health | null): EmptyState {
+export function emptyStateFor(kind: "agents" | "runs", health: Health | null): EmptyState {
   const noKey = health !== null && !health.has_api_key;
   if (kind === "agents") {
     return {
       title: "Connect your support agent",
       body: "Antibody deploys it into a sandbox storefront — fake customers, orders, refunds, tickets — and attacks it there. Until then, the demo agent is ready to run.",
-    };
-  }
-  if (kind === "agent-new") {
-    return {
-      title: "Connect your support agent",
-      body: "Give Antibody a URL that answers POST /episode. Try the demo agent first if you just want to see a run.",
     };
   }
   return noKey

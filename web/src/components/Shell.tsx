@@ -34,7 +34,7 @@ export interface ShellData {
 }
 
 const items = [
-  { route: AGENTS, label: "Agents", active: (r: Route) => r.kind === "agents" || r.kind === "agent-new" },
+  { route: AGENTS, label: "Agents", active: (r: Route) => r.kind === "agents" },
   { route: RUNS, label: "Runs", active: (r: Route) => r.kind === "runs" || r.kind === "run" || r.kind === "cycle" },
 ];
 

@@ -6,7 +6,7 @@ import Shell from "@/components/Shell";
 import SplashBackdrop from "@/components/ui/splash-backdrop";
 import { usePoll } from "@/hooks/usePoll";
 import { emptyStateFor } from "@/lib/derive";
-import { LIVE_RUN, linkProps, navigate, RUNS, type Route, useRoute } from "@/lib/routes";
+import { HOME, LIVE_RUN, linkProps, navigate, onboarding, type Route, useRoute } from "@/lib/routes";
 import { loadSettings, saveSettings, toStartBody, type RunSettings } from "@/lib/settings";
 import Intro, { type StartMode } from "@/pages/Intro";
 import Heal from "@/pages/Heal";
@@ -34,7 +34,7 @@ export default function App() {
         <ErrorBoundary label="splash backdrop" fallback={null}>
           <SplashBackdrop />
         </ErrorBoundary>
-        <Intro onNext={() => navigate(RUNS)} />
+        <Intro onNext={() => navigate(HOME)} />
       </>
     );
   }
@@ -132,21 +132,26 @@ function AppPages({ route }: { route: Route }) {
     <Shell route={route}>
       {({ loop, replay, status, statusError, refresh }) => {
         switch (route.kind) {
-          case "agents":
-          case "agent-new": {
+          case "home":
+            return <Placeholder title="Home" />;
+          case "onboarding":
+            return <Placeholder title="Connect your support agent" />;
+          case "replays":
+            return <Placeholder title="Replays" body="Watch a past run back. This page arrives in a later step." />;
+          case "settings":
+            return <Placeholder title="Settings" body="Run defaults and model names. This page arrives in a later step." />;
+          case "agents": {
             const empty = emptyStateFor(route.kind, health);
             return (
               <main className="px-6 pb-16 pt-8 md:px-10 md:pt-7">
                 <div className="mx-auto w-full max-w-[1040px]">
                   <h1 className="display text-[48px] leading-[1]">{empty.title}</h1>
                   <p className="mt-4 max-w-[56ch] text-[13px] leading-[1.6] text-[var(--muted)]">{empty.body}</p>
-                  {route.kind === "agents" && (
-                    <p className="mt-6 text-[13px]">
-                      <a {...linkProps({ kind: "agent-new" })} className="group rounded text-[var(--muted)] transition-colors hover:text-[var(--fg)]">
-                        <span className="u-line">connect an agent</span>
-                      </a>
-                    </p>
-                  )}
+                  <p className="mt-6 text-[13px]">
+                    <a {...linkProps(onboarding(1))} className="group rounded text-[var(--muted)] transition-colors hover:text-[var(--fg)]">
+                      <span className="u-line">connect an agent</span>
+                    </a>
+                  </p>
                 </div>
               </main>
             );
@@ -181,11 +186,24 @@ function AppPages({ route }: { route: Route }) {
                 onCycle={(n) => navigate({ kind: "cycle", id: route.id, n })}
               />
             );
-          default:
+          case "landing":
             return null;
         }
       }}
     </Shell>
+  );
+}
+
+/** A titled page with one quiet line: the shape every page under the shell shares, used where a page is not built yet. */
+function Placeholder({ title, body, children }: { title: string; body?: string; children?: React.ReactNode }) {
+  return (
+    <main className="px-6 pb-16 pt-8 md:px-10 md:pt-7">
+      <div className="mx-auto w-full max-w-[1040px]">
+        <h1 className="display text-[48px] leading-[1]">{title}</h1>
+        {body && <p className="mt-4 max-w-[56ch] text-[13px] leading-[1.6] text-[var(--muted)]">{body}</p>}
+        {children}
+      </div>
+    </main>
   );
 }
 
@@ -196,17 +214,14 @@ function AppPages({ route }: { route: Route }) {
  */
 function HistoryRunPlaceholder({ id }: { id: string }) {
   return (
-    <main className="px-6 pb-16 pt-8 md:px-10 md:pt-7">
-      <div className="mx-auto w-full max-w-[1040px]">
-        <h1 className="display text-[48px] leading-[1]">{id === "golden" ? "Demo tape" : `Run ${id}`}</h1>
-        <p className="mt-4 max-w-[56ch] text-[13px] leading-[1.6] text-[var(--muted)]">
-          Past runs open here in a later step. Until then, the{" "}
-          <a {...linkProps(LIVE_RUN)} className="group rounded text-[var(--muted)] transition-colors hover:text-[var(--fg)]">
-            <span className="u-line">current run</span>
-          </a>{" "}
-          is the one on screen.
-        </p>
-      </div>
-    </main>
+    <Placeholder title={id === "golden" ? "Demo tape" : `Run ${id}`}>
+      <p className="mt-4 max-w-[56ch] text-[13px] leading-[1.6] text-[var(--muted)]">
+        Past runs open here in a later step. Until then, the{" "}
+        <a {...linkProps(LIVE_RUN)} className="group rounded text-[var(--muted)] transition-colors hover:text-[var(--fg)]">
+          <span className="u-line">current run</span>
+        </a>{" "}
+        is the one on screen.
+      </p>
+    </Placeholder>
   );
 }
