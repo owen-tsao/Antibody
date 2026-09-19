@@ -81,18 +81,7 @@ def load_recording(paths: store.RunPaths, source: str = GOLDEN) -> Recording:
         raise FileNotFoundError(f"{source} has no status_log.jsonl to replay")
     if not paths.cycles.exists():
         raise FileNotFoundError(f"{source} has no cycles.jsonl to replay")
-    rows: list[dict] = []
-    for line in paths.status_log.read_text().splitlines():
-        line = line.strip()
-        if not line:
-            continue
-        try:
-            row = json.loads(line)
-        except ValueError:
-            continue
-        if isinstance(row.get("t_rel"), (int, float)):
-            rows.append(row)
-    rows.sort(key=lambda r: r["t_rel"])
+    rows = store.timed_rows(store.status_log_rows(paths.status_log))
     if not rows:
         raise FileNotFoundError(f"{paths.status_log} has no replayable rows")
 

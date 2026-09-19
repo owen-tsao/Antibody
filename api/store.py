@@ -169,8 +169,9 @@ def read_regression(source: Source) -> list[Scenario]:
 def read_vulnerability(source: Source) -> dict | None:
     """`runs/vulnerability.json` as `{"landed": {"v0": 6, ...}, "suite_size": 6, "world": "mock"|"zendesk"|None}`.
 
-    Written by `chaos.loop vulnerability` after a run: how many of the final regression suite's
-    attacks land on each saved config. The denominator is that final suite, so it comes from
+    Written by `chaos.loop vulnerability` (every saved version) or by `chaos.loop run --vulnerability`
+    at the end of a run (v0 and the final version only; what the dashboard starts): how many of the final
+    regression suite's attacks land on each measured config. The denominator is that final suite, so it comes from
     `regression.json`, not from any one cycle's `regression_suite_size`. `world` is where the
     measurement ran (from the detail file); None when the run predates that field.
     """
@@ -225,33 +226,43 @@ class _LogBounds(NamedTuple):
     duration_s: float | None  # largest `t_rel` seen: how long the recorded run took
 
 
-def _status_log_bounds(path: Path) -> _LogBounds:
-    """Start, end and length of a phase log; None fields where the log has no such row.
+def status_log_rows(path: Path) -> list[dict]:
+    """Every JSON-object row of a phase log, in file order; [] when the file is missing or unreadable.
 
-    `duration_s` is what `api.replay` plays to (`Recording.duration_s`), read here without importing
-    replay so a runs-list row can say "7.5 min" without parsing the whole tape.
+    The one parser for `status_log.jsonl`: `run_manifest` reads start/end/duration from it and
+    `api.replay` plays it, so the two cannot disagree about what a row is. Torn or non-object lines are skipped.
     """
-    if not path.exists():
-        return _LogBounds(None, None, None)
     try:
         lines = path.read_text().splitlines()
     except OSError:
-        return _LogBounds(None, None, None)
-    stamps: list[str] = []
-    t_rel: float | None = None
+        return []
+    rows: list[dict] = []
     for line in lines:
+        if not line.strip():
+            continue
         try:
             row = json.loads(line)
         except ValueError:
             continue
-        if not isinstance(row, dict):
-            continue
-        if isinstance(row.get("since"), str):
-            stamps.append(row["since"])
-        t = row.get("t_rel")
-        if isinstance(t, (int, float)) and not isinstance(t, bool):
-            t_rel = float(t) if t_rel is None else max(t_rel, float(t))
-    return _LogBounds(stamps[0] if stamps else None, stamps[-1] if stamps else None, t_rel)
+        if isinstance(row, dict):
+            rows.append(row)
+    return rows
+
+
+def timed_rows(rows: list[dict]) -> list[dict]:
+    """The rows replay can place on its clock: those with a numeric `t_rel`, sorted by it."""
+    return sorted((r for r in rows if isinstance(r.get("t_rel"), (int, float)) and not isinstance(r.get("t_rel"), bool)), key=lambda r: r["t_rel"])
+
+
+def _status_log_bounds(path: Path) -> _LogBounds:
+    """Start, end and length of a phase log; None fields where the log has no such row.
+
+    `duration_s` is the last timed row's `t_rel`, the same number `api.replay` plays to (`Recording.duration_s`).
+    """
+    rows = status_log_rows(path)
+    stamps = [r["since"] for r in rows if isinstance(r.get("since"), str)]
+    timed = timed_rows(rows)
+    return _LogBounds(stamps[0] if stamps else None, stamps[-1] if stamps else None, float(timed[-1]["t_rel"]) if timed else None)
 
 
 def _manifest_file(path: Path) -> dict | None:

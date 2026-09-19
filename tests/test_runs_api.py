@@ -242,6 +242,27 @@ def test_a_run_with_no_timed_phase_rows_is_not_a_tape(client: TestClient, histor
     assert row["started_at"] is not None and row["finished_at"] is not None
 
 
+def test_store_and_replay_read_the_same_rows(tmp_path: Path) -> None:
+    """One parser: a torn line, a non-object line and an untimed row are skipped by both; timed rows are sorted."""
+    from api import store
+
+    log = tmp_path / "status_log.jsonl"
+    log.write_text(
+        '{"phase": "idle", "since": "2026-01-01T00:00:00+00:00", "t_rel": 0}\n'
+        '{"phase": "gate", "since": "2026-01-01T00:02:00+00:00", "t_rel": 120.5}\n'
+        '{"phase": "torn", "since": "2026-01-01T00:0\n'
+        "[1, 2, 3]\n"
+        '{"phase": "chaos", "since": "2026-01-01T00:01:00+00:00", "t_rel": 60}\n'
+        '{"phase": "idle", "since": "2026-01-01T00:03:00+00:00", "t_rel": null}\n'
+    )
+    rows = store.status_log_rows(log)
+    assert [r["phase"] for r in rows] == ["idle", "gate", "chaos", "idle"]
+    assert [r["t_rel"] for r in store.timed_rows(rows)] == [0, 60, 120.5]
+    first, last, duration = store._status_log_bounds(log)
+    assert (first, last, duration) == ("2026-01-01T00:00:00+00:00", "2026-01-01T00:03:00+00:00", 120.5)
+    assert store.status_log_rows(tmp_path / "missing.jsonl") == []
+
+
 def test_live_row_is_never_a_recording(client: TestClient, history: Path, tmp_path: Path) -> None:
     """The live run's files may form a tape, but `replay/start` refuses `live`, so its row must not offer one."""
     live = tmp_path / "runs"
