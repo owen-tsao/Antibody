@@ -4,7 +4,6 @@ import { api, ApiError, type LoopState, type ReplayInfo } from "@/api";
 import ErrorBoundary from "@/components/ErrorBoundary";
 import Shell from "@/components/Shell";
 import SplashBackdrop from "@/components/ui/splash-backdrop";
-import { usePoll } from "@/hooks/usePoll";
 import { emptyStateFor } from "@/lib/derive";
 import { HOME, LIVE_RUN, linkProps, navigate, onboarding, type Route, useRoute } from "@/lib/routes";
 import { loadSettings, saveSettings, toStartBody, type RunSettings } from "@/lib/settings";
@@ -60,8 +59,6 @@ function AppPages({ route }: { route: Route }) {
     setSettings(next);
     saveSettings(next);
   };
-  // Whether live runs are possible decides the empty states' copy; static for the API's lifetime.
-  const { data: health } = usePoll(api.health, 60_000);
 
   // Nothing plays off-screen: whenever the screen is not the live run — a shell link, browser Back, or
   // a deep link arriving with a tape still playing — a playing replay is frozen where it is, so the
@@ -130,7 +127,7 @@ function AppPages({ route }: { route: Route }) {
 
   return (
     <Shell route={route}>
-      {({ loop, replay, status, statusError, refresh }) => {
+      {({ loop, replay, status, statusError, health, refresh }) => {
         switch (route.kind) {
           case "home":
             return <Placeholder title="Home" />;

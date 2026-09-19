@@ -8,11 +8,9 @@ import type {
   CycleRecord,
   FailureKind,
   Health,
-  LoopState,
   Patch,
   PatchKind,
   Phase,
-  ReplayInfo,
   ScenarioKind,
   Status,
   ToolPolicy,
@@ -1138,29 +1136,4 @@ export function emptyStateFor(kind: "agents" | "runs", health: Health | null): E
         title: "No runs yet",
         body: "Start one against the demo agent, or connect your own support agent first.",
       };
-}
-
-// --- Shell status pill ------------------------------------------------------------------------------
-
-export interface ShellPill {
-  label: string;
-  /** Only a real run earns the live dot; a replay is a recording and gets no signal colour. */
-  live: boolean;
-}
-
-/**
- * The one line the shell says about the current run, or null to draw nothing. A live loop outranks a
- * replay (the API stops a replay when a loop appears, so both cannot be true for long). The cycle
- * number comes from /api/status and is omitted while the loop is still measuring its baseline.
- */
-export function shellPill(loop: LoopState | null, replay: ReplayInfo | null, status: Status | null): ShellPill | null {
-  if (loop?.running) {
-    const cycle = status && status.phase !== "idle" && !status.replay ? status.cycle : undefined;
-    return { label: cycle ? `running · cycle ${cycle}` : "running", live: true };
-  }
-  if (replay?.active) {
-    // An ended tape also reports `paused: true`; say which it is.
-    return { label: replay.ended ? "replay ended" : replay.paused ? "replay paused" : "replaying", live: false };
-  }
-  return null;
 }
