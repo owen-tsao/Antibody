@@ -44,10 +44,6 @@ scrolling, focus returns) — the same hook the settings drawer uses.
 `/api/loop` and `/api/replay` have never answered. Content fades 120 ms on route change (off under reduced
 motion); nothing slides. Page titles keep the serif `display` class at 48 px; everything else is Inter.
 
-Nothing plays off-screen: whenever the route is anything but `/app/runs/live` (a shell link, browser Back,
-or a deep link arriving with a tape still playing), `App` asks `/api/replay` and pauses a replay that is
-`active && !paused`. One mechanism, decided on the fresh answer, so a tape that was just stopped is left alone.
-
 ## Run page
 
 `/app/runs/:id` is one component, `pages/Run.tsx`, for every run the API lists: `live` (the un-archived
@@ -66,7 +62,8 @@ as asked and `/api/status` has no `source`. So "watch it back" — `POST /api/re
 recording: "golden" | "run:<id>"}` — flips the page's reads to `live` for the duration and back when the tape
 stops. Every answer is tagged with the source it was read from and the page keeps the last answer per source,
 so stopping shows the run's own rows immediately rather than the tape's last frame or a "loading…" flash.
-`/app/runs/:id/replay` arrives already watching (the Replays page's "watch"); stopping from that address
+`/app/runs/:id/replay` arrives already watching (the Replays page's "watch"); an ended tape of the same run is
+resumed, which restarts it from 0; a 409 shows the same note as the button. Stopping from that address
 rewrites it to `/app/runs/:id` so a refresh does not start the tape again. Leaving the run (any route that is
 not this run's page or one of its cycles) **stops** the replay — `App.tsx`, one effect keyed on the run on
 screen, asking `/api/replay` fresh and stopping a tape that is not that run's. A `/replay` arrival is exempt:
@@ -74,10 +71,11 @@ the page swaps tapes itself before starting its own. `live` has no tape (`POST /
 so the current run shows no "watch it back".
 
 **Roll back.** Finished history runs (never `live`, which the API answers 400; never while `loop.running`,
-when the loop owns the live config) list every version the run saved. The first click turns the action into
-`confirm roll back to v<n> · cancel`; the second sends `POST /api/rollback {run, version}` and shows the
-answer as one line: `<patch_note> → live is now v<k> · N tests are newer than this config`. Errors (409 while
-a loop runs or across targets) show the API's message in the same slot.
+when the loop owns the live config) offer one label with a link per saved version: `roll back to v0 · v1 · v2 ·
+v3`. A click turns the group into `confirm roll back to v<n> · cancel` (Escape cancels); the confirm sends
+`POST /api/rollback {run, version}` and shows the answer as one line: `<patch_note> → live is now v<k> · N tests
+are newer than this config`. The version just copied in leaves the list — live *is* that config now. Errors (409
+while a loop runs or across targets) show the API's message in the same slot.
 
 **Cycles.** `/app/runs/:id/cycles/:n` is `pages/Cycle.tsx` with `source` from the route (`readSource(id)`):
 `/api/cycles?source=…` and, through `ConfigDiff`, `/api/configs/{v}?source=…`, so a history run's cycle diffs
