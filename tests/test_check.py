@@ -33,6 +33,7 @@ class FakeRun:
 
 @pytest.fixture
 def runs(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
+    monkeypatch.setenv("ANTIBODY_NO_ZENDESK", "1")  # the mock world, whatever the shell has in it
     runs = tmp_path / "runs"
     monkeypatch.setattr(state, "RUNS_DIR", runs)
     monkeypatch.setattr(state, "CONFIGS_DIR", runs / "configs")
