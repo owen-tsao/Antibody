@@ -74,9 +74,16 @@ jobs:
         run: |
           set +e
           uv run python -m chaos.loop check --json > "$RUNNER_TEMP/check.json"
-          echo "status=$?" >> "$GITHUB_OUTPUT"
-          jq -r '.rows[] | "\(if .passed then "PASS" else "FAIL" end) \(.suite) \(.id)\(if .reason then " — " + .reason else "" end)"' "$RUNNER_TEMP/check.json"
-          jq -r '"regression \(.regression.passed)/\(.regression.total) · legit \(.legit.passed)/\(.legit.total) · config v\(.version)"' "$RUNNER_TEMP/check.json"
+          status=$?
+          echo "status=$status" >> "$GITHUB_OUTPUT"
+          # Exit 2 means nothing ran (no key, nothing captured under ANTIBODY_RUNS_DIR): the reason is in stderr
+          # above and check.json is empty, so there is nothing for jq to print.
+          if jq -e . "$RUNNER_TEMP/check.json" >/dev/null 2>&1; then
+            jq -r '.rows[] | "\(if .passed then "PASS" else "FAIL" end) \(.suite) \(.id)\(if .reason then " — " + .reason else "" end)"' "$RUNNER_TEMP/check.json"
+            jq -r '"regression \(.regression.passed)/\(.regression.total) · legit \(.legit.passed)/\(.legit.total) · config v\(.version)"' "$RUNNER_TEMP/check.json"
+          else
+            echo "check produced no result (exit $status)"
+          fi
 
       - name: Comment the summary on the PR
         if: always() && github.event_name == 'pull_request'

@@ -217,6 +217,9 @@ def test_ci_example_reads_only_fields_the_json_has(runs: Path, scripted) -> None
     assert "chaos.loop check --json" in run_step["run"]
     assert run_step["env"]["ANTIBODY_TARGET"].startswith("http://127.0.0.1:")
     assert "ANTIBODY_RUNS_DIR" in run_step["env"]
+    # Exit 2 leaves an empty check.json; the jq lines must be behind a validity check, not fed the empty file.
+    assert 'jq -e . "$RUNNER_TEMP/check.json"' in run_step["run"]
+    assert run_step["run"].index("jq -e .") < run_step["run"].index("jq -r '.rows[]")
 
     result = loop.run_check(V0_CONFIG, REGRESSION, LEGIT_SCENARIOS)
     row_keys = set(result["rows"][0])
