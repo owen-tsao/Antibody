@@ -219,23 +219,39 @@ def read_status() -> dict:
 WORLDS = ("mock", "zendesk")
 
 
-def _status_log_bounds(path: Path) -> tuple[str | None, str | None]:
-    """(`since` of the first row, `since` of the last row) of a phase log; None where there is no row."""
+class _LogBounds(NamedTuple):
+    first: str | None  # `since` of the first row
+    last: str | None  # `since` of the last row
+    duration_s: float | None  # largest `t_rel` seen: how long the recorded run took
+
+
+def _status_log_bounds(path: Path) -> _LogBounds:
+    """Start, end and length of a phase log; None fields where the log has no such row.
+
+    `duration_s` is what `api.replay` plays to (`Recording.duration_s`), read here without importing
+    replay so a runs-list row can say "7.5 min" without parsing the whole tape.
+    """
     if not path.exists():
-        return None, None
+        return _LogBounds(None, None, None)
     try:
         lines = path.read_text().splitlines()
     except OSError:
-        return None, None
-    stamps = []
+        return _LogBounds(None, None, None)
+    stamps: list[str] = []
+    t_rel: float | None = None
     for line in lines:
         try:
             row = json.loads(line)
         except ValueError:
             continue
-        if isinstance(row, dict) and isinstance(row.get("since"), str):
+        if not isinstance(row, dict):
+            continue
+        if isinstance(row.get("since"), str):
             stamps.append(row["since"])
-    return (stamps[0], stamps[-1]) if stamps else (None, None)
+        t = row.get("t_rel")
+        if isinstance(t, (int, float)) and not isinstance(t, bool):
+            t_rel = float(t) if t_rel is None else max(t_rel, float(t))
+    return _LogBounds(stamps[0] if stamps else None, stamps[-1] if stamps else None, t_rel)
 
 
 def _manifest_file(path: Path) -> dict | None:
@@ -258,9 +274,9 @@ def run_manifest(source: Source) -> dict | None:
 
     `run.json` contributes only `world`, `target`, `flags` (and `started_at` as a fallback): those are
     facts nobody but the loop process had. Everything countable — `cycles`, `accepted`, `rejected`,
-    `versions`, `final_version`, `started_at`, `finished_at` — is read from `cycles.jsonl`, `configs/`
-    and `status_log.jsonl` here, because the loop keeps appending to those long after any file written
-    at start could be current. Runs made before `run.json` existed get `world: "mock"`,
+    `versions`, `final_version`, `started_at`, `finished_at`, `recording`, `duration_s` — is read from
+    `cycles.jsonl`, `configs/` and `status_log.jsonl` here, because the loop keeps appending to those long
+    after any file written at start could be current. Runs made before `run.json` existed get `world: "mock"`,
     `target: "builtin"` and `synthesized: true` so the UI can say it is guessing. None when the source
     has none of its files at all.
     """
@@ -268,7 +284,7 @@ def run_manifest(source: Source) -> dict | None:
     stored = _manifest_file(paths.manifest)
     cycles = read_cycles(source)
     versions = config_versions(source)
-    first, last = _status_log_bounds(paths.status_log)
+    first, last, duration_s = _status_log_bounds(paths.status_log)
     if stored is None and not cycles and not versions and first is None:
         return None
     gated = [rec.gate for rec in cycles if rec.gate is not None]
@@ -293,6 +309,10 @@ def run_manifest(source: Source) -> dict | None:
         "final_version": final_version,
         "flags": stored["flags"] if stored else [],
         "synthesized": stored is None,
+        # What `api.replay.load_recording` needs: a phase log with timed rows and the cycles they land.
+        # A run whose loop died before its first phase row has files but is not a tape.
+        "recording": duration_s is not None and paths.cycles.exists(),
+        "duration_s": round(duration_s, 1) if duration_s is not None else None,
     }
 
 

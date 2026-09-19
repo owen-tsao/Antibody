@@ -289,13 +289,17 @@ def _golden_row() -> dict | None:
 
 
 def _live_row() -> dict | None:
-    """The run in runs/ as it stands now; `finished_at` is null while its loop is still alive."""
+    """The run in runs/ as it stands now; `finished_at` is null while its loop is still alive.
+
+    `recording` is always false here: `POST /api/replay/start` refuses `live` by design (the live run is
+    what a replay stands in for). The same files become a tape once the next run archives them under an id.
+    """
     row = store.run_manifest("live")
     if row is None:
         return None
     if loop_ctl.state()["running"]:
         row["finished_at"] = None
-    return {**row, "label": None, "current": True}
+    return {**row, "recording": False, "label": None, "current": True}
 
 
 def _with_agent(row: dict) -> dict:

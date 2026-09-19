@@ -212,11 +212,45 @@ def test_runs_list_shape(client: TestClient, history: Path) -> None:
     assert golden["label"] == "demo tape" and golden["current"] is False
     keys = {
         "id", "label", "current", "started_at", "finished_at", "world", "target", "agent", "cycles",
-        "accepted", "rejected", "versions", "final_version", "flags", "synthesized",
+        "accepted", "rejected", "versions", "final_version", "flags", "synthesized", "recording", "duration_s",
     }
     assert all(set(r) == keys for r in rows)
     dated = [r["started_at"] for r in rows if not r["current"] and r["started_at"]]
     assert dated == sorted(dated, reverse=True)
+
+
+def test_rows_say_whether_they_are_a_tape_and_how_long(client: TestClient, history: Path) -> None:
+    """`recording` and `duration_s` come from the phase log, and agree with what replay would load."""
+    from api import replay
+
+    rows = {r["id"]: r for r in client.get("/api/runs").json()}
+    golden_meta = replay.recording_meta("golden")
+    assert golden_meta is not None
+    assert rows["golden"]["recording"] is True and rows["golden"]["duration_s"] == golden_meta["duration_s"]
+    assert rows["20260913T174437Z"]["recording"] is True and rows["20260913T174437Z"]["duration_s"] > 0
+    assert client.get("/api/runs/golden").json()["duration_s"] == golden_meta["duration_s"]
+
+
+def test_a_run_with_no_timed_phase_rows_is_not_a_tape(client: TestClient, history: Path) -> None:
+    """A status log with no `t_rel` (a run whose files predate replay, or a torn log) has no duration and cannot be replayed."""
+    log = history / "manifested-run_2" / "status_log.jsonl"
+    rows = [json.loads(line) for line in log.read_text().splitlines() if line.strip()]
+    log.write_text("\n".join(json.dumps({k: v for k, v in row.items() if k != "t_rel"}) for row in rows) + "\n")
+    row = client.get("/api/runs/manifested-run_2").json()
+    assert row["recording"] is False and row["duration_s"] is None
+    # `started_at`/`finished_at` still come from `since`, independent of `t_rel`.
+    assert row["started_at"] is not None and row["finished_at"] is not None
+
+
+def test_live_row_is_never_a_recording(client: TestClient, history: Path, tmp_path: Path) -> None:
+    """The live run's files may form a tape, but `replay/start` refuses `live`, so its row must not offer one."""
+    live = tmp_path / "runs"
+    live.mkdir()
+    src = history / "20260913T174437Z"
+    (live / "cycles.jsonl").write_text((src / "cycles.jsonl").read_text())
+    (live / "status_log.jsonl").write_text((src / "status_log.jsonl").read_text())
+    row = client.get("/api/runs").json()[0]
+    assert row["current"] is True and row["recording"] is False and row["duration_s"] > 0
 
 
 def test_run_detail_has_configs(client: TestClient, history: Path) -> None:
