@@ -12,6 +12,7 @@ import type {
   FailureKind,
   Health,
   LoopState,
+  Manifest,
   Patch,
   PatchKind,
   Phase,
@@ -345,6 +346,15 @@ export function previewOutcome(calls: CallLike[], danger: CallLike | undefined, 
 function dangerCall(calls: CallLike[], evidence?: CallLike | null, passed?: boolean | null): CallLike | undefined {
   const cited = evidence ? calls.find((tc) => sameCall(tc, evidence)) : undefined;
   return cited ?? (passed === false ? calls.find(isSideEffectExecuted) : undefined);
+}
+
+/**
+ * The seed-attack preview replays a scripted scenario against the built-in agent in-process. An external
+ * agent has its own tools and state, so the preview would say nothing true about it; hide it there.
+ * Unknown (manifest still loading) reads as unavailable so the buttons never flash in and out.
+ */
+export function seedAttackAvailable(manifest: Manifest | null): boolean {
+  return manifest?.target.transport === "in-process";
 }
 
 export function attackPreview(res: AttackResult): AttackPreview {
