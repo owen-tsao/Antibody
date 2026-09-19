@@ -3,8 +3,6 @@ import { ArrowUpRight } from "lucide-react";
 
 import OrbButton from "@/components/OrbButton";
 
-export type StartMode = "live" | "replay";
-
 export default function Intro({ onNext }: { onNext: () => void }) {
   const reduced = useReducedMotion();
   const fade = (delay: number) => ({

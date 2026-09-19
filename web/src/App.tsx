@@ -1,27 +1,21 @@
 import { useEffect, useState } from "react";
 
-import { api, ApiError, type LoopState, type ReplayInfo } from "@/api";
+import { api } from "@/api";
 import ErrorBoundary from "@/components/ErrorBoundary";
 import Shell from "@/components/Shell";
 import SplashBackdrop from "@/components/ui/splash-backdrop";
 import { HOME, LIVE_RUN, linkProps, navigate, type Route, useRoute } from "@/lib/routes";
-import { loadSettings, saveSettings, toStartBody, type RunSettings } from "@/lib/settings";
-import Intro, { type StartMode } from "@/pages/Intro";
-import Heal from "@/pages/Heal";
+import { loadSettings, saveSettings, type RunSettings } from "@/lib/settings";
+import Intro from "@/pages/Intro";
 import Home from "@/pages/Home";
 import AgentsList from "@/pages/Agents";
 import Onboarding from "@/pages/Onboarding";
+import Runs from "@/pages/Runs";
+import Replays from "@/pages/Replays";
+import Settings from "@/pages/Settings";
 import RunLive from "@/pages/RunLive";
 import Results from "@/pages/Results";
 import Cycle from "@/pages/Cycle";
-
-// Replay is the demo fallback for a slow live loop, so it must not be equally slow: at 1× the
-// recording's 47 s gates look frozen. 3× plays the 7-cycle golden run in ~5.5 min with a visible
-// phase change every few seconds. The header labels the speed so nothing is passed off as real time.
-const REPLAY_SPEED = 3;
-
-// Shown on the live run when Replay was pressed while a real run owns the screen (the API returns 409).
-const REPLAY_BUSY_NOTE = "a live run is in progress · showing it instead";
 
 /**
  * `/` is the landing page: the gradient and liquid metal live only here, and unmount before the run
@@ -29,8 +23,8 @@ const REPLAY_BUSY_NOTE = "a live run is in progress · showing it instead";
  */
 export default function App() {
   const route = useRoute();
-  // The shape of the next run, edited in the settings drawer and the wizard's First run step. Read from
-  // localStorage once; written on every change (not on mount) so an untouched browser keeps no key.
+  // The shape of the next run, edited in the start dialog, the Settings page and the wizard's First run
+  // step. Read from localStorage once; written on every change (not on mount) so an untouched browser keeps no key.
   const [settings, setSettings] = useState<RunSettings>(loadSettings);
   const changeSettings = (next: RunSettings) => {
     setSettings(next);
@@ -54,17 +48,14 @@ export default function App() {
 }
 
 /**
- * The pages under /app. Today's screens keep working at their new addresses until Block 4 replaces
- * them: `runs` is the old Heal screen, `run` is the old Cycles view while something is playing and
- * the old Results view once it is done, `cycle` is the cycle page. State that must outlive one page
- * (why a start failed) lives here, above the shell's per-route fade.
+ * The pages under /app. `run` is the old Cycles view while something is playing and the old Results view
+ * once it is done, `cycle` is the cycle page — both being rewritten by lane 4B (docs/plans/00-overview.md
+ * Block 4.6); everything else is the shell's pages.
  */
 function AppPages({ route, settings, onSettingsChange }: { route: Route; settings: RunSettings; onSettingsChange: (next: RunSettings) => void }) {
-  const [startError, setStartError] = useState<string | null>(null);
-  const [busy, setBusy] = useState(false);
-  // Set when Replay could not start because a live loop is running; the run page shows the live run
-  // with this note instead of a "replay · recorded" label that would be false.
-  const [replayNote, setReplayNote] = useState<string | null>(null);
+  // The "a live run is in progress · showing it instead" note left with the Heal page; the run branch below
+  // still names the prop until lane 4B's rewrite of that branch lands, so it reads null here meanwhile.
+  const replayNote = null;
 
   // Nothing plays off-screen: whenever the screen is not the live run — a shell link, browser Back, or
   // a deep link arriving with a tape still playing — a playing replay is frozen where it is, so the
@@ -79,87 +70,24 @@ function AppPages({ route, settings, onSettingsChange }: { route: Route; setting
       .catch(() => undefined);
   }, [onLiveRun]);
 
-  const start = async (mode: StartMode, loop: LoopState | null, replay: ReplayInfo | null, refresh: () => void) => {
-    setReplayNote(null);
-    setStartError(null);
-    if (mode === "replay") {
-      // Paused by leaving the run page: continue from where it stopped. If the session vanished
-      // meanwhile (404), the run page simply shows whatever the API serves now.
-      if (replay?.active) {
-        await api.replayResume().catch(() => undefined);
-        navigate(LIVE_RUN);
-        return;
-      }
-      setBusy(true);
-      try {
-        await api.replayStart(REPLAY_SPEED);
-        navigate(LIVE_RUN);
-      } catch (e) {
-        if (e instanceof ApiError && e.status === 409) {
-          // Either a live loop owns the screen (say so) or a replay is already playing (just watch it).
-          const live = await api.loop().catch(() => null);
-          setReplayNote(live?.running ? REPLAY_BUSY_NOTE : null);
-          navigate(LIVE_RUN);
-        } else {
-          setStartError(e instanceof Error ? e.message : String(e));
-        }
-      } finally {
-        setBusy(false);
-        refresh();
-      }
-      return;
-    }
-    if (loop?.running) {
-      navigate(LIVE_RUN);
-      return;
-    }
-    setBusy(true);
-    try {
-      // Heal always means a real run. The API also discards a (paused) replay on start; doing it here
-      // first keeps the UI honest if the start then fails (no "Resume replay" over a run that never began).
-      if (replay?.active) await api.replayStop().catch(() => undefined);
-      await api.loopStart(toStartBody(settings));
-      navigate(LIVE_RUN);
-    } catch (e) {
-      // 409 = a loop is already running (possibly one the API did not spawn); watching it is the
-      // right outcome, so it is not an error here.
-      if (e instanceof ApiError && e.status === 409) navigate(LIVE_RUN);
-      else setStartError(e instanceof Error ? e.message : String(e));
-    } finally {
-      setBusy(false);
-      refresh();
-    }
-  };
-
   return (
     <Shell route={route}>
       {({ loop, replay, status, statusError, health, refresh }) => {
         switch (route.kind) {
           case "home":
-            return <Home loop={loop} />;
+            return <Home loop={loop} health={health} refresh={refresh} settings={settings} onSettingsChange={onSettingsChange} />;
           case "onboarding":
           case "landing":
             // Rendered above the shell by App; never reached here.
             return null;
           case "replays":
-            return <Placeholder title="Replays" body="Watch a past run back. This page arrives in a later step." />;
+            return <Replays />;
           case "settings":
-            return <Placeholder title="Settings" body="Run defaults and model names. This page arrives in a later step." />;
+            return <Settings settings={settings} onSettingsChange={onSettingsChange} health={health} />;
           case "agents":
             return <AgentsList health={health} />;
           case "runs":
-            return (
-              <Heal
-                onStart={(mode) => void start(mode, loop, replay, refresh)}
-                onStopReplay={() => api.replayStop().catch(() => undefined).finally(refresh)}
-                settings={settings}
-                onSettingsChange={onSettingsChange}
-                loopRunning={loop?.running ?? false}
-                replay={replay}
-                error={startError}
-                busy={busy}
-              />
-            );
+            return <Runs loop={loop} health={health} refresh={refresh} settings={settings} onSettingsChange={onSettingsChange} />;
           case "run":
             if (route.id !== "live") return <HistoryRunPlaceholder id={route.id} />;
             // While something is playing the run is the four agents at work; once it is over, the proof.
@@ -183,13 +111,12 @@ function AppPages({ route, settings, onSettingsChange }: { route: Route; setting
   );
 }
 
-/** A titled page with one quiet line: the shape every page under the shell shares, used where a page is not built yet. */
-function Placeholder({ title, body, children }: { title: string; body?: string; children?: React.ReactNode }) {
+/** A titled page with quiet lines beneath: the shape every page under the shell shares, used where a page is not built yet. */
+function Placeholder({ title, children }: { title: string; children?: React.ReactNode }) {
   return (
     <main className="px-6 pb-16 pt-8 md:px-10 md:pt-7">
       <div className="mx-auto w-full max-w-[1040px]">
         <h1 className="display text-[48px] leading-[1]">{title}</h1>
-        {body && <p className="mt-4 max-w-[56ch] text-[13px] leading-[1.6] text-[var(--muted)]">{body}</p>}
         {children}
       </div>
     </main>
