@@ -4,12 +4,12 @@ import { api, ApiError, type LoopState, type ReplayInfo } from "@/api";
 import ErrorBoundary from "@/components/ErrorBoundary";
 import Shell from "@/components/Shell";
 import SplashBackdrop from "@/components/ui/splash-backdrop";
-import { emptyStateFor } from "@/lib/derive";
-import { HOME, LIVE_RUN, linkProps, navigate, onboarding, type Route, useRoute } from "@/lib/routes";
+import { HOME, LIVE_RUN, linkProps, navigate, type Route, useRoute } from "@/lib/routes";
 import { loadSettings, saveSettings, toStartBody, type RunSettings } from "@/lib/settings";
 import Intro, { type StartMode } from "@/pages/Intro";
 import Heal from "@/pages/Heal";
-import Agents from "@/pages/Agents";
+import AgentsList from "@/pages/Agents";
+import RunLive from "@/pages/RunLive";
 import Results from "@/pages/Results";
 import Cycle from "@/pages/Cycle";
 
@@ -137,22 +137,8 @@ function AppPages({ route }: { route: Route }) {
             return <Placeholder title="Replays" body="Watch a past run back. This page arrives in a later step." />;
           case "settings":
             return <Placeholder title="Settings" body="Run defaults and model names. This page arrives in a later step." />;
-          case "agents": {
-            const empty = emptyStateFor(route.kind, health);
-            return (
-              <main className="px-6 pb-16 pt-8 md:px-10 md:pt-7">
-                <div className="mx-auto w-full max-w-[1040px]">
-                  <h1 className="display text-[48px] leading-[1]">{empty.title}</h1>
-                  <p className="mt-4 max-w-[56ch] text-[13px] leading-[1.6] text-[var(--muted)]">{empty.body}</p>
-                  <p className="mt-6 text-[13px]">
-                    <a {...linkProps(onboarding(1))} className="group rounded text-[var(--muted)] transition-colors hover:text-[var(--fg)]">
-                      <span className="u-line">connect an agent</span>
-                    </a>
-                  </p>
-                </div>
-              </main>
-            );
-          }
+          case "agents":
+            return <AgentsList health={health} />;
           case "runs":
             return (
               <Heal
@@ -170,7 +156,7 @@ function AppPages({ route }: { route: Route }) {
             if (route.id !== "live") return <HistoryRunPlaceholder id={route.id} />;
             // While something is playing the run is the four agents at work; once it is over, the proof.
             return loop?.running || replay?.active ? (
-              <Agents replayNote={replayNote} loop={loop} status={status} statusError={statusError} refresh={refresh} />
+              <RunLive replayNote={replayNote} loop={loop} status={status} statusError={statusError} refresh={refresh} />
             ) : (
               <Results onCycle={(n) => navigate({ kind: "cycle", id: "live", n })} />
             );

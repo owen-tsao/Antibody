@@ -2,17 +2,24 @@
 // Rules are the ones in docs/FRONTEND.md §2 "Derived in the frontend, never stored".
 
 import type {
+  Agent as AgentRow,
   AgentConfig,
+  AgentPing,
+  AgentTool,
   AttackResult,
   AttackToolCall,
   CycleRecord,
   FailureKind,
   Health,
+  LoopState,
   Patch,
   PatchKind,
   Phase,
+  PingResult,
+  RunRow,
   ScenarioKind,
   Status,
+  ToolMapping,
   ToolPolicy,
 } from "@/api";
 import type { Subtask, Task } from "@/components/ui/agent-plan";
@@ -512,7 +519,7 @@ export function targetDanger(status: Status | null): boolean {
   );
 }
 
-/** The idle/done orb colours (the component's grey preset). Active hues live in Agents.tsx ORB_COLORS. */
+/** The idle/done orb colours (the component's grey preset). Active hues live in RunLive.tsx ORB_COLORS. */
 export const ORB_GREY: [string, string] = ["#E5E7EB", "#9CA3AF"];
 
 /** Headline text after the dot: running → `cycle 2 · judge is scoring`; idle → `v3 · 4 tests · legit 3/3 · idle`. */
@@ -1117,16 +1124,12 @@ export interface EmptyState {
 /**
  * What a list says when it has nothing to show, by page and by whether the API can run live. Copy speaks
  * support ("your support agent", "the demo agent"), never "target". `health` null means unknown: the
- * page has not heard from /api/health yet, so the copy does not mention the key either way.
+ * page has not heard from /api/health yet, so the copy does not mention the key either way. The agents
+ * page always has its two built-in rows, so its empty state is one line in the page, not an entry here.
  */
-export function emptyStateFor(kind: "agents" | "runs", health: Health | null): EmptyState {
+export function emptyStateFor(kind: "runs", health: Health | null): EmptyState {
   const noKey = health !== null && !health.has_api_key;
-  if (kind === "agents") {
-    return {
-      title: "Connect your support agent",
-      body: "Antibody deploys it into a sandbox storefront — fake customers, orders, refunds, tickets — and attacks it there. Until then, the demo agent is ready to run.",
-    };
-  }
+  void kind;
   return noKey
     ? {
         title: "No runs yet",
@@ -1136,4 +1139,99 @@ export function emptyStateFor(kind: "agents" | "runs", health: Health | null): E
         title: "No runs yet",
         body: "Start one against the demo agent, or connect your own support agent first.",
       };
+}
+
+// --- Agents (docs/plans/00-overview.md Block 3) ------------------------------------------------------
+
+/** `just now` / `4 min ago` / `3 h ago` / `2 d ago`, for a ping's `at`. */
+export function fmtAgo(iso: string, now = Date.now()): string {
+  const s = Math.max(0, Math.round((now - new Date(iso).getTime()) / 1000));
+  if (s < 45) return "just now";
+  const m = Math.round(s / 60);
+  if (m < 60) return `${m} min ago`;
+  const h = Math.round(m / 60);
+  if (h < 24) return `${h} h ago`;
+  return `${Math.round(h / 24)} d ago`;
+}
+
+/** `1.2 s` / `340 ms`. */
+export function fmtLatency(ms: number): string {
+  return ms >= 1000 ? `${(ms / 1000).toFixed(1)} s` : `${ms} ms`;
+}
+
+/**
+ * The last-ping cell: `ok · 1.2 s · 2 min ago`, `failed · 2 min ago`, or `—` when the row has never been
+ * pinged (synthetic rows never store one, so they read `—` until pinged in this session).
+ */
+export function pingLabel(ping: AgentPing | null, now = Date.now()): string {
+  if (!ping) return "—";
+  return ping.ok ? `ok · ${fmtLatency(ping.latency_ms)} · ${fmtAgo(ping.at, now)}` : `failed · ${fmtAgo(ping.at, now)}`;
+}
+
+/** A ping result as a one-line sentence: `ok · 1.2 s · “Hi, I'm…”` or the API's exact error. */
+export function pingResultLine(r: PingResult): string {
+  if (!r.ok) return r.error;
+  const quote = r.reply_preview ? ` · “${r.reply_preview.length > 80 ? `${r.reply_preview.slice(0, 80).trimEnd()}…` : r.reply_preview}”` : "";
+  return `ok · ${fmtLatency(r.latency_ms)}${quote}`;
+}
+
+/**
+ * Which of an agent's listed tools the sandbox storefront serves — the client-side twin of
+ * `api.agents.tool_mapping`, for stored rows (which carry `tools` but not `mapping`). Null when the
+ * agent lists no tools, or when the storefront's names are not known yet.
+ */
+export function toolMapping(tools: AgentTool[] | null, storefront: string[] | null): ToolMapping | null {
+  if (!tools || !storefront) return null;
+  const known = new Set(storefront);
+  const names = tools.map((t) => t.name);
+  return { known: names.filter((n) => known.has(n)), unknown: names.filter((n) => !known.has(n)) };
+}
+
+/** The tools column: `5/7` (mapped of listed), or `—` when the agent has not listed its tools. */
+export function toolsMappedLabel(m: ToolMapping | null): string {
+  if (!m) return "—";
+  return `${m.known.length}/${m.known.length + m.unknown.length}`;
+}
+
+/**
+ * The Tools step's sentence. `5 of 7 tools map to the sandbox storefront; send_sms, apply_coupon will be
+ * unavailable during attacks`; `all 5 tools map to the sandbox storefront`; or, when the agent did not list
+ * its tools, a line saying so (the loop still serves every storefront tool; Antibody just cannot check).
+ */
+export function mappingLine(m: ToolMapping | null): string {
+  if (!m) return "This agent does not list its tools, so Antibody cannot check them against the sandbox storefront. Every storefront tool is served during attacks regardless.";
+  const total = m.known.length + m.unknown.length;
+  if (total === 0) return "This agent lists no tools. Every storefront tool is served during attacks regardless.";
+  if (m.unknown.length === 0) return `All ${total} ${total === 1 ? "tool maps" : "tools map"} to the sandbox storefront.`;
+  return `${m.known.length} of ${total} tools map to the sandbox storefront; ${m.unknown.join(", ")} will be unavailable during attacks.`;
+}
+
+/** Runs per agent id from the runs list. The demo tape is a recording, not a run someone started, so it is left out. */
+export function runsByAgent(runs: RunRow[]): Map<string, number> {
+  const out = new Map<string, number>();
+  for (const r of runs) {
+    if (r.id === "golden" || !r.agent) continue;
+    out.set(r.agent.id, (out.get(r.agent.id) ?? 0) + 1);
+  }
+  return out;
+}
+
+export type ExampleState = "running" | "starting" | "stopped";
+
+/** The example agent's state word from its probed row. */
+export function exampleState(a: Pick<AgentRow, "running" | "starting">): ExampleState {
+  if (a.running) return "running";
+  if (a.starting) return "starting";
+  return "stopped";
+}
+
+/**
+ * The first-run rule: nothing connected beyond the synthetic rows, no history beyond the demo tape, and no
+ * run in flight → Home sends the person to onboarding. Any input still loading (null) means "not yet known".
+ */
+export function isFirstRun(agents: AgentRow[] | null, runs: RunRow[] | null, loop: LoopState | null): boolean | null {
+  if (!agents || !runs || !loop) return null;
+  if (loop.running) return false;
+  if (agents.some((a) => !a.synthetic)) return false;
+  return runs.every((r) => r.id === "golden");
 }
