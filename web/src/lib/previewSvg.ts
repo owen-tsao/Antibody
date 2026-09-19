@@ -13,7 +13,7 @@ export const CHART_W = 300;
 export const CHART_H = 260;
 const PAD = { l: 14, r: 36, t: 52, b: 82 };
 
-export interface ChartSize {
+interface ChartSize {
   w: number;
   h: number;
 }
@@ -148,10 +148,6 @@ export function cycleChartSvg(
   <g class="chart-text"><text x="${PAD.l}" y="${y(0) + 46}" ${NUM} font-size="10.5" fill="${FG}">${esc(footer)}</text>
   ${legend}</g>
 </svg>`;
-}
-
-export function cyclePreviewSvg(cycle: CycleRecord, all: CycleRecord[]): string {
-  return `data:image/svg+xml;utf8,${encodeURIComponent(cycleChartSvg(cycle, all))}`;
 }
 
 /**

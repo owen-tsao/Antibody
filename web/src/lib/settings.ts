@@ -41,14 +41,14 @@ export const DEFAULT_SETTINGS: RunSettings = {
   target: null,
 };
 
-export const SETTINGS_KEY = "antibody.settings.v1";
+const SETTINGS_KEY = "antibody.settings.v1";
 
 // The one constant behind "about N minutes". Calibrated on the golden run recorded 2026-09-13: six cycles in
 // 452 s of `data/golden/status_log.jsonl` (`t_rel` of its last row) → 75 s per cycle. Runs now default to
 // three seeds and gate against an 11-row legit suite, so real cycles run somewhat longer; repair attempts
 // and the second pass only cost time when attacks land and are not in the estimate either. It is a floor,
 // and says so with "about".
-export const MINUTES_PER_CYCLE = 1.25;
+const MINUTES_PER_CYCLE = 1.25;
 
 function clampInt(v: unknown, min: number, max: number, fallback: number): number {
   if (typeof v !== "number" || !Number.isInteger(v)) return fallback;
@@ -56,7 +56,7 @@ function clampInt(v: unknown, min: number, max: number, fallback: number): numbe
 }
 
 /** Coerce anything (a parsed localStorage value, an old schema) into a valid RunSettings. Unknown keys are dropped. */
-export function normalizeSettings(raw: unknown): RunSettings {
+function normalizeSettings(raw: unknown): RunSettings {
   if (!raw || typeof raw !== "object") return { ...DEFAULT_SETTINGS };
   const r = raw as Record<string, unknown>;
   const chaosCycles = clampInt(r.chaosCycles, CHAOS_CYCLES.min, CHAOS_CYCLES.max, DEFAULT_SETTINGS.chaosCycles);
@@ -121,7 +121,7 @@ export function toStartBody(s: RunSettings): LoopStartBody {
  * count just runs them all) plus chaos cycles. 0 means A1 answers 400 "nothing to run". With `untilQuiet`
  * set this is a ceiling, not a plan.
  */
-export function plannedCycles(s: RunSettings, seedCount: number | null): number {
+function plannedCycles(s: RunSettings, seedCount: number | null): number {
   const available = seedCount ?? SEEDS.max;
   const seeds = s.seeds === null ? available : Math.min(s.seeds, available);
   return seeds + s.chaosCycles;

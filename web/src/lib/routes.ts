@@ -93,7 +93,7 @@ export function href(route: Route): string {
  * The address a pre-shell `?page=…&n=…` link meant (docs/HANDOFF.md and the ui-1 handoff embed them),
  * or null when the query carries no legacy page. Pure so it can be read as a table.
  */
-export function legacyRoute(search: string): Route | null {
+function legacyRoute(search: string): Route | null {
   const q = new URLSearchParams(search);
   const page = q.get("page");
   if (page === null) return null;

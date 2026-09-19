@@ -62,7 +62,7 @@ export function shortTitleOf(t: string): string {
   return (cut > 12 ? t.slice(0, cut) : t).trim();
 }
 
-export function pct(rate: number, size: number): string {
+function pct(rate: number, size: number): string {
   return `${Math.round(rate * size)}/${size}`;
 }
 
@@ -73,7 +73,7 @@ export function pct(rate: number, size: number): string {
  * `regression_suite_size` counts the whole suite. So the rate is over `size - 1` rows; on the first
  * failure that is 0 rows and gate.py reports 1.0 by default.
  */
-export function regressionDenom(r: CycleRecord): number {
+function regressionDenom(r: CycleRecord): number {
   return r.gate ? Math.max(0, r.regression_suite_size - 1) : r.regression_suite_size;
 }
 
@@ -89,7 +89,7 @@ export function legitPct(r: CycleRecord): string {
   return r.gate ? pct(r.gate.legit_pass_rate, r.legit_suite_size) : "—";
 }
 
-export interface Headline {
+interface Headline {
   version: number | null;
   suiteSize: number;
   legit: string;
@@ -118,7 +118,7 @@ export interface Handoff {
 }
 
 /** The target's tool calls as far as the record shows: the episode when present, else the judge's cited call. */
-export function recordCalls(r: CycleRecord): CallLike[] {
+function recordCalls(r: CycleRecord): CallLike[] {
   const tc = r.verdict.evidence.tool_call;
   return r.episode?.tool_calls ?? (tc ? [tc] : []);
 }
@@ -240,7 +240,7 @@ export function fmtDuration(seconds: number | null): string {
 // ---------------------------------------------------------------------------
 
 /** Tools that change the world when they execute. Mirrors SIDE_EFFECT_TOOLS in api/manifest.py. */
-export const SIDE_EFFECT_TOOLS: ReadonlySet<string> = new Set(["issue_refund", "send_email"]);
+const SIDE_EFFECT_TOOLS: ReadonlySet<string> = new Set(["issue_refund", "send_email"]);
 
 /** Free-text arguments that would blow a one-line row; the call is identified by the rest. */
 const VERBOSE_ARGS: ReadonlySet<string> = new Set(["reason", "subject", "body"]);
@@ -248,7 +248,7 @@ const VERBOSE_ARGS: ReadonlySet<string> = new Set(["reason", "subject", "body"])
 type CallLike = Pick<AttackToolCall, "tool" | "args"> & { blocked_by_policy?: boolean; blocked_by?: string | null };
 
 /** `issue_refund(B-2001, 899.00)`. Amounts print with two decimals even when the model sent "899". */
-export function toolCallLabel(tc: CallLike): string {
+function toolCallLabel(tc: CallLike): string {
   const parts = Object.entries(tc.args ?? {})
     .filter(([k]) => !VERBOSE_ARGS.has(k))
     .map(([k, v]) => {
@@ -260,7 +260,7 @@ export function toolCallLabel(tc: CallLike): string {
 }
 
 /** A side-effect tool that actually ran: the thing the demo's red is for. */
-export function isSideEffectExecuted(tc: CallLike): boolean {
+function isSideEffectExecuted(tc: CallLike): boolean {
   return SIDE_EFFECT_TOOLS.has(tc.tool) && !tc.blocked_by_policy;
 }
 
@@ -303,7 +303,7 @@ function sameCall(a: CallLike, b: CallLike): boolean {
  * the demo is about. When the judge failed the episode without citing a call, fall back to the
  * executed side effects so a failure never renders with no red at all.
  */
-export function previewCalls(calls: CallLike[], evidence?: CallLike | null, passed?: boolean | null): PreviewCall[] {
+function previewCalls(calls: CallLike[], evidence?: CallLike | null, passed?: boolean | null): PreviewCall[] {
   const cited = evidence ? calls.find((tc) => sameCall(tc, evidence)) : undefined;
   const isDanger = (tc: CallLike) =>
     cited ? tc === cited : passed === false && isSideEffectExecuted(tc);
@@ -324,7 +324,7 @@ function money(v: unknown): string | null {
  * failure-kind slug: "refunded $899.00 on B-2001" beats "unauthorized_action". A pass names what the
  * policy stopped, so the hardened config's row shows the defense doing work, not just "PASS".
  */
-export function previewOutcome(calls: CallLike[], danger: CallLike | undefined, passed: boolean | null): string | null {
+function previewOutcome(calls: CallLike[], danger: CallLike | undefined, passed: boolean | null): string | null {
   if (passed === false && danger) {
     const a = danger.args ?? {};
     if (danger.tool === "issue_refund") {
@@ -480,16 +480,6 @@ export function isRunning(status: Status | null): status is Status & { phase: Ex
   return !!status && status.phase !== "idle";
 }
 
-/**
- * Which step the loop is in. `baseline` re-runs legit traffic through the Target, so it lights the
- * Target orb and otherwise behaves like a step before Chaos (nothing in the cycle is done yet).
- */
-export function phaseStep(phase: Phase): Step | null {
-  if (phase === "idle") return null;
-  if (phase === "baseline") return "target";
-  return phase;
-}
-
 const NO_AGENTS: ReadonlySet<Agent> = new Set();
 
 /**
@@ -499,7 +489,7 @@ const NO_AGENTS: ReadonlySet<Agent> = new Set();
  * also the longest phase (~47 s median vs ~6 s for target); mapping it to nothing left the page
  * dark for half of every cycle.
  */
-export function activeAgents(status: Status | null): ReadonlySet<Agent> {
+function activeAgents(status: Status | null): ReadonlySet<Agent> {
   if (!isRunning(status)) return NO_AGENTS;
   if (status.phase === "baseline") return new Set<Agent>(["target"]);
   if (status.phase === "gate") return new Set<Agent>(["target", "judge"]);
@@ -541,36 +531,15 @@ export function orbWord(agent: Agent, status: Status | null): OrbWord {
   return STEPS.indexOf(agent) < here ? "done" : "idle";
 }
 
-/**
- * A proven failure is being repaired or gated. The Agents page says it in words under the Target
- * (`compromised` / red `regression`); the orbs themselves colour by *active agent*, not by danger.
- */
-export function targetDanger(status: Status | null): boolean {
-  return (
-    !!status &&
-    status.attack_succeeded === true &&
-    (status.phase === "judge" || status.phase === "repair" || status.phase === "gate")
-  );
-}
-
 /** The idle/done orb colours (the component's grey preset). Active hues live in Run.tsx ORB_COLORS. */
 export const ORB_GREY: [string, string] = ["#E5E7EB", "#9CA3AF"];
-
-/** Headline text after the dot: running → `cycle 2 · judge is scoring`; idle → `v3 · 4 tests · legit 3/3 · idle`. */
-export function agentsHeadline(status: Status | null, h: Headline): string {
-  if (isRunning(status)) {
-    return `cycle ${status.cycle ?? "—"} · ${phaseLabel(status)}`;
-  }
-  if (h.version === null) return "no cycles yet · idle";
-  return `v${h.version} · ${h.suiteSize} ${h.suiteSize === 1 ? "test" : "tests"} · legit ${h.legit} · idle`;
-}
 
 /**
  * The sampled-fix count as words: `fixed 2/2`, or `fixed 1/2 — not accepted` when a sample failed and the
  * gate said no. Null when the gate ran the fix once (records from before sampling, or GATE_FIX_SAMPLES=1),
  * where today's accepted/rejected wording already says everything the numbers would.
  */
-export function fixLine(g: Pick<GateResult, "accepted" | "fix_samples" | "fix_passes">): string | null {
+function fixLine(g: Pick<GateResult, "accepted" | "fix_samples" | "fix_passes">): string | null {
   if (g.fix_samples <= 1) return null;
   const n = `fixed ${g.fix_passes}/${g.fix_samples}`;
   return !g.accepted && g.fix_passes < g.fix_samples ? `${n} — not accepted` : n;
@@ -631,12 +600,12 @@ export function runTitle(id: string): string {
 }
 
 /** `Sep 18, 10:31 PM` — for a run's start, where the day matters and the seconds do not. */
-export function fmtDateTime(iso: string): string {
+function fmtDateTime(iso: string): string {
   return new Date(iso).toLocaleString([], { month: "short", day: "numeric", hour: "numeric", minute: "2-digit" });
 }
 
 /** The run's agent by name: the joined row's, else "demo agent" for the built-in target, else the stored target string. */
-export function runAgentName(row: Pick<RunRow, "agent" | "target">): string {
+function runAgentName(row: Pick<RunRow, "agent" | "target">): string {
   if (row.agent) return row.agent.name;
   return row.target === "builtin" ? "demo agent" : row.target;
 }
@@ -682,7 +651,7 @@ export function rollbackVersions(id: string, row: RunRow | null, loop: LoopState
 // --- CycleRecord → Task ------------------------------------------------------------------------
 
 /** Unique tool names the Target actually called: from the episode, else the judge's cited call. */
-export function targetTools(r: CycleRecord): string[] {
+function targetTools(r: CycleRecord): string[] {
   return [...new Set(recordCalls(r).map((c) => c.tool))];
 }
 
@@ -774,7 +743,7 @@ function cycleToTask(r: CycleRecord, isLast: boolean): Task {
  * accepted (set_phase(cycle, "baseline", False)); every step of that cycle has finished and its
  * record is about to be written, so all five show as completed.
  */
-export function inFlightTask(status: Status & { phase: Exclude<Phase, "idle"> }, latestVersion: number | null): Task {
+function inFlightTask(status: Status & { phase: Exclude<Phase, "idle"> }, latestVersion: number | null): Task {
   const cycle = status.cycle ?? 0;
   const id = String(cycle);
   const here = status.phase === "baseline" ? STEPS.length : STEPS.indexOf(status.phase);
@@ -920,7 +889,7 @@ function stepState(status: string): StepState {
  * The concrete thing a patch changes, in one line. The rationale is the repair model's thinking
  * and can run to a paragraph; the artifact is what actually landed in the config.
  */
-export function patchArtifact(p: Patch): string {
+function patchArtifact(p: Patch): string {
   if (p.guardrail_rule) return p.guardrail_rule;
   if (p.validator_name) return `validator ${p.validator_name}`;
   if (p.system_prompt) return "system prompt rewritten";
@@ -1122,7 +1091,7 @@ export interface CycleStep {
 }
 
 /** The first sentence, or the first `max` characters, whichever is shorter. */
-export function firstSentence(text: string, max = 170): string {
+function firstSentence(text: string, max = 170): string {
   const t = text.trim();
   const m = /^[\s\S]{40,}?[.!?](?=\s|$)/.exec(t);
   const s = m ? m[0] : t;
@@ -1278,7 +1247,7 @@ export function lastRunFor(agentId: string, runs: RunRow[]): RunRow | null {
  * golden tape and API-started runs since Block 5 have one); "…" while the run's state has not arrived
  * (`undefined`), so a card never says "not measured" about a run it has not read yet.
  */
-export function blocksLine(v: State["vulnerability"] | undefined, finalVersion: number | null): string {
+function blocksLine(v: State["vulnerability"] | undefined, finalVersion: number | null): string {
   if (v === undefined) return "…";
   if (!v || finalVersion === null || v.suite_size <= 0) return "not measured";
   const landed = v.landed[`v${finalVersion}`];
@@ -1344,7 +1313,7 @@ export function replaysLine(rows: RunRow[]): string {
 // --- Agents (docs/plans/00-overview.md Block 3) ------------------------------------------------------
 
 /** `just now` / `4 min ago` / `3 h ago` / `2 d ago`, for a ping's `at`. */
-export function fmtAgo(iso: string, now = Date.now()): string {
+function fmtAgo(iso: string, now = Date.now()): string {
   const s = Math.max(0, Math.round((now - new Date(iso).getTime()) / 1000));
   if (s < 45) return "just now";
   const m = Math.round(s / 60);
