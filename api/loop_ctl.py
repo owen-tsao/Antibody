@@ -324,7 +324,7 @@ def _run_on_disk_is_ours(doc: dict, body: LoopStartBody) -> bool:
         flags, recorded_target = manifest.get("flags"), manifest.get("target")
     except (OSError, ValueError, AttributeError):
         return True
-    if isinstance(flags, list) and flags != _flags(body):
+    if isinstance(flags, list) and _run_shape(flags) != _run_shape(_flags(body)):
         return False
     if isinstance(recorded_target, str) and isinstance(doc.get("target"), str):
         try:
@@ -332,6 +332,12 @@ def _run_on_disk_is_ours(doc: dict, body: LoopStartBody) -> bool:
         except ValueError:
             return False
     return True
+
+
+def _run_shape(flags: list) -> list:
+    """Flags that decide what a run does, for comparing two runs. `--vulnerability` only adds an epilogue
+    measurement, and sidecars written before it existed would otherwise never match a `run.json` again."""
+    return [f for f in flags if f not in ("--vulnerability", "--no-vulnerability")]
 
 
 def saved_settings() -> dict | None:

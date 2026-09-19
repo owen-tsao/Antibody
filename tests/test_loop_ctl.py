@@ -162,6 +162,22 @@ def test_terminal_run_after_an_api_run_outdates_the_sidecar(runs: Path, monkeypa
     assert loop_ctl.state()["settings"] == other.model_dump()
 
 
+def test_a_sidecar_from_before_the_vulnerability_flag_still_matches_its_run(runs: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Upgrade path: the body on disk has no `vulnerability` key and the run.json has no `--vulnerability`."""
+    body = loop_ctl.LoopStartBody(chaos_cycles=2, seeds=1)
+    loop_ctl.start(body)
+    loop_ctl._handle.proc.returncode = 0
+    monkeypatch.setattr(loop_ctl, "_handle", None)
+    doc = json.loads((runs / "loop_settings.json").read_text())
+    del doc["body"]["vulnerability"]
+    (runs / "loop_settings.json").write_text(json.dumps(doc))
+    (runs / "run.json").write_text(json.dumps({"flags": [f for f in loop_ctl._flags(body) if f != "--vulnerability"]}))
+    assert loop_ctl.state()["settings"] == body.model_dump()
+    # Other flags still count: a terminal run with different cycles outdates the sidecar.
+    (runs / "run.json").write_text(json.dumps({"flags": ["--chaos-cycles", "9", "--repair-attempts", "3", "--seeds", "1"]}))
+    assert loop_ctl.state()["settings"] is None
+
+
 # --- body rules and the routes' 400s ----------------------------------------------------------------
 
 
