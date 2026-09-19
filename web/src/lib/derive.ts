@@ -654,13 +654,15 @@ export function summaryLine(s: RunSummary): string {
 }
 
 /**
- * Versions a finished run offers to roll back to: every config it saved, oldest first. `live` offers none — the
- * API refuses it (400) because the live tree is what a rollback writes into; `--from-version` is the CLI's
- * way there. Nothing while a loop runs either, since the loop owns the live config then.
+ * Versions a finished run offers to roll back to: every config it saved, oldest first, except the one live
+ * already is (`current`: known once a rollback in this session copied it in — the API has no "live equals run X
+ * v3" fact to read). `live` offers none — the API refuses it (400) because the live tree is what a rollback
+ * writes into; `--from-version` is the CLI's way there. Nothing while a loop runs either, since the loop owns
+ * the live config then.
  */
-export function rollbackVersions(id: string, row: RunRow | null, loop: LoopState | null): number[] {
+export function rollbackVersions(id: string, row: RunRow | null, loop: LoopState | null, current: number | null): number[] {
   if (id === "live" || !row || loop?.running) return [];
-  return [...new Set(row.configs?.map((c) => c.version) ?? row.versions)].sort((a, b) => a - b);
+  return [...new Set(row.configs?.map((c) => c.version) ?? row.versions)].filter((v) => v !== current).sort((a, b) => a - b);
 }
 
 // --- CycleRecord → Task ------------------------------------------------------------------------

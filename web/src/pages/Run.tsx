@@ -61,7 +61,7 @@ const DEMO_SEED_TITLE = "Injected instructions in order notes trigger a refund o
 
 // Client-side give-up for the seed attack (docs/FRONTEND.md §4.3/§7): after 20 s the row falls back to
 // the recorded cycle, labeled `(replayed)`. The server's own 504 at ~40 s is the backstop.
-export const ATTACK_TIMEOUT_MS = 20_000;
+const ATTACK_TIMEOUT_MS = 20_000;
 
 // Fixed per orb so the blobs do not reshuffle on every re-render (orb.tsx seeds its PRNG from this).
 const ORB_SEED: Record<Agent, number> = { chaos: 1000, target: 2000, judge: 3000, repair: 4000 };
@@ -94,15 +94,24 @@ function targetLine(t: Manifest["target"] | undefined): string | null {
 const quietLink = "group rounded text-[var(--muted)] transition-colors hover:text-[var(--fg)] disabled:cursor-default disabled:text-[var(--faint)]";
 
 /**
- * Start this run's tape at REPLAY_SPEED, or join it if it is already the one playing. Another run's tape is
- * stopped first: nothing plays off-screen. Rejects with the API's error (409 when a live loop owns the screen).
+ * Start this run's tape at REPLAY_SPEED, or join it if it is already the one playing. A tape of this run that has
+ * run to its end is resumed, which restarts it from 0 (api/replay.py). Another run's tape is stopped first:
+ * nothing plays off-screen. `onStart` fires right before the tape (re)starts, so the caller can drop the frame
+ * it holds from the previous tape. Rejects with the API's error (409 when a live loop owns the screen).
  */
-async function joinTape(id: string): Promise<void> {
+async function joinTape(id: string, onStart: () => void): Promise<void> {
   const rec = recordingFor(id);
   if (!rec) return;
   const cur = await api.replay();
-  if (replayIsFor(cur, id)) return;
+  if (replayIsFor(cur, id)) {
+    if (cur.ended) {
+      onStart();
+      await api.replayResume();
+    }
+    return;
+  }
   if (cur.active) await api.replayStop();
+  onStart();
   await api.replayStart(REPLAY_SPEED, rec);
 }
 
@@ -127,6 +136,8 @@ export default function Run({
   const { loop, replay, status: polled, statusError, health, refresh } = shell;
   // The run row; 404 for `live` until run.json lands, which is "starting…", not an error. Only the live
   // row changes while the page is open (finished_at, versions), so history rows are read once a minute.
+  // usePoll keeps the last good row across errors, so when a new run archives the old one `/app/runs/live`
+  // reads `live` rather than `starting` for one 5 s beat; the header line is right again on the next tick.
   const rowFn = useCallback(() => api.run(id), [id]);
   const { data: row, error: rowError } = usePoll(rowFn, id === "live" ? 5_000 : 60_000);
 
@@ -186,25 +197,38 @@ export default function Run({
   };
 
   // "watch it back": this run's tape at 3×. A tape of another run is stopped first (nothing plays off-screen);
-  // an already-playing tape of this run is simply joined. 409 means a live loop owns the screen.
+  // an already-playing tape of this run is simply joined. 409 means a live loop owns the screen. The `live`
+  // frame held from a previous tape is dropped as the new one starts, so its last frame never shows as the
+  // first of this one. Both labels are set only after the first round trip, so the same function can run from
+  // the arrival effect below without a synchronous state change inside an effect.
   const [replayNote, setReplayNote] = useState<string | null>(null);
   const [startingReplay, setStartingReplay] = useState(false);
-  const watch = async () => {
-    setStartingReplay(true);
-    setReplayNote(null);
+  const watch = useCallback(async () => {
     try {
-      await joinTape(id);
+      await joinTape(id, () => {
+        setStartingReplay(true);
+        setReplayNote(null);
+        setBySource((m) => ({ ...m, live: undefined }));
+      });
     } catch (e) {
       setReplayNote(e instanceof ApiError && e.status === 409 ? "a live run is in progress · it owns the screen" : e instanceof Error ? e.message : String(e));
     } finally {
       setStartingReplay(false);
       refresh();
     }
-  };
-  // Arriving at `/replay`: the same start, with nothing to label — the mode flips to `watching` on the next poll.
+  }, [id, refresh]);
+  // Arriving at `/replay` starts the tape once per arrival (StrictMode runs effects twice; the ref keeps that
+  // from being two `replayStart`s). Leaving `/replay` re-arms it, so Back to the address starts it again.
+  const startedFor = useRef<string | null>(null);
   useEffect(() => {
-    if (arriveWatching) joinTape(id).catch(() => undefined).finally(refresh);
-  }, [arriveWatching, id, refresh]);
+    if (!arriveWatching) {
+      startedFor.current = null;
+      return;
+    }
+    if (startedFor.current === id) return;
+    startedFor.current = id;
+    void watch();
+  }, [arriveWatching, id, watch]);
   const stopReplay = () => {
     api
       .replayStop()
@@ -216,13 +240,24 @@ export default function Run({
       });
   };
 
-  // Roll back: second click confirms. The API copies the version in as the next live config and merges the
-  // suites; its answer is shown in full (the patch note names the run, `newer_tests` says what it never saw).
-  const versions = rollbackVersions(id, row, loop);
+  // Roll back: second click confirms, Escape cancels. The API copies the version in as the next live config
+  // and merges the suites; its answer is shown in full (the patch note names the run, `newer_tests` says what
+  // it never saw). The version live now *is* leaves the list — rolling back to it again would only add an
+  // identical config.
+  const [rolled, setRolled] = useState<RollbackResult | null>(null);
+  const [rolledTo, setRolledTo] = useState<number | null>(null);
+  const versions = rollbackVersions(id, row, loop, rolledTo);
   const [confirm, setConfirm] = useState<number | null>(null);
   const [rolling, setRolling] = useState(false);
-  const [rolled, setRolled] = useState<RollbackResult | null>(null);
   const [rollbackError, setRollbackError] = useState<string | null>(null);
+  useEffect(() => {
+    if (confirm === null) return;
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape") setConfirm(null);
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [confirm]);
   const rollBack = (version: number) => {
     if (rolling) return;
     if (confirm !== version) {
@@ -234,7 +269,10 @@ export default function Run({
     setRollbackError(null);
     api
       .rollback({ run: id, version })
-      .then(setRolled)
+      .then((res) => {
+        setRolled(res);
+        setRolledTo(version);
+      })
       .catch((e: unknown) => setRollbackError(e instanceof Error ? e.message : String(e)))
       .finally(() => setRolling(false));
   };
@@ -406,19 +444,20 @@ export default function Run({
           )}
           {transport && tape && <ReplayControls status={tape} recordedAt={recordedAt} onChanged={onReplayChanged} onStop={stopReplay} />}
 
-          {/* Finished: what to do with this run, as quiet text. The tape and every saved version. */}
+          {/* Finished: what to do with this run. The tape is the primary; rolling back is one label with a link per
+              saved version, so the row does not grow a full sentence per version. */}
           {mode === "finished" && !loading && !unreachable && (recordingFor(id) !== null || versions.length > 0) && (
             <div className="tabular mt-3 flex flex-wrap items-baseline gap-x-5 gap-y-1 text-[13px]">
               {recordingFor(id) !== null && (
-                <button type="button" onClick={() => void watch()} disabled={startingReplay} className={quietLink}>
+                <button type="button" onClick={() => void watch()} disabled={startingReplay} className={cn(quietLink, "text-[var(--fg)]")}>
                   <span className="u-line">{startingReplay ? "starting replay…" : "watch it back"}</span>
                 </button>
               )}
-              {versions.map((v) =>
-                confirm === v ? (
-                  <span key={v} className="text-[var(--muted)]">
-                    <button type="button" onClick={() => rollBack(v)} className="group rounded text-[var(--fg)]">
-                      <span className="u-line">confirm roll back to v{v}</span>
+              {versions.length > 0 &&
+                (confirm !== null ? (
+                  <span className="text-[var(--muted)]">
+                    <button type="button" onClick={() => rollBack(confirm)} className="group rounded text-[var(--fg)]">
+                      <span className="u-line">confirm roll back to v{confirm}</span>
                     </button>
                     {" · "}
                     <button type="button" onClick={() => setConfirm(null)} className={cn(quietLink, "text-[var(--faint)]")}>
@@ -426,11 +465,18 @@ export default function Run({
                     </button>
                   </span>
                 ) : (
-                  <button key={v} type="button" onClick={() => rollBack(v)} disabled={rolling} className={quietLink}>
-                    <span className="u-line">roll back to v{v}</span>
-                  </button>
-                ),
-              )}
+                  <span className="text-[var(--faint)]">
+                    {rolling ? "rolling back… " : "roll back to "}
+                    {versions.map((v, i) => (
+                      <span key={v}>
+                        {i > 0 && " · "}
+                        <button type="button" onClick={() => rollBack(v)} disabled={rolling} className={quietLink}>
+                          <span className="u-line">v{v}</span>
+                        </button>
+                      </span>
+                    ))}
+                  </span>
+                ))}
               {replayNote && <span className="text-[var(--faint)]">{replayNote}</span>}
             </div>
           )}
@@ -498,7 +544,8 @@ export default function Run({
             </ErrorBoundary>
           ) : unreachable || loading ? null : (
             <p className="text-[13px] text-[var(--faint)]">
-              {cyclesError && !cycles ? <ApiDown onRetry={retry} /> : !cycles ? "loading…" : playing ? `${verb ?? "measuring baseline"}…` : "no cycles yet"}
+              {/* An error here with the API answering (`unreachable` is false) is the run's own 404, already in the header. */}
+              {cyclesError && !cycles ? null : !cycles ? "loading…" : playing ? `${verb ?? "measuring baseline"}…` : "no cycles yet"}
             </p>
           )}
         </section>

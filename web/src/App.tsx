@@ -54,10 +54,9 @@ export default function App() {
 }
 
 /**
- * The pages under /app. Today's screens keep working at their new addresses until Block 4 replaces
- * them: `runs` is the old Heal screen, `run` is the old Cycles view while something is playing and
- * the old Results view once it is done, `cycle` is the cycle page. State that must outlive one page
- * (why a start failed) lives here, above the shell's per-route fade.
+ * The pages under /app. `runs` is still the old Heal screen until Block 4A replaces it; `run` is the run
+ * page for any id (`pages/Run`), `cycle` its cycle page. State that must outlive one page (why a start
+ * failed) lives here, above the shell's per-route fade.
  */
 function AppPages({ route, settings, onSettingsChange }: { route: Route; settings: RunSettings; onSettingsChange: (next: RunSettings) => void }) {
   const [startError, setStartError] = useState<string | null>(null);
