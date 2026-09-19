@@ -17,8 +17,10 @@ import type {
   PatchKind,
   Phase,
   PingResult,
+  ReadSource,
   RunRow,
   ScenarioKind,
+  State,
   Status,
   ToolMapping,
   ToolPolicy,
@@ -1156,6 +1158,116 @@ export function emptyStateFor(health: Health | null): EmptyState {
         title: "No runs yet",
         body: "Start one against the demo agent, or connect your own support agent first.",
       };
+}
+
+// --- Home, Runs, Replays (docs/plans/00-overview.md Block 4, lane 4A) ------------------------------------
+
+/**
+ * Size of the legit-user suite the golden tape was recorded against (chaos/scenarios.py LEGIT_SCENARIOS at
+ * the time). Only the chart footer's "legit N/M" reads it; the run pages keep their own copy for now.
+ */
+export const LEGIT_SIZE = 3;
+
+/** The `?source=` that reads a runs-list row: `live` and `golden` are themselves; anything else is a history folder. */
+export function runSource(id: string): ReadSource {
+  return id === "live" || id === "golden" ? id : `run:${id}`;
+}
+
+/** `Sep 18, 10:31 PM` — a run's date for lists where the year is noise. */
+export function fmtDate(iso: string): string {
+  return new Date(iso).toLocaleString([], { month: "short", day: "numeric", hour: "numeric", minute: "2-digit" });
+}
+
+/** `m:ss` for a row's `duration_s`, or `—` when the run left no phase log. */
+export function fmtDuration(seconds: number | null): string {
+  return seconds === null ? "—" : fmtClock(seconds);
+}
+
+/** `v0 → v3` from a row's saved versions; `v3` when nothing changed; `—` with no configs at all. */
+export function versionSpan(r: Pick<RunRow, "versions" | "final_version">): string {
+  const to = r.final_version;
+  if (to === null) return "—";
+  const from = r.versions[0] ?? 0;
+  return from === to ? `v${to}` : `v${from} → v${to}`;
+}
+
+/** Who a run attacked: the joined agent's name, "Demo agent" for the built-in target, else the raw target string. */
+export function runAgentLabel(r: Pick<RunRow, "agent" | "target">): string {
+  if (r.agent) return r.agent.name;
+  return r.target === "builtin" ? "Demo agent" : r.target;
+}
+
+/**
+ * The status word on a Runs row. The un-archived run is `live` whether or not its loop is alive (Block 4's
+ * identity rule), so the loop decides between "running" and "finished · not archived"; the demo tape is a
+ * recording, never a run someone started here.
+ */
+export function runStatusLabel(r: Pick<RunRow, "id" | "label">, loopRunning: boolean): string {
+  if (r.id === "golden") return r.label ?? "demo tape";
+  if (r.id === "live") return loopRunning ? "running" : "finished · not archived";
+  return "finished";
+}
+
+/** The most recent run (the list is newest first) against `agentId`, or null when it has none. */
+export function lastRunFor(agentId: string, runs: RunRow[]): RunRow | null {
+  return runs.find((r) => r.agent?.id === agentId) ?? null;
+}
+
+/**
+ * "blocks 3 of 3 known attacks" from a run's end-of-run measurement: attacks that still land on the final
+ * version, subtracted from the suite. "not measured" until the run wrote `vulnerability.json` (today only
+ * the golden tape and API-started runs since Block 5 have one).
+ */
+export function blocksLine(v: State["vulnerability"], finalVersion: number | null): string {
+  if (!v || finalVersion === null || v.suite_size <= 0) return "not measured";
+  const landed = v.landed[`v${finalVersion}`];
+  if (landed === undefined) return "not measured";
+  const n = v.suite_size;
+  return `blocks ${Math.max(0, n - landed)} of ${n} known ${n === 1 ? "attack" : "attacks"}`;
+}
+
+export interface AgentCardStats {
+  /** `v3`, or null with no runs. */
+  version: string | null;
+  /** The blocks line, or "no runs yet". */
+  line: string;
+  /** ISO start of the last run, or null. */
+  lastRunAt: string | null;
+}
+
+/** What an agent's Home card says, from its last run's row and that run's `/api/state`. */
+export function agentCardStats(run: RunRow | null, state: State | null): AgentCardStats {
+  if (!run) return { version: null, line: "no runs yet", lastRunAt: null };
+  return {
+    version: run.final_version === null ? null : `v${run.final_version}`,
+    line: blocksLine(state?.vulnerability, run.final_version),
+    lastRunAt: run.started_at,
+  };
+}
+
+export interface AttentionRow {
+  cycle: number;
+  title: string;
+  /** Why it needs a look: the gate refused the patch, or the attack landed and nothing was patched. */
+  why: "rejected" | "unpatched";
+}
+
+/**
+ * Cycles from the current run a person should look at, newest first: an attack that landed and the config
+ * did not change for it — either the gate rejected the patch (`gate && !gate.accepted`) or there was no gate
+ * at all (`attack_succeeded && !gate`, chaos/schemas.py). Blocked attacks and accepted patches need nobody.
+ */
+export function needsAttention(cycles: CycleRecord[]): AttentionRow[] {
+  return cycles
+    .filter((c) => c.attack_succeeded && (!c.gate || !c.gate.accepted))
+    .map((c) => ({ cycle: c.cycle, title: shortTitle(c), why: c.gate ? ("rejected" as const) : ("unpatched" as const) }))
+    .reverse();
+}
+
+/** Rows the Replays page lists: every run that is a tape, the demo tape first, then newest first as the list came. */
+export function replayRows(runs: RunRow[]): RunRow[] {
+  const tapes = runs.filter((r) => r.recording);
+  return [...tapes.filter((r) => r.id === "golden"), ...tapes.filter((r) => r.id !== "golden")];
 }
 
 // --- Agents (docs/plans/00-overview.md Block 3) ------------------------------------------------------

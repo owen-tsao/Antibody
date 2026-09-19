@@ -12,7 +12,8 @@ export type Route =
   | { kind: "onboarding"; step: OnboardingStep }
   | { kind: "agents" }
   | { kind: "runs" }
-  | { kind: "run"; id: string }
+  /** `replay` = arrive watching: `/app/runs/:id/replay` starts the run's tape (Replays page's "watch"). */
+  | { kind: "run"; id: string; replay?: boolean }
   | { kind: "cycle"; id: string; n: number }
   | { kind: "replays" }
   | { kind: "settings" };
@@ -59,6 +60,7 @@ export function parse(pathname: string): Route {
       const cycle = Number(n);
       if (Number.isInteger(cycle) && cycle > 0) return { kind: "cycle", id, n: cycle };
     }
+    if (sub === "replay" && n === undefined) return { kind: "run", id, replay: true };
     return { kind: "run", id };
   }
   return RUNS;
@@ -77,7 +79,7 @@ export function href(route: Route): string {
     case "runs":
       return "/app/runs";
     case "run":
-      return `/app/runs/${route.id}`;
+      return route.replay ? `/app/runs/${route.id}/replay` : `/app/runs/${route.id}`;
     case "cycle":
       return `/app/runs/${route.id}/cycles/${route.n}`;
     case "replays":
