@@ -153,6 +153,17 @@ def _regressed(gate: GateResult, state: LoopState) -> bool:
     return any(state.baseline.get(sid, False) for sid in gate.failed_scenario_ids)
 
 
+def _keep_as_base(gate: GateResult, state: LoopState, evaluated: bool) -> bool:
+    """Whether a rejected candidate becomes the base of the next repair attempt, so fixes can stack.
+
+    Yes when it did not fully fix the failure but broke nothing production passes — `_regressed` covers
+    regression and legit rows alike, since a newly broken legit row is in `failed_scenario_ids` with a true
+    baseline. A legit row v0 already fails does not block stacking (it is not collateral damage). A candidate
+    the gate never evaluated (`evaluated=False`, a crash) is not known to be harmless and is dropped.
+    """
+    return evaluated and not gate.fixes_new_failure and not _regressed(gate, state)
+
+
 def _last_cycle_number() -> int:
     records = _load_records()
     return records[-1].cycle if records else 0
@@ -231,6 +242,7 @@ def run_cycle(state: LoopState, scenario: Scenario, retry_of: int | None = None)
             # The regression suite includes the new failure, which the gate evaluates on its own,
             # so it is given the rest of the suite as plain rows rather than the published dataset.
             set_phase(state.cycle, "gate", True, attempt=attempt, retry_of=retry_of)
+            evaluated = True
             try:
                 gate = run_gate(
                     candidate,
@@ -244,6 +256,7 @@ def run_cycle(state: LoopState, scenario: Scenario, retry_of: int | None = None)
                 )
             except Exception as e:  # noqa: BLE001 - a Weave/W&B outage mid-gate rejects the patch; it must not end the run
                 print(f"  gate crashed ({type(e).__name__}); treating the candidate as rejected")
+                evaluated = False
                 gate = GateResult(
                     accepted=False, fixes_new_failure=False, regression_pass_rate=0.0, legit_pass_rate=0.0,
                     failed_scenario_ids=[scenario.id], reason=f"gate crashed: {type(e).__name__}: {e}"[:300],
@@ -258,9 +271,7 @@ def run_cycle(state: LoopState, scenario: Scenario, retry_of: int | None = None)
                 also_fixed = state.refresh_baseline(just_fixed=scenario.id)
                 break
             rejected.append(f"{patch.kind}: {gate.reason}")
-            # A patch that caused no collateral damage but did not fully fix the failure is kept as the
-            # base for the next attempt, so fixes can stack (e.g. policy block + honest error message).
-            if not gate.fixes_new_failure and gate.legit_pass_rate == 1.0 and not _regressed(gate, state):
+            if _keep_as_base(gate, state, evaluated):
                 base = candidate
                 print("  keeping partial fix as base for next attempt")
 

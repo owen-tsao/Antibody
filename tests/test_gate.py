@@ -136,8 +136,37 @@ def test_a_regression_that_fails_twice_is_rejected(script) -> None:
     assert g.failed_scenario_ids == ["reg-1"]
 
 
-def test_default_sample_count_comes_from_the_environment() -> None:
-    assert gate.GATE_FIX_SAMPLES == 2
+def test_the_sample_count_comes_from_the_environment() -> None:
+    """Read at import of `chaos.gate`, so a fresh interpreter is the honest check (pattern: test_manifest)."""
+    import os
+    import subprocess
+    import sys
+
+    from chaos.state import ROOT
+
+    def constant(value: str | None) -> subprocess.CompletedProcess:
+        env = {k: v for k, v in os.environ.items() if k != "ANTIBODY_GATE_FIX_SAMPLES"}
+        if value is not None:
+            env["ANTIBODY_GATE_FIX_SAMPLES"] = value
+        return subprocess.run([sys.executable, "-c", "from chaos.gate import GATE_FIX_SAMPLES; print(GATE_FIX_SAMPLES)"], cwd=ROOT, env=env, capture_output=True, text=True, timeout=120)
+
+    assert constant(None).stdout.strip() == "2"
+    assert constant("3").stdout.strip() == "3"
+    bad = constant("two")
+    assert bad.returncode == 1 and "ANTIBODY_GATE_FIX_SAMPLES must be a positive integer" in bad.stderr and "Traceback" not in bad.stderr
+    assert constant("0").returncode == 1
+
+
+def test_int_env_rules(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("X_N", " 4 ")
+    assert gate._int_env("X_N", 1) == 4
+    monkeypatch.setenv("X_N", "")
+    assert gate._int_env("X_N", 7) == 7
+    monkeypatch.delenv("X_N")
+    assert gate._int_env("X_N", 7) == 7
+    monkeypatch.setenv("X_N", "-1")
+    with pytest.raises(SystemExit, match="X_N must be a positive integer"):
+        gate._int_env("X_N", 1)
 
 
 def test_rerun_flaky_skips_ids_it_has_no_scenario_for(script) -> None:
@@ -165,3 +194,48 @@ def test_explicit_sample_fields_are_kept_as_written() -> None:
     g = GateResult(accepted=False, fixes_new_failure=False, regression_pass_rate=1.0, legit_pass_rate=1.0, reason="r", fix_samples=2, fix_passes=1)
     assert (g.fix_samples, g.fix_passes) == (2, 1)
     assert GateResult.model_validate(g.model_dump()).fix_passes == 1
+
+
+# --- what the loop does with a rejection ---------------------------------------------------------------------
+
+
+def _rejected(failed: list[str], legit_rate: float = 1.0) -> GateResult:
+    return GateResult(accepted=False, fixes_new_failure=False, regression_pass_rate=1.0, legit_pass_rate=legit_rate, failed_scenario_ids=failed, reason="r")
+
+
+class _State:
+    """Only what `_keep_as_base` reads: which protected rows production passes."""
+
+    baseline = {"reg-1": True, "legit-1": True, "legit-weak": False, "new-1": False}
+
+
+def test_a_harmless_partial_fix_is_kept_as_the_next_base() -> None:
+    from chaos.loop import _keep_as_base
+
+    assert _keep_as_base(_rejected(["new-1"]), _State(), evaluated=True)
+
+
+def test_breaking_a_legit_row_production_passes_drops_the_candidate() -> None:
+    from chaos.loop import _keep_as_base
+
+    # legit_pass_rate < 1 with the broken row in failed_scenario_ids: _regressed catches it without a rate clause.
+    assert not _keep_as_base(_rejected(["new-1", "legit-1"], legit_rate=0.9), _State(), evaluated=True)
+
+
+def test_a_legit_row_production_already_fails_does_not_block_stacking() -> None:
+    from chaos.loop import _keep_as_base
+
+    assert _keep_as_base(_rejected(["new-1", "legit-weak"], legit_rate=0.9), _State(), evaluated=True)
+
+
+def test_a_candidate_the_gate_never_evaluated_is_not_kept() -> None:
+    from chaos.loop import _keep_as_base
+
+    assert not _keep_as_base(_rejected(["new-1"]), _State(), evaluated=False)
+
+
+def test_a_fix_that_worked_is_not_a_partial_fix() -> None:
+    from chaos.loop import _keep_as_base
+
+    g = GateResult(accepted=False, fixes_new_failure=True, regression_pass_rate=0.5, legit_pass_rate=1.0, failed_scenario_ids=["reg-1"], reason="r")
+    assert not _keep_as_base(g, _State(), evaluated=True)
