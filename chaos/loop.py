@@ -11,6 +11,10 @@ By default the run invents exactly `--chaos-cycles` novel attacks after the seed
 it stops inventing them as soon as N in a row were blocked, and `--chaos-cycles` is only the cap.
 
 Every cycle is appended to cycles.jsonl for the dashboard and to Weave for audit.
+
+`chaos.loop check [--version N] [--json]` is the read-only companion: it re-runs the captured regression
+suite and the legit suite against one saved config with no new attacks and exits 1 if anything fails —
+pytest for the agent, meant for a customer's CI after they change their prompt, model or framework.
 """
 
 from __future__ import annotations
@@ -26,7 +30,7 @@ from chaos import zendesk
 from chaos.chaos_agent import family_stats, generate_scenario
 from chaos.config import ENTITY_PROJECT
 from chaos.evals import TargetAgent, publish_dataset, run_evaluation, scenario_rows
-from chaos.gate import run_gate
+from chaos.gate import rerun_flaky, run_gate
 from chaos.judge import judge_episode
 from chaos.repair_agent import EXHAUSTED_RATIONALE, apply_patch, build_memory, propose_patch
 from chaos.scenarios import LEGIT_SCENARIOS, SEED_SCENARIOS
@@ -333,6 +337,17 @@ def main() -> None:
         help="run every saved config version against the final regression suite; write runs/vulnerability.json",
     )
     sub.add_parser("cleanup", help="solve every Zendesk ticket this harness created")
+    check_p = sub.add_parser(
+        "check",
+        help="re-verify the current config: regression suite + legit suite, no new attacks; exit 1 on any failure",
+        description=(
+            "pytest for your agent. Runs every captured attack (runs/regression.json) and every legit-user scenario "
+            "against one saved config with no new attacks, prints one line per test, and exits 1 if anything fails. "
+            "Needs WANDB_API_KEY (every row is a Weave evaluation). Attacks the agent named by ANTIBODY_TARGET."
+        ),
+    )
+    check_p.add_argument("--version", type=int, default=None, metavar="N", help="saved config to check (default: the latest; 0 is always available)")
+    check_p.add_argument("--json", action="store_true", help="print one JSON document instead of the per-test lines")
 
     args = parser.parse_args()
     if args.command is None:
@@ -352,14 +367,16 @@ def main() -> None:
         print(f"cleanup: solved {zendesk.cleanup()} antibody tickets")
         return
 
-    weave.init(ENTITY_PROJECT)
-    # Evaluation progress and summary output drown out the loop narrative.
+    # Evaluation progress and summary output drown out the loop narrative (and would dirty `check --json`).
     for name in ("weave", "weave.evaluation.eval"):
         logging.getLogger(name).setLevel(logging.WARNING)
+    weave.init(ENTITY_PROJECT)
 
     if args.command == "vulnerability":
         vulnerability_by_version()
         return
+    if args.command == "check":
+        raise SystemExit(check(args.version, as_json=args.json))
 
     print(f"World: {'Zendesk ' + zendesk.subdomain() + ' (real tickets; refunds and email mocked)' if zendesk.enabled() else 'mock (no Zendesk)'}")
 
@@ -565,6 +582,118 @@ def vulnerability_by_version(samples: int = VULNERABILITY_SAMPLES, versions: lis
         )
     )
     print(f"wrote {RUNS_DIR / 'vulnerability.json'}")
+
+
+# --- check: CI for agent changes ---------------------------------------------------------------------------
+
+
+def check_config(version: int | None) -> AgentConfig:
+    """The config `check` verifies: the saved `v{version}`, the latest saved one, or the fresh v0 when there is none.
+
+    v0 is always available because it is the code's initial deployment, not a file; every other version
+    must have been saved by a run or a rollback (FileNotFoundError otherwise, with the path in the message).
+    """
+    from chaos.state import latest_version
+
+    if version is None:
+        version = latest_version()
+    if version in (None, 0):
+        try:
+            return load_config(0)
+        except FileNotFoundError:
+            return V0_CONFIG
+    return load_config(version)
+
+
+def run_check(cfg: AgentConfig, regression: list[Scenario], legit: list[Scenario]) -> dict:
+    """Regression + legit against one config, no new attacks: the gate's "did anything old break?" alone.
+
+    Built on `run_evaluation`, never `LoopState` (whose constructor files tickets, publishes datasets and
+    saves configs). Protected rows get the gate's one-retry forgiveness through the same `rerun_flaky`, so
+    `check` and the gate cannot disagree about what counts as flaky. Legit rows run in the mock world here
+    (no tickets are filed); regression rows run wherever their captured `ticket_id` says.
+
+    Returns `{ok, version, target, world, regression: {passed, total}, legit: {...}, rows: [...]}` where each
+    row is `{id, suite, title, passed, flaky, failure_kind, reason}`; `flaky` marks a row that failed once and
+    passed on re-run.
+    """
+    model = TargetAgent(config=cfg)
+    tag = f"check v{cfg.version}"
+    reg_run = run_evaluation(model, scenario_rows(regression), "check-regression", f"{tag} regression") if regression else None
+    legit_run = run_evaluation(model, scenario_rows(legit), "check-legit", f"{tag} legit") if legit else None
+
+    verdicts = {**(reg_run.verdicts if reg_run else {}), **(legit_run.verdicts if legit_run else {})}
+    failed = [sid for sid, v in verdicts.items() if not v.passed]
+    by_id = {s.id: s for s in list(regression) + list(legit)}
+    recovered = rerun_flaky(model, failed, by_id, display=f"{tag} rerun") if failed else set()
+
+    rows = []
+    for suite, scenarios in (("regression", regression), ("legit", legit)):
+        for s in scenarios:
+            v = verdicts[s.id]
+            passed = v.passed or s.id in recovered
+            rows.append({
+                "id": s.id,
+                "suite": suite,
+                "title": s.title,
+                "passed": passed,
+                "flaky": s.id in recovered,
+                "failure_kind": None if passed else v.failure_kind,
+                # A forgiven row keeps its first failure's reason so the flake stays visible; a clean pass has none.
+                "reason": v.reason if (not passed or s.id in recovered) else None,
+            })
+
+    def tally(suite: str) -> dict:
+        mine = [r for r in rows if r["suite"] == suite]
+        return {"passed": sum(1 for r in mine if r["passed"]), "total": len(mine)}
+
+    return {
+        "ok": all(r["passed"] for r in rows),
+        "version": cfg.version,
+        "target": model.target_name,
+        "world": "zendesk" if zendesk.enabled() else "mock",
+        "regression": tally("regression"),
+        "legit": tally("legit"),
+        "rows": rows,
+    }
+
+
+def format_check(result: dict) -> str:
+    """One line per test, then the summary line the README quotes (`regression 6/6 · legit 12/12`)."""
+    lines = []
+    for r in result["rows"]:
+        if r["passed"] and not r["flaky"]:
+            mark = "PASS"
+        elif r["passed"]:
+            mark = "PASS (on re-run)"
+        else:
+            mark = "FAIL"
+        line = f"{mark:<17} {r['suite']:<10} {r['id']} — {r['title']}"
+        if r["reason"]:
+            line += f"\n{'':<17} {r['failure_kind'] or 'failed'}: {r['reason']}"
+        lines.append(line)
+    reg, legit = result["regression"], result["legit"]
+    lines.append(
+        f"\nregression {reg['passed']}/{reg['total']} · legit {legit['passed']}/{legit['total']} · "
+        f"config v{result['version']} · target {result['target']} · world {result['world']}"
+    )
+    return "\n".join(lines)
+
+
+def check(version: int | None, *, as_json: bool = False) -> int:
+    """`chaos.loop check`: exit status 0 when every row passes, 1 otherwise, 2 when there is nothing to check."""
+    try:
+        cfg = check_config(version)
+    except FileNotFoundError as e:
+        print(str(e), file=sys.stderr)
+        return 2
+    regression = load_regression()
+    result = run_check(cfg, regression, LEGIT_SCENARIOS)
+    if as_json:
+        print(json.dumps(result, indent=2))
+    else:
+        print(format_check(result))
+    return 0 if result["ok"] else 1
 
 
 def _describe(rec: CycleRecord) -> str:

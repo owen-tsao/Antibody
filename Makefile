@@ -4,6 +4,9 @@
 #   make demo    build the dashboard, serve it on one port, open the browser (no .env needed: Replay works)
 #   make dev     API on :8000 + Vite on :5173 with hot reload (scripts/dev.sh)
 #   make run     run the self-healing loop from the CLI; extra flags via ARGS="--seeds 1 --chaos-cycles 1"
+#   make check   re-verify the current config: every captured attack + the legit suite, no new attacks;
+#                exits 1 on any failure (needs WANDB_API_KEY; attacks the agent in ANTIBODY_TARGET);
+#                ARGS="--version 0" picks a config, ARGS="--json" changes the output
 #   make test    pytest + web build + web lint (what CI runs)
 #   make golden  snapshot the current run into data/golden/ as the demo fallback
 
@@ -11,7 +14,7 @@ PORT ?= 8000
 URL  := http://localhost:$(PORT)
 ARGS ?=
 
-.PHONY: setup build dev serve demo run test golden
+.PHONY: setup build dev serve demo run check test golden
 
 setup:
 	uv sync
@@ -46,6 +49,9 @@ demo: build
 
 run:
 	uv run python -m chaos.loop run $(ARGS)
+
+check:
+	uv run python -m chaos.loop check $(ARGS)
 
 test:
 	uv run pytest

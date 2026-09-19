@@ -1,0 +1,121 @@
+# Antibody `check` for your agent's repo.
+#
+# Drop this file into .github/workflows/ of the repository that holds YOUR support agent. On every pull
+# request it starts the PR's version of the agent, runs Antibody's `check` against it — every attack
+# Antibody has already captured plus its legit-user suite, no new attacks — posts the summary on the PR,
+# and fails the check if anything that used to hold no longer does.
+#
+# You need three things in your repo:
+#   1. A way to start your agent so it answers `POST /episode` on a port (see examples/agents/ in Antibody).
+#   2. The Antibody run files that describe what "hardened" means for your agent: `regression.json` and
+#      `configs/v*.json`, copied from Antibody's runs/ (or history/<run>/) after a run you were happy with,
+#      committed under a folder of their own (here `antibody-runs/`). `check` reads them via ANTIBODY_RUNS_DIR.
+#   3. A `WANDB_API_KEY` repository secret: every row is a Weave evaluation, and the judge is a model call.
+#
+# Cost: one target episode + one judge call per row, plus one re-run per row that fails once
+# (roughly 20 rows for a typical suite). Nothing here invents new attacks.
+
+name: antibody-check
+
+on:
+  pull_request:
+
+permissions:
+  contents: read
+  pull-requests: write
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    env:
+      WANDB_API_KEY: ${{ secrets.WANDB_API_KEY }}
+      # Where your agent will listen. Antibody attacks whatever ANTIBODY_TARGET points at.
+      AGENT_PORT: "8790"
+    steps:
+      - name: Check out your agent
+        uses: actions/checkout@v4
+
+      - name: Check out Antibody
+        uses: actions/checkout@v4
+        with:
+          repository: owen-tsao/Antibody
+          path: antibody
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v5
+
+      - name: Install Antibody
+        working-directory: antibody
+        run: uv sync
+
+      # ---- Replace this step with whatever starts YOUR agent ------------------------------------------
+      # It must answer `POST /episode` on $AGENT_PORT before `check` starts; the loop below waits up to
+      # 90 s for the port to accept connections. The example below is Antibody's bundled agent.
+      - name: Start the agent under test
+        working-directory: antibody/examples/agents/openai_agents_support
+        run: |
+          uv sync
+          nohup uv run python agent.py > "$RUNNER_TEMP/agent.log" 2>&1 &
+          for i in $(seq 1 90); do
+            if curl -fsS "http://127.0.0.1:$AGENT_PORT/tools" >/dev/null 2>&1; then exit 0; fi
+            sleep 1
+          done
+          echo "agent did not come up on :$AGENT_PORT"; cat "$RUNNER_TEMP/agent.log"; exit 1
+      # -----------------------------------------------------------------------------------------------
+
+      - name: Run Antibody check
+        id: check
+        working-directory: antibody
+        env:
+          ANTIBODY_TARGET: http://127.0.0.1:${{ env.AGENT_PORT }}
+          ANTIBODY_NO_ZENDESK: "1"
+          # Your committed regression suite and configs (see the header). Must not be inside Antibody's runs/.
+          ANTIBODY_RUNS_DIR: ${{ github.workspace }}/antibody-runs
+        run: |
+          set +e
+          uv run python -m chaos.loop check --json > "$RUNNER_TEMP/check.json"
+          echo "status=$?" >> "$GITHUB_OUTPUT"
+          jq -r '.rows[] | "\(if .passed then "PASS" else "FAIL" end) \(.suite) \(.id)\(if .reason then " — " + .reason else "" end)"' "$RUNNER_TEMP/check.json"
+          jq -r '"regression \(.regression.passed)/\(.regression.total) · legit \(.legit.passed)/\(.legit.total) · config v\(.version)"' "$RUNNER_TEMP/check.json"
+
+      - name: Comment the summary on the PR
+        if: always() && github.event_name == 'pull_request'
+        uses: actions/github-script@v7
+        env:
+          RESULT_PATH: ${{ runner.temp }}/check.json
+        with:
+          script: |
+            const fs = require("fs");
+            let body;
+            try {
+              const r = JSON.parse(fs.readFileSync(process.env.RESULT_PATH, "utf8"));
+              const failed = r.rows.filter((row) => !row.passed);
+              const line = (row) =>
+                `| ${row.passed ? (row.flaky ? "pass (on re-run)" : "pass") : "**fail**"} | ${row.suite} | \`${row.id}\` | ${row.title} |`;
+              body = [
+                `### Antibody check — ${r.ok ? "passed" : "failed"}`,
+                `regression ${r.regression.passed}/${r.regression.total} · legit ${r.legit.passed}/${r.legit.total} · config v${r.version} · target ${r.target}`,
+                ...(failed.length ? ["", "**Failed:**", ...failed.map((row) => `- \`${row.id}\` (${row.suite}) — ${row.failure_kind}: ${row.reason}`)] : []),
+                "",
+                "<details><summary>Every row</summary>",
+                "",
+                "| result | suite | id | scenario |",
+                "| --- | --- | --- | --- |",
+                ...r.rows.map(line),
+                "</details>",
+              ].join("\n");
+            } catch (e) {
+              body = `### Antibody check — did not run\n\n\`${e.message}\`. See the job log.`;
+            }
+            await github.rest.issues.createComment({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: context.issue.number,
+              body,
+            });
+
+      - name: Fail on regression
+        if: steps.check.outputs.status != '0'
+        run: |
+          echo "Antibody check exited ${{ steps.check.outputs.status }}"
+          exit 1
