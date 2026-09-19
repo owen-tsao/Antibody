@@ -1,5 +1,7 @@
 # Antibody — self-healing for AI agents
 
+[![CI](https://github.com/owen-tsao/Antibody/actions/workflows/ci.yml/badge.svg)](https://github.com/owen-tsao/Antibody/actions/workflows/ci.yml)
+
 ![The Antibody dashboard mid-run: cycle 5, the Target and Judge lit, the gate re-verifying a retried patch while the run's numbers sit above the four agents](docs/hero.png)
 
 Antibody attacks your AI agent on purpose, proves each failure, patches it, and only ships the patch if it fixes the break without undoing any earlier fix or hurting normal users. Every failure becomes a permanent regression test. The loop itself is the product.
