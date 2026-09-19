@@ -7,7 +7,7 @@ import RunSettingsFields, { textButton } from "@/components/RunSettingsFields";
 import WizardRail from "@/components/WizardRail";
 import { usePoll } from "@/hooks/usePoll";
 import { mappingLine, pingResultLine } from "@/lib/derive";
-import { HOME, LIVE_RUN, linkProps, navigate, onboarding, type OnboardingStep, replace } from "@/lib/routes";
+import { HOME, href, LIVE_RUN, linkProps, navigate, onboarding, type OnboardingStep, replace, skipOnboarding } from "@/lib/routes";
 import { estimateLabel, toStartBody, type RunSettings } from "@/lib/settings";
 import { cn } from "@/lib/utils";
 
@@ -240,7 +240,14 @@ export default function Onboarding({
           A
         </a>
         <WizardRail steps={[...STEPS]} index={step - 1} furthest={furthest - 1} onGoTo={(i) => go((i + 1) as OnboardingStep)} />
-        <a {...linkProps(HOME)} className="group justify-self-end rounded text-[12px] text-[var(--muted)] transition-colors hover:text-[var(--fg)]">
+        <a
+          href={href(HOME)}
+          onClick={(e) => {
+            skipOnboarding();
+            linkProps(HOME).onClick(e);
+          }}
+          className="group justify-self-end rounded text-[12px] text-[var(--muted)] transition-colors hover:text-[var(--fg)]"
+        >
           <span className="u-line">Skip for now</span>
         </a>
       </header>

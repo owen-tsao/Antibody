@@ -29,6 +29,12 @@ export const LIVE_RUN: Route = { kind: "run", id: "live" };
 
 export const onboarding = (step: OnboardingStep): Route => ({ kind: "onboarding", step });
 
+// "Skip for now" must land on Home and stay there, or the first-run rule would send the person straight
+// back. Remembered for the tab's session only: a fresh visit with still nothing connected gets the wizard again.
+const SKIPPED_KEY = "antibody:onboarding-skipped";
+export const skipOnboarding = () => sessionStorage.setItem(SKIPPED_KEY, "1");
+export const onboardingSkipped = () => sessionStorage.getItem(SKIPPED_KEY) === "1";
+
 // Run ids are history folder names, `live` or `golden` (api/store.py); the same shape the API accepts.
 const RUN_ID = /^[A-Za-z0-9T_-]+$/;
 

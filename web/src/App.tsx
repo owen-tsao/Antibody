@@ -8,6 +8,7 @@ import { HOME, LIVE_RUN, linkProps, navigate, type Route, useRoute } from "@/lib
 import { loadSettings, saveSettings, toStartBody, type RunSettings } from "@/lib/settings";
 import Intro, { type StartMode } from "@/pages/Intro";
 import Heal from "@/pages/Heal";
+import Home from "@/pages/Home";
 import AgentsList from "@/pages/Agents";
 import Onboarding from "@/pages/Onboarding";
 import RunLive from "@/pages/RunLive";
@@ -135,7 +136,7 @@ function AppPages({ route, settings, onSettingsChange }: { route: Route; setting
       {({ loop, replay, status, statusError, health, refresh }) => {
         switch (route.kind) {
           case "home":
-            return <Placeholder title="Home" />;
+            return <Home loop={loop} />;
           case "onboarding":
           case "landing":
             // Rendered above the shell by App; never reached here.
