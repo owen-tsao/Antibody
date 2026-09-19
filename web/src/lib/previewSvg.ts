@@ -154,3 +154,29 @@ export function cycleChartSvg(
 export function cyclePreviewSvg(cycle: CycleRecord, all: CycleRecord[], legitSize: number): string {
   return `data:image/svg+xml;utf8,${encodeURIComponent(cycleChartSvg(cycle, all, legitSize))}`;
 }
+
+/**
+ * The run in one glance for a card (Home's agent cards): one thin bar per cycle at the gate's regression
+ * pass rate, full-height for an accepted patch, dimmed for a rejected one, a baseline tick for a cycle
+ * with no gate (the attack was blocked, nothing to patch). No text, axes or legend — the card's own lines
+ * say what the run did. Monochrome via `currentColor`, so the host sets the colour; `preserveAspectRatio
+ * ="none"` so it fills whatever width it is given at a fixed height.
+ */
+export function sparkline(cycles: CycleRecord[], size: ChartSize = { w: 120, h: 28 }): string {
+  const W = size.w;
+  const H = size.h;
+  const n = Math.max(1, cycles.length);
+  const slot = W / n;
+  const gap = Math.min(3, slot * 0.35);
+  const barW = Math.max(1, slot - gap);
+  const tick = Math.max(1.5, H * 0.07);
+  const bars = cycles
+    .map((c, i) => {
+      const x = slot * i + gap / 2;
+      if (!c.gate) return `<rect x="${x}" y="${H - tick}" width="${barW}" height="${tick}" fill="currentColor" opacity="0.4"/>`;
+      const h = Math.max(tick, c.gate.regression_pass_rate * H);
+      return `<rect x="${x}" y="${H - h}" width="${barW}" height="${h}" fill="currentColor" opacity="${c.gate.accepted ? 0.9 : 0.35}"/>`;
+    })
+    .join("");
+  return `<svg xmlns="http://www.w3.org/2000/svg" width="${W}" height="${H}" viewBox="0 0 ${W} ${H}" preserveAspectRatio="none" aria-hidden="true">${bars}</svg>`;
+}

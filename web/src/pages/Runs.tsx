@@ -99,19 +99,28 @@ export default function Runs({
             <tbody className="divide-y divide-[var(--border)]">
               {runs.map((r) => {
                 const route = { kind: "run" as const, id: r.id };
-                const status = runStatusLabel(r, running);
+                const status = runStatusLabel(r, loop ? loop.running : null);
                 return (
                   <tr
                     key={r.id}
+                    role="link"
+                    tabIndex={0}
+                    aria-label={`${r.started_at ? fmtDate(r.started_at) : r.id} · ${runAgentLabel(r)} · ${status}`}
                     onClick={(e) => {
                       // The date cell is a real link (cmd-click, copy address); a plain click anywhere on the row opens the run.
                       if (e.defaultPrevented || e.metaKey || e.ctrlKey || e.shiftKey || e.altKey) return;
                       navigate(route);
                     }}
+                    onKeyDown={(e) => {
+                      if (e.target !== e.currentTarget || (e.key !== "Enter" && e.key !== " ")) return;
+                      e.preventDefault();
+                      navigate(route);
+                    }}
                     className="group cursor-pointer text-[var(--muted)] transition-colors hover:text-[var(--fg)]"
                   >
                     <td className={cn(cell, "tabular")}>
-                      <a {...linkProps(route)} className="rounded text-[var(--fg)]">
+                      {/* The row is the tab stop; the link stays for the pointer's cmd-click and copy-address. */}
+                      <a {...linkProps(route)} tabIndex={-1} className="rounded text-[var(--fg)]">
                         <span className="u-line">{r.started_at ? fmtDate(r.started_at) : r.id}</span>
                       </a>
                     </td>

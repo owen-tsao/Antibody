@@ -1,7 +1,7 @@
 import { api } from "@/api";
 import ApiDown from "@/components/ApiDown";
 import { usePoll } from "@/hooks/usePoll";
-import { fmtDate, fmtDuration, replayRows, runAgentLabel } from "@/lib/derive";
+import { fmtDate, fmtDuration, replayRows, replaysLine, runAgentLabel } from "@/lib/derive";
 import { linkProps } from "@/lib/routes";
 import { textButton } from "@/lib/ui";
 
@@ -23,7 +23,7 @@ export default function Replays() {
         <h1 className="display text-[48px] leading-[1]">Replays</h1>
         <p className="mt-4 min-h-[1.25rem] text-[13px] text-[var(--muted)]">
           {rows ? (
-            rows.length <= 1 ? "Only the demo tape so far. Finished runs appear here." : `${rows.length} recordings`
+            replaysLine(rows)
           ) : error ? (
             <ApiDown onRetry={refresh} />
           ) : (
