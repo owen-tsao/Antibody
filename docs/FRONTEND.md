@@ -1,52 +1,135 @@
-# Antibody — Frontend Implementation Plan
+# Antibody — Frontend
+
+How the dashboard is put together as of Sep 18, 2026 (Block 4 of `docs/plans/00-overview.md`). The first
+half of this file is current; the second half, from "Historical" on, is the Sep 12 build plan kept in
+place because Python and TypeScript docstrings cite its section numbers.
+
+The app is a landing page at `/` and the tool under `/app`, inside a persistent shell. There is no router
+dependency: `lib/routes.ts` is `parse(pathname)`, `href(route)`, `navigate(route)` (pushState),
+`replace(route)` (replaceState) and `useRoute()` (popstate). The API serves `web/dist/index.html` for every
+`/app` path so a hard refresh works (`api/main.py`, "Built dashboard"; `tests/test_static.py`); old
+`?page=…&n=…` links are rewritten once on load (`redirectLegacy()` in `main.tsx`).
+
+## Routes
+
+| Path | Route kind | Page | Data it reads |
+| --- | --- | --- | --- |
+| `/` | `landing` | `pages/Intro` + `ui/splash-backdrop` — the only page with the shaders; they unmount before anything under `/app` mounts | nothing |
+| `/app`, `/app/home` | `home` | `pages/Home` — **Heal** top-right (the one filled button, metal rim); a card per agent; **Needs attention**; **Recent runs** (five, → `/app/runs`). Owns the first-run rule and shows `ApiDown` when a load has never answered | `/api/agents` 15 s, `/api/runs` 15 s; then one `useEffect` fetch of `/api/state` + `/api/cycles` with `?source=run:<id>` for each agent's last run (and `live`, for Needs attention), re-run when the runs list changes — no per-card polls |
+| `/app/onboarding/:step` | `onboarding` | `pages/Onboarding` (outside the shell) — Choose · Connect · Tools · First run, rail from `components/WizardRail`; bad step → 1. Connect pings the typed URL (`POST /api/agents/ping`) and only Save stores the agent | `/api/health` 60 s, `/api/manifest` 60 s; `/api/agents` + `/api/agents/example/log` every 3 s while the example agent starts |
+| `/app/agents` | `agents` | `pages/Agents` — name · transport · url · last ping · tools mapped · runs; Ping, start/stop the example agent, delete with inline confirm; **Connect agent** → the wizard | `/api/agents` 3 s, `/api/runs` 10 s |
+| `/app/agents/new` | — | → `/app/onboarding/2` | — |
+| `/app/runs` | `runs` | `pages/Runs` — every run newest first: started · agent · cycles · `v0 → vN` · duration · status (`running` / `finished · not archived` / `demo tape` / `finished`); row → the run. **Start a run** → the start dialog | `/api/runs` 5 s (a live row's cycle count moves) |
+| `/app/runs/:id` | `run` | the run page — see "Run page" below | see "Run page" |
+| `/app/runs/:id/replay` | `run` with `replay: true` | the same page, arriving to watch the run's tape (the Replays page's **watch**) | see "Run page" |
+| `/app/runs/:id/cycles/:n` | `cycle` | `pages/Cycle` — one cycle's handoffs and config diff | `/api/cycles` 10 s, `/api/configs/{v}` ×2 for the diff |
+| `/app/replays` | `replays` | `pages/Replays` — rows whose `recording` is true, `golden` first then newest: recorded · duration · cycles · agent · **watch** | `/api/runs` 15 s |
+| `/app/settings` | `settings` | `pages/Settings` — **Run defaults** (the shared fields, persisted in localStorage), **Models** (five values from `manifest.models`, read-only), **Environment** (key status, Weave, API version). Nothing here writes to the API | `/api/manifest` 60 s; `health` from the shell |
+| unknown under `/app` | — | → `/app/runs` | — |
+| unknown elsewhere | — | → `/` | — |
+
+`id` in the `run` and `cycle` kinds is `live`, `golden`, or a history folder name (see the identity rule).
+
+## The shell
+
+`components/Shell.tsx` is a Linear-style left rail from `md` up — Home · Current run (only while a run or
+replay is on screen) · *Workspace*: Agents · Runs · Replays · Settings — collapsible to a 48 px icon rail
+with `[`, the state kept in localStorage; below `md` it is a top bar whose menu opens as a modal
+(`hooks/useModal`: focus moves in, Tab wraps, Esc closes, the page stops scrolling, focus returns — the same
+hook the start dialog uses). The onboarding wizard and the landing render outside it.
+
+The shell polls `/api/loop` and `/api/replay` every 2 s, `/api/status` every 1 s while something is running
+or replaying (2 s otherwise), and `/api/health` every 60 s. That feeds its "Current run" item (the dot pulses
+while the loop runs; "Current run · paused" while a replay is paused) and the no-key line in the rail
+footer, and is handed to the page underneath as `ShellData = {loop, replay, status, statusError, health,
+refresh}` — no page polls those four routes itself. `ApiDown` renders in the shell's status slot when both
+`/api/loop` and `/api/replay` have never answered. Content fades 120 ms on route change (off under reduced
+motion); nothing slides. Page titles keep the serif `display` class at 48 px; everything else is Inter.
+
+## Starting a run
+
+One dialog, `components/StartDialog.tsx`, opened from **Heal** on Home, **Start a run** on Runs, and (as the
+empty state) "Start your first heal". It is `RunSettingsFields` — the rows the wizard's First run step also
+uses — plus an **agent picker** from `GET /api/agents` (the example agent is disabled with "stopped" unless
+its row says `running`), the estimate line, and **Heal**. Submit is `POST /api/loop/start` with
+`toStartBody(settings)` → `/app/runs/live`; a 409 (something already running) also goes there; any other
+error is shown inline. Without `WANDB_API_KEY` (`health.has_api_key === false`) Heal is disabled with the
+reason in its tooltip. The dialog fetches agents and the manifest once per opening.
+
+The settings themselves (`lib/settings.ts`, `RunSettings`) live in `App` state and are written to
+localStorage on every change (never on mount, so an untouched browser keeps no key). The Settings page edits
+the same object, so what it shows is literally what the next dialog opens with.
+
+## Rules the pages share
+
+**First-run rule** (Home). Nothing connected beyond the built-in rows, no history beyond the demo tape, and
+nothing running → `replace` to `/app/onboarding/1`, so Back does not bounce through Home. "Skip for now" is
+remembered for the tab's session (`sessionStorage`). Home renders nothing until the rule can be decided, so it
+never flashes before redirecting.
+
+**Identity rule** (from Block 4). `GET /api/runs` names the un-archived run literally `"live"`; it is
+archived and given a real id when the *next* run starts. So `/app/runs/live` always means "the current run"
+(running, or finished but not yet archived) and history runs are `/app/runs/<id>`. `POST /api/loop/start`
+returns no id, and the live row appears only after cycle 1 — the run page treats 404-while-`loop.running`
+as "starting…", never as an error. A bookmark to `/app/runs/live` changes meaning when a new run starts;
+that is what the word says.
+
+**Replay rule** (from Block 4). During a replay only `live` reads are overridden by the tape;
+`?source=run:<id>` is always served as asked, and `/api/status` has no `source` at all. So when **watch**
+is pressed on a history run, the run page switches its reads to `live` + `/api/status` for the duration and
+back when the replay stops. Leaving the run on screen **stops** the replay (`POST /api/replay/stop`): nothing
+plays off-screen, so the rail's "Current run" item only ever reports what is visible.
+
+**Display rules** live in `lib/derive.ts` as pure functions, never in JSX: a run's status label, its
+`v0 → vN` span, its agent's name (`agent.name`, else the raw `target`), the agent card's "blocks N of M known
+attacks" (from `state.vulnerability`: `suite_size − landed[vFinal]`; "not measured" when the run has none),
+the Needs-attention rows (landed and unpatched, or patch rejected — only from a `live` read whose
+`state.source` is really `"live"`, since an idle API answers `live` with the golden tape), and the replay
+rows (`recording === true`, golden first).
+
+## Run page
+
+Written by lane 4B (`feature/run-detail`): `/app/runs/:id` live and finished states, the `replay` flag,
+cycle pages, rollback.
+
+## Files
+
+```
+web/src/
+  main.tsx  App.tsx          App: landing / wizard / shell split, run settings state, the pages switch
+  api.ts                     typed fetchers, one per route; types mirror chaos/schemas.py and api/store.py rows
+  lib/routes.ts              parse / href / navigate / replace / useRoute; the Route kinds in the table above
+  lib/settings.ts            RunSettings, defaults, localStorage, toStartBody, the estimate line
+  lib/derive.ts              every label, count and state derived from records
+  lib/previewSvg.ts          cycleChartSvg — the gate chart used on Home's cards and the run page
+  lib/ui.ts                  shared class strings (primaryButton, textButton) and NO_KEY_LINE
+  hooks/usePoll.ts           {data, error, refresh} on an interval, paused while the tab is hidden
+  hooks/useModal.ts          focus trap + scroll lock for the dialog and the small-screen menu
+  components/Shell.tsx       the rail, its polls, ShellData
+  components/StartDialog.tsx the start dialog
+  components/RunSettingsFields.tsx  the settings rows (dialog, Settings page, wizard step 4)
+  components/ApiDown.tsx     "API unreachable · retry"
+  components/ui/             liquid-metal-border (MetalFrame), splash-backdrop, orb, agent-plan, interactive-list-preview
+  pages/Intro Home Onboarding Agents Runs Replays Settings   (this lane)
+  pages/RunLive Results Cycle + components/CyclesBox CycleTimeline ConfigDiff ReplayControls PreviewRow   (lane 4B)
+```
+
+Commands: `npm --prefix web run build`, `npm --prefix web run lint` (oxlint; 10 known warnings in `ui/*` and
+`useDwell`), `uv run uvicorn api.main:app --port 8000` to serve the built app and the API together.
+
+---
+
+# Historical — the Sep 12 implementation plan
+
+Kept for its section numbers: `api/main.py`, `api/store.py`, `api/manifest.py`, `api/replay.py`,
+`api/attack.py`, `api/loop_ctl.py`, `web/src/api.ts`, `lib/derive.ts` and several run-page files cite §2
+(data), §3 (API), §4 (screens), §5 (stack), §7 (demo flow) and §8 (risks). §3 is still the fullest
+description of the API's routes. The screens in §1 and §4, the `?page=` navigation, the Heal page and the
+settings drawer no longer exist; the section above is what is built.
 
 Written Sat Sep 12, 6:40 PM against commit `89b74c6`; revised 7:20 PM after Owen's three-page layout review and 7:30 PM after the Interactive List Preview and Agent Plan components were handed over. Execute from this file. The backend contracts referenced here are what `chaos/` produces today; four small backend additions are requested in section 9 and everything degrades gracefully without them.
 
 Decisions already made (do not reopen): React app is the product; three pages — Intro, Agents, Results — plus an optional Analysis tab; dark monochrome per Owen's UI standard; four 21st.dev components are used verbatim from `~/.cursor/skills/component-library/prompts/` — the liquid-metal hero (Intro), the Orb (Agents), the Agent Plan (`agent-plan.tsx`, the agents' work on the Agents page) and the Interactive List Preview (`interactive-list-preview.tsx`, the cycle list on Results) — with every deviation from the pasted source listed in §4 and commented at the top of the file; the hover preview shows a single-color chart (browser SVG by default, marimo PNG if the Analysis tab ships), not a stock photo; dependencies are added exactly as the four prompts list them; live attack runs from the UI; Weave opens in a new tab via buttons, never an iframe; marimo is an optional Analysis tab decided Sunday 10:30; no fake inputs and no fake motion — orbs animate only from a real backend phase signal, status is never clickable, and any replay is labeled as such.
-
----
-
-## Routes (added Sep 18, 2026 — supersedes the `?page=` navigation described below)
-
-The app is split into a landing page at `/` and the tool under `/app`, inside a persistent shell
-(`components/Shell.tsx`: a Linear-style left rail from `md` up — Home · Current run (only while a run or
-replay is on screen) · *Workspace*: Agents · Runs · Replays · Settings — collapsible to a 48 px icon rail
-with `[`, the state kept in localStorage; below `md` a top bar with a menu button). The onboarding wizard
-renders outside the shell, full-screen like the landing. Routing is `lib/routes.ts` — `parse(pathname)`,
-`href(route)`, `navigate(route)` (pushState), `replace(route)` (replaceState), `useRoute()` (popstate) — no
-router dependency. The API serves `web/dist/index.html` for every `/app` path so a hard refresh works
-(`api/main.py`, "Built dashboard"; `tests/test_static.py`). Old `?page=…&n=…` links are rewritten once on
-load (`redirectLegacy()` in `main.tsx`).
-
-| Path | Component today (Block 4 replaces the ones marked *temporary*) | Data it polls |
-| --- | --- | --- |
-| `/` | `pages/Intro` + `ui/splash-backdrop` (the only page with the shaders) | nothing |
-| `/app`, `/app/home` | `pages/Home` — minimal titled page; owns the first-run rule (nothing connected, no history beyond `golden`, nothing running → `replace` to `/app/onboarding/1`; "Skip for now" is remembered for the tab's session); `ApiDown` when a load has never answered | `/api/agents` 15 s, `/api/runs` 15 s, `loop` from the shell |
-| `/app/onboarding/:step` | `pages/Onboarding` (outside the shell) — Choose · Connect · Tools · First run, rail from `components/WizardRail`; bad step → 1 | `/api/health` 60 s, `/api/manifest` 60 s; `/api/agents` + `/api/agents/example/log` every 3 s while the example agent starts |
-| `/app/agents` | `pages/Agents` — the list: name · transport · url · last ping · tools mapped · runs; Ping, start/stop the example agent, delete with inline confirm; **Connect agent** → the wizard | `/api/agents` 3 s, `/api/runs` 10 s |
-| `/app/agents/new` | → `/app/onboarding/2` | — |
-| `/app/runs` | `pages/Heal` — start a run, settings drawer, resume/stop replay *(temporary)* | via the shell |
-| `/app/runs/live` | `pages/RunLive` while `loop.running` or a replay is active, else `pages/Results` — *temporary* | RunLive: `loop` + `status` from the shell, `/api/cycles` 2–10 s, `/api/state` 2–10 s; Results: `/api/state` 10 s, `/api/cycles` 2–10 s, `/api/manifest` 60 s (seed-attack preview only when the API's default agent and the run's `loop.settings.target` are both the built-in one) |
-| `/app/runs/live/cycles/:n` | `pages/Cycle` | `/api/cycles` 10 s, `/api/configs/{v}` ×2 for the diff |
-| `/app/runs/:id`, `/app/runs/:id/cycles/:n` (any other id) | placeholder in `App.tsx` naming the run; Block 4 builds the page | nothing |
-| `/app/replays`, `/app/settings` | titled placeholders in `App.tsx`; Block 4 builds the pages | nothing |
-| unknown under `/app` | → `/app/runs` | — |
-| unknown elsewhere | → `/` | — |
-
-The shell itself polls `/api/loop` and `/api/replay` every 2 s, `/api/status` every 1 s while something
-is running or replaying (2 s otherwise), and `/api/health` every 60 s, for its "Current run" item (shown
-while a run or replay is on screen; the dot pulses while the loop runs, and the label reads "Current run ·
-paused" while a replay is paused), the no-key line in the rail footer, and hands `loop`, `replay`,
-`status`, `health` and a `refresh()` to the page underneath — no page polls those routes itself. Below `md`
-the rail opens as a modal menu (`hooks/useModal`: focus moves in, Tab wraps, Esc closes, the page stops
-scrolling, focus returns) — the same hook the settings drawer uses.
-`ApiDown` renders in the shell's status slot when both
-`/api/loop` and `/api/replay` have never answered. Content fades 120 ms on route change (off under reduced
-motion); nothing slides. Page titles keep the serif `display` class at 48 px; everything else is Inter.
-
-Nothing plays off-screen: whenever the route is anything but `/app/runs/live` (a shell link, browser Back,
-or a deep link arriving with a tape still playing), `App` asks `/api/replay` and pauses a replay that is
-`active && !paused`. One mechanism, decided on the fresh answer, so a tape that was just stopped is left alone.
 
 ---
 

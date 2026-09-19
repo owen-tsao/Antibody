@@ -1,6 +1,6 @@
 # Frontend handoff
 
-> **Historical (Sep 18, 2026).** Written for the pre-shell UI. The `?page=` and `?demo=` links below no longer exist: `?page=` links redirect once to their `/app/...` path, and the `?demo=` harness was removed. See `FRONTEND.md` → "Routes" for the current addresses.
+> **Historical — superseded by `docs/plans/00-overview.md`.** Written Sep 12–14 for the pre-shell UI. The `?page=` and `?demo=` links below no longer exist: `?page=` links redirect once to their `/app/...` path, and the `?demo=` harness was removed. See `FRONTEND.md` → "Routes" for the current addresses.
 
 Short guide so you can poke at the UI that already exists while the remaining slices get built. Full plan lives in `FRONTEND.md`; this is just what you need right now.
 
