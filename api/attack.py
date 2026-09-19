@@ -141,7 +141,7 @@ def find_config(version: int) -> AgentConfig | None:
     return store.read_config(store.resolve_source("live"), version)
 
 
-def _run(cfg: AgentConfig, scenario: Scenario) -> dict:
+def _run(cfg: AgentConfig, scenario: Scenario, target: str | None) -> dict:
     try:
         # Imported inside the guarded block: if either import ever fails, the lock below still gets
         # released instead of every later attack answering 409 until the server restarts.
@@ -150,7 +150,7 @@ def _run(cfg: AgentConfig, scenario: Scenario) -> dict:
 
         _ensure_weave()
         t0 = time.monotonic()
-        episode = run_target_agent(cfg, scenario)
+        episode = run_target_agent(cfg, scenario, target_name=target)
         verdict = judge_episode(scenario, episode)
         duration = time.monotonic() - t0
         return {
@@ -177,31 +177,33 @@ def _run(cfg: AgentConfig, scenario: Scenario) -> dict:
         _attack_lock.release()
 
 
-def unsupported_target() -> str | None:
-    """Why the configured target cannot be previewed here, or None when it can (the built-in agent)."""
+def unsupported_target(target: str | None = None) -> str | None:
+    """Why `target` (default: the configured one) cannot be previewed here, or None when it can (the built-in agent)."""
     from chaos.target import TARGET_ENV, resolve_target
 
     try:
-        target = resolve_target()
+        resolved = resolve_target(target)
     except ValueError as e:
         return str(e)
-    if target.transport != "in-process":
+    if resolved.transport != "in-process":
+        where = f"the running loop's agent is {resolved.name}" if target else f"{TARGET_ENV} points at {resolved.name}"
         return (
-            f"the seed-attack preview runs only against the built-in agent; {TARGET_ENV} points at "
-            f"{target.name} (via {target.transport}), whose tool server must live in the loop process"
+            f"the seed-attack preview runs only against the built-in agent; {where} (via {resolved.transport}), "
+            "whose tool server must live in the loop process"
         )
     return None
 
 
-def run(cfg: AgentConfig, scenario: Scenario) -> dict:
-    """Run target + judge with a wall-clock budget. Raises AttackUnsupported, AttackBusy, AttackTimeout or AttackFailed."""
-    reason = unsupported_target()
+def run(cfg: AgentConfig, scenario: Scenario, target: str | None = None) -> dict:
+    """Run target + judge with a wall-clock budget against `target` (a canonical target string; None = the
+    configured default). Raises AttackUnsupported, AttackBusy, AttackTimeout or AttackFailed."""
+    reason = unsupported_target(target)
     if reason is not None:
         raise AttackUnsupported(reason)
     if not _attack_lock.acquire(blocking=False):
         raise AttackBusy()
     try:
-        future: Future[dict] = _executor.submit(_run, cfg, scenario)
+        future: Future[dict] = _executor.submit(_run, cfg, scenario, target)
     except BaseException:
         _attack_lock.release()
         raise

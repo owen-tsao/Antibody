@@ -570,12 +570,26 @@ class AttackBody(BaseModel):
     version: int = Field(0, ge=0)
 
 
+def _preview_target() -> str | None:
+    """The agent the preview should attack: the running loop's, as a canonical target string; None (the API
+    process's own default) when no loop this API started is running, or its agent row is gone."""
+    live = loop_ctl.state()
+    if not live.get("running") or not live.get("settings"):
+        return None
+    try:
+        return agents.resolve_agent(live["settings"].get("target"))
+    except ValueError:
+        return None
+
+
 @app.post("/api/attack")
 def attack_preview(body: AttackBody) -> dict:
-    # An external target's tool server lives in the loop process; previewing from here would bind its
-    # port under uvicorn and the loop could never start. Refused before the key check: it is unsupported
-    # with or without one.
-    unsupported = attack.unsupported_target()
+    # Previews the agent the running loop is hardening, so the run page's preview and the cycles it shows
+    # agree; with no loop running, the API process's own target. An external target's tool server lives in
+    # the loop process; previewing from here would bind its port under uvicorn and the loop could never
+    # start. Refused before the key check: it is unsupported with or without one.
+    target = _preview_target()
+    unsupported = attack.unsupported_target(target)
     if unsupported is not None:
         raise HTTPException(501, unsupported)
     # Unconditional: the target and judge call the inference endpoint with this key, so the attack
@@ -593,7 +607,7 @@ def attack_preview(body: AttackBody) -> dict:
             raise HTTPException(503, f"config v{body.version} is being written; retry")
         raise HTTPException(404, f"no config v{body.version}")
     try:
-        return attack.run(cfg, scenario)
+        return attack.run(cfg, scenario, target)
     except attack.AttackBusy:
         raise HTTPException(409, "an attack is already running")
     except attack.AttackTimeout:
