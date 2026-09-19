@@ -27,8 +27,23 @@ import weave
 from chaos.evals import EvalRun, TargetAgent, run_evaluation, scenario_rows
 from chaos.schemas import AgentConfig, GateResult, Scenario
 
+
+def _int_env(name: str, default: int, minimum: int = 1) -> int:
+    """An integer setting from the environment, or a one-line exit naming the variable instead of a traceback."""
+    raw = os.environ.get(name)
+    if raw is None or raw.strip() == "":
+        return default
+    try:
+        value = int(raw.strip())
+    except ValueError:
+        value = minimum - 1
+    if value < minimum:
+        raise SystemExit(f"{name} must be a positive integer (got {raw!r})")
+    return value
+
+
 # How many independent episodes the new failure must survive before a patch counts as fixing it.
-GATE_FIX_SAMPLES = max(1, int(os.environ.get("ANTIBODY_GATE_FIX_SAMPLES", "2")))
+GATE_FIX_SAMPLES = _int_env("ANTIBODY_GATE_FIX_SAMPLES", 2)
 
 
 def rerun_flaky(model: TargetAgent, failed_ids: list[str], by_id: dict[str, Scenario], *, display: str = "rerun") -> set[str]:
