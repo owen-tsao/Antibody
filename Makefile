@@ -51,7 +51,7 @@ run:
 	uv run python -m chaos.loop run $(ARGS)
 
 check:
-	uv run python -m chaos.loop check $(ARGS)
+	@uv run python -m chaos.loop check $(ARGS)
 
 test:
 	uv run pytest
