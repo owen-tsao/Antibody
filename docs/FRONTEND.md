@@ -21,12 +21,12 @@ load (`redirectLegacy()` in `main.tsx`).
 | Path | Component today (Block 4 replaces the ones marked *temporary*) | Data it polls |
 | --- | --- | --- |
 | `/` | `pages/Intro` + `ui/splash-backdrop` (the only page with the shaders) | nothing |
-| `/app`, `/app/home` | `pages/Home` — minimal titled page; owns the first-run rule (nothing connected, no history beyond `golden`, nothing running → `replace` to `/app/onboarding/1`; "Skip for now" is remembered for the tab's session) | `/api/agents` 15 s, `/api/runs` 15 s, `loop` from the shell |
-| `/app/onboarding/:step` | `pages/Onboarding` (outside the shell) — Choose · Connect · Tools · First run, rail from `components/WizardRail`; bad step → 1 | `/api/health` 60 s; `/api/agents` + `/api/agents/example/log` every 3 s while the example agent starts |
+| `/app`, `/app/home` | `pages/Home` — minimal titled page; owns the first-run rule (nothing connected, no history beyond `golden`, nothing running → `replace` to `/app/onboarding/1`; "Skip for now" is remembered for the tab's session); `ApiDown` when a load has never answered | `/api/agents` 15 s, `/api/runs` 15 s, `loop` from the shell |
+| `/app/onboarding/:step` | `pages/Onboarding` (outside the shell) — Choose · Connect · Tools · First run, rail from `components/WizardRail`; bad step → 1 | `/api/health` 60 s, `/api/manifest` 60 s; `/api/agents` + `/api/agents/example/log` every 3 s while the example agent starts |
 | `/app/agents` | `pages/Agents` — the list: name · transport · url · last ping · tools mapped · runs; Ping, start/stop the example agent, delete with inline confirm; **Connect agent** → the wizard | `/api/agents` 3 s, `/api/runs` 10 s |
 | `/app/agents/new` | → `/app/onboarding/2` | — |
 | `/app/runs` | `pages/Heal` — start a run, settings drawer, resume/stop replay *(temporary)* | via the shell |
-| `/app/runs/live` | `pages/RunLive` while `loop.running` or a replay is active, else `pages/Results` — *temporary* | RunLive: `loop` + `status` from the shell, `/api/cycles` 2–10 s, `/api/state` 2–10 s; Results: `/api/state` 10 s, `/api/cycles` 2–10 s, `/api/manifest` 60 s (seed-attack preview shown only for the in-process agent) |
+| `/app/runs/live` | `pages/RunLive` while `loop.running` or a replay is active, else `pages/Results` — *temporary* | RunLive: `loop` + `status` from the shell, `/api/cycles` 2–10 s, `/api/state` 2–10 s; Results: `/api/state` 10 s, `/api/cycles` 2–10 s, `/api/manifest` 60 s (seed-attack preview only when the API's default agent and the run's `loop.settings.target` are both the built-in one) |
 | `/app/runs/live/cycles/:n` | `pages/Cycle` | `/api/cycles` 10 s, `/api/configs/{v}` ×2 for the diff |
 | `/app/runs/:id`, `/app/runs/:id/cycles/:n` (any other id) | placeholder in `App.tsx` naming the run; Block 4 builds the page | nothing |
 | `/app/replays`, `/app/settings` | titled placeholders in `App.tsx`; Block 4 builds the pages | nothing |
@@ -34,9 +34,12 @@ load (`redirectLegacy()` in `main.tsx`).
 | unknown elsewhere | → `/` | — |
 
 The shell itself polls `/api/loop` and `/api/replay` every 2 s, `/api/status` every 1 s while something
-is running or replaying (2 s otherwise), and `/api/health` every 60 s, for its "Current run" item ("running ·
-cycle N" / "replaying" / "replay paused" / hidden), the no-key line in the rail footer, and hands `loop`,
-`replay`, `status`, `health` and a `refresh()` to the page underneath — no page polls those routes itself.
+is running or replaying (2 s otherwise), and `/api/health` every 60 s, for its "Current run" item (shown
+while a run or replay is on screen; the dot pulses while the loop runs, and the label reads "Current run ·
+paused" while a replay is paused), the no-key line in the rail footer, and hands `loop`, `replay`,
+`status`, `health` and a `refresh()` to the page underneath — no page polls those routes itself. Below `md`
+the rail opens as a modal menu (`hooks/useModal`: focus moves in, Tab wraps, Esc closes, the page stops
+scrolling, focus returns) — the same hook the settings drawer uses.
 `ApiDown` renders in the shell's status slot when both
 `/api/loop` and `/api/replay` have never answered. Content fades 120 ms on route change (off under reduced
 motion); nothing slides. Page titles keep the serif `display` class at 48 px; everything else is Inter.
