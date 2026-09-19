@@ -1,5 +1,6 @@
-// Run settings for the start screen (docs/plans/02-run-settings-and-history.md, A2). Every field maps
-// to a flag `chaos.loop run` already has; the API contract is `LoopStartBody` in api.ts. No flag, no field.
+// Run settings for a start form (docs/plans/02-run-settings-and-history.md, A2; Block 3.4 adds `untilQuiet`
+// and `target`). Every field maps to a flag `chaos.loop run` already has; the API contract is `LoopStartBody`
+// in api.ts. No flag, no field.
 
 import type { LoopStartBody, World } from "@/api";
 
@@ -14,15 +15,20 @@ export interface RunSettings {
   repairAttempts: number;
   /** false → `--no-second-pass`. */
   secondPass: boolean;
-  /** "mock" → `ANTIBODY_NO_ZENDESK=1` in the loop's environment. */
+  /** `--until-quiet N`: stop once N chaos attacks in a row are blocked; `chaosCycles` becomes the cap. null = off. */
+  untilQuiet: number | null;
+  /** "mock" → `ANTIBODY_NO_ZENDESK=1` in the loop's environment. Not in the fields any more; the API default `auto` is right. */
   world: World;
+  /** The agent to attack (an id from GET /api/agents); null = the API's own default. */
+  target: string | null;
 }
 
 // Bounds are A1's `Field(ge=, le=)`; `SEEDS.max` is the API's cap when the manifest cannot say how many
-// seeds exist (it can, and the drawer uses that smaller number).
+// seeds exist (it can, and the fields use that smaller number).
 export const CHAOS_CYCLES = { min: 0, max: 10 } as const;
 export const SEEDS = { min: 0, max: 10 } as const;
 export const REPAIR_ATTEMPTS = { min: 1, max: 5 } as const;
+export const UNTIL_QUIET = { min: 1, max: 10 } as const;
 
 /** Mirrors the CLI's own defaults (chaos/loop.py) and A1's Pydantic defaults. */
 export const DEFAULT_SETTINGS: RunSettings = {
@@ -30,7 +36,9 @@ export const DEFAULT_SETTINGS: RunSettings = {
   chaosCycles: 3,
   repairAttempts: 3,
   secondPass: true,
+  untilQuiet: null,
   world: "auto",
+  target: null,
 };
 
 export const SETTINGS_KEY = "antibody.settings.v1";
@@ -50,12 +58,16 @@ function clampInt(v: unknown, min: number, max: number, fallback: number): numbe
 export function normalizeSettings(raw: unknown): RunSettings {
   if (!raw || typeof raw !== "object") return { ...DEFAULT_SETTINGS };
   const r = raw as Record<string, unknown>;
+  const chaosCycles = clampInt(r.chaosCycles, CHAOS_CYCLES.min, CHAOS_CYCLES.max, DEFAULT_SETTINGS.chaosCycles);
   return {
     seeds: r.seeds === null ? null : clampInt(r.seeds, SEEDS.min, SEEDS.max, DEFAULT_SETTINGS.seeds ?? 0),
-    chaosCycles: clampInt(r.chaosCycles, CHAOS_CYCLES.min, CHAOS_CYCLES.max, DEFAULT_SETTINGS.chaosCycles),
+    chaosCycles,
     repairAttempts: clampInt(r.repairAttempts, REPAIR_ATTEMPTS.min, REPAIR_ATTEMPTS.max, DEFAULT_SETTINGS.repairAttempts),
     secondPass: typeof r.secondPass === "boolean" ? r.secondPass : DEFAULT_SETTINGS.secondPass,
+    // The API rejects `until_quiet` above `chaos_cycles` (400), so the cap is enforced here too.
+    untilQuiet: typeof r.untilQuiet === "number" && chaosCycles > 0 ? clampInt(r.untilQuiet, UNTIL_QUIET.min, Math.min(UNTIL_QUIET.max, chaosCycles), 1) : null,
     world: r.world === "mock" ? "mock" : "auto",
+    target: typeof r.target === "string" && r.target ? r.target : null,
   };
 }
 
@@ -77,24 +89,28 @@ export function saveSettings(s: RunSettings): void {
   }
 }
 
+/** Whether the fields a person can edit are at their defaults; `target` is a choice, not a setting, and is not compared. */
 export function isDefaultSettings(s: RunSettings): boolean {
   return (
     s.seeds === DEFAULT_SETTINGS.seeds &&
     s.chaosCycles === DEFAULT_SETTINGS.chaosCycles &&
     s.repairAttempts === DEFAULT_SETTINGS.repairAttempts &&
     s.secondPass === DEFAULT_SETTINGS.secondPass &&
+    s.untilQuiet === DEFAULT_SETTINGS.untilQuiet &&
     s.world === DEFAULT_SETTINGS.world
   );
 }
 
-/** The POST /api/loop/start body for these settings. `target` is not here yet: Block 4 adds the agent picker. */
+/** The POST /api/loop/start body for these settings. */
 export function toStartBody(s: RunSettings): LoopStartBody {
   return {
     chaos_cycles: s.chaosCycles,
     seeds: s.seeds,
     repair_attempts: s.repairAttempts,
     second_pass: s.secondPass,
+    until_quiet: s.untilQuiet,
     world: s.world,
+    target: s.target,
   };
 }
 
@@ -112,13 +128,15 @@ export function settingsSummary(s: RunSettings): string[] {
   if (s.chaosCycles !== DEFAULT_SETTINGS.chaosCycles) parts.push(s.chaosCycles === 0 ? "no chaos" : plural(s.chaosCycles, "cycle"));
   if (s.repairAttempts !== DEFAULT_SETTINGS.repairAttempts) parts.push(plural(s.repairAttempts, "repair"));
   if (s.secondPass !== DEFAULT_SETTINGS.secondPass) parts.push(s.secondPass ? "second pass" : "no second pass");
+  if (s.untilQuiet !== DEFAULT_SETTINGS.untilQuiet) parts.push(`quiet after ${s.untilQuiet}`);
   if (s.world !== DEFAULT_SETTINGS.world) parts.push(s.world);
   return parts;
 }
 
 /**
  * Cycles the run will attempt: seeds (all → `seedCount`, or the API cap when unknown; `--seeds N` past the
- * count just runs them all) plus chaos cycles. 0 means A1 answers 400 "nothing to run".
+ * count just runs them all) plus chaos cycles. 0 means A1 answers 400 "nothing to run". With `untilQuiet`
+ * set this is a ceiling, not a plan.
  */
 export function plannedCycles(s: RunSettings, seedCount: number | null): number {
   const available = seedCount ?? SEEDS.max;
@@ -126,10 +144,11 @@ export function plannedCycles(s: RunSettings, seedCount: number | null): number 
   return seeds + s.chaosCycles;
 }
 
-/** "about 4 minutes" / "about a minute" / "nothing to run". */
+/** "about 4 minutes" / "at most 4 minutes" (until-quiet on) / "about a minute" / "nothing to run". */
 export function estimateLabel(s: RunSettings, seedCount: number | null): string {
   const cycles = plannedCycles(s, seedCount);
   if (cycles === 0) return "nothing to run";
   const minutes = Math.round(cycles * MINUTES_PER_CYCLE);
-  return minutes <= 1 ? "about a minute" : `about ${minutes} minutes`;
+  const qualifier = s.untilQuiet !== null ? "at most" : "about";
+  return minutes <= 1 ? `${qualifier} a minute` : `${qualifier} ${minutes} minutes`;
 }

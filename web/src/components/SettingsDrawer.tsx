@@ -2,22 +2,15 @@ import { motion, useReducedMotion } from "framer-motion";
 import { useEffect, useId, useRef, useState } from "react";
 
 import { api, type Manifest } from "@/api";
-import {
-  CHAOS_CYCLES,
-  DEFAULT_SETTINGS,
-  estimateLabel,
-  isDefaultSettings,
-  REPAIR_ATTEMPTS,
-  SEEDS,
-  type RunSettings,
-  type World,
-} from "@/lib/settings";
+import RunSettingsFields, { textButton } from "@/components/RunSettingsFields";
+import { DEFAULT_SETTINGS, estimateLabel, isDefaultSettings, type RunSettings } from "@/lib/settings";
 import { cn } from "@/lib/utils";
 
 /**
  * Settings for the next Heal run (docs/plans/02, A2). A solid panel on the right edge, over the splash:
  * no backdrop blur, because the shaders behind it would drop frames repainting through one. Monochrome,
- * the Agents header's type scale, text buttons with the `u-line` wipe for every control.
+ * text buttons with the `u-line` wipe for every control; the field rows are `RunSettingsFields`, shared
+ * with the onboarding wizard.
  *
  * The parent owns the settings (it sends them with POST /api/loop/start and persists them); this only
  * edits them. It is mounted while open, so the manifest is fetched per opening (cheap: the API caches it).
@@ -33,9 +26,6 @@ interface Props {
 }
 
 const FOCUSABLE = 'button:not([disabled]), [href], input:not([disabled]), select:not([disabled]), [tabindex]:not([tabindex="-1"])';
-
-const textButton =
-  "group rounded text-[13px] text-[var(--muted)] transition-colors hover:text-[var(--fg)] disabled:cursor-default disabled:text-[var(--faint)] disabled:hover:text-[var(--faint)]";
 
 export default function SettingsDrawer({ settings, onChange, onClose }: Props) {
   const reduced = useReducedMotion();
@@ -94,13 +84,6 @@ export default function SettingsDrawer({ settings, onChange, onClose }: Props) {
   }, []);
 
   const seedCount = manifest ? manifest.families.filter((f) => f.seed_id).length : null;
-  // The seeds stepper walks 0 … S−1 then "all" (= S, so no duplicate stop). S is the manifest's count,
-  // or the API's cap while the manifest is unknown.
-  const seedTop = Math.max(1, seedCount ?? SEEDS.max);
-  const set = (patch: Partial<RunSettings>) => onChange({ ...settings, ...patch });
-
-  const seedsDown = () => set({ seeds: settings.seeds === null ? seedTop - 1 : settings.seeds - 1 });
-  const seedsUp = () => set({ seeds: settings.seeds !== null && settings.seeds + 1 >= seedTop ? null : (settings.seeds ?? 0) + 1 });
 
   const slide = reduced
     ? { initial: { opacity: 0 }, animate: { opacity: 1 }, exit: { opacity: 0 }, transition: { duration: 0 } }
@@ -141,69 +124,18 @@ export default function SettingsDrawer({ settings, onChange, onClose }: Props) {
           </button>
         </header>
 
-        <div className="mt-6 divide-y divide-[var(--border)] border-y border-[var(--border)]">
-          <Row label="Seeds">
-            <Stepper
-              value={settings.seeds === null ? "all" : settings.seeds}
-              onDown={seedsDown}
-              onUp={seedsUp}
-              downDisabled={settings.seeds === SEEDS.min}
-              upDisabled={settings.seeds === null}
-              name="seeds"
-            />
-          </Row>
-          <Row label="Chaos cycles">
-            <Stepper
-              value={settings.chaosCycles}
-              onDown={() => set({ chaosCycles: settings.chaosCycles - 1 })}
-              onUp={() => set({ chaosCycles: settings.chaosCycles + 1 })}
-              downDisabled={settings.chaosCycles <= CHAOS_CYCLES.min}
-              upDisabled={settings.chaosCycles >= CHAOS_CYCLES.max}
-              name="chaos cycles"
-            />
-          </Row>
-          <Row label="Repair attempts">
-            <Stepper
-              value={settings.repairAttempts}
-              onDown={() => set({ repairAttempts: settings.repairAttempts - 1 })}
-              onUp={() => set({ repairAttempts: settings.repairAttempts + 1 })}
-              downDisabled={settings.repairAttempts <= REPAIR_ATTEMPTS.min}
-              upDisabled={settings.repairAttempts >= REPAIR_ATTEMPTS.max}
-              name="repair attempts"
-            />
-          </Row>
-          <Row label="Second pass">
-            <button
-              type="button"
-              role="switch"
-              aria-checked={settings.secondPass}
-              onClick={() => set({ secondPass: !settings.secondPass })}
-              className={cn(textButton, "tabular w-10 text-right", settings.secondPass && "text-[var(--fg)]")}
-            >
-              <span className="u-line">{settings.secondPass ? "on" : "off"}</span>
-            </button>
-          </Row>
-          <Row label="World">
-            <div className="flex items-baseline gap-3" role="group" aria-label="World">
-              {(["auto", "mock"] as World[]).map((w) => (
-                <button
-                  key={w}
-                  type="button"
-                  aria-pressed={settings.world === w}
-                  onClick={() => set({ world: w })}
-                  className={cn(textButton, settings.world === w && "text-[var(--fg)]")}
-                >
-                  <span className="u-line">{w}</span>
-                </button>
-              ))}
-            </div>
-          </Row>
+        <div className="mt-6">
+          <RunSettingsFields settings={settings} onChange={onChange} seedCount={seedCount} />
         </div>
 
         <div className="tabular mt-4 flex items-baseline justify-between text-[12px] text-[var(--faint)]">
           <span>{estimateLabel(settings, seedCount)}</span>
           {!isDefaultSettings(settings) && (
-            <button type="button" onClick={() => onChange({ ...DEFAULT_SETTINGS })} className={cn(textButton, "text-[12px] text-[var(--faint)]")}>
+            <button
+              type="button"
+              onClick={() => onChange({ ...DEFAULT_SETTINGS, target: settings.target })}
+              className={cn(textButton, "text-[12px] text-[var(--faint)]")}
+            >
               <span className="u-line">reset</span>
             </button>
           )}
@@ -223,45 +155,5 @@ export default function SettingsDrawer({ settings, onChange, onClose }: Props) {
         )}
       </motion.aside>
     </>
-  );
-}
-
-function Row({ label, children }: { label: string; children: React.ReactNode }) {
-  return (
-    <div className="flex items-baseline justify-between py-3">
-      <span className="text-[13px]">{label}</span>
-      {children}
-    </div>
-  );
-}
-
-function Stepper({
-  value,
-  onDown,
-  onUp,
-  downDisabled,
-  upDisabled,
-  name,
-}: {
-  value: number | string;
-  onDown: () => void;
-  onUp: () => void;
-  downDisabled: boolean;
-  upDisabled: boolean;
-  /** For the buttons' accessible names ("fewer seeds", "more seeds"). */
-  name: string;
-}) {
-  return (
-    <div className="flex items-baseline gap-3">
-      <button type="button" onClick={onDown} disabled={downDisabled} aria-label={`fewer ${name}`} className={textButton}>
-        <span className="u-line">−</span>
-      </button>
-      <span className="tabular w-7 text-center text-[13px]" aria-live="polite">
-        {value}
-      </span>
-      <button type="button" onClick={onUp} disabled={upDisabled} aria-label={`more ${name}`} className={textButton}>
-        <span className="u-line">+</span>
-      </button>
-    </div>
   );
 }
