@@ -43,10 +43,11 @@ export const DEFAULT_SETTINGS: RunSettings = {
 
 export const SETTINGS_KEY = "antibody.settings.v1";
 
-// The one constant behind "about N minutes". Measured on the golden run recorded 2026-09-13: six cycles
-// (two seeds, chaos, one second-pass retry) in 452 s of `data/golden/status_log.jsonl` (`t_rel` of its
-// last row) → 75 s per cycle. Repair attempts and the second pass only cost time when attacks land, so
-// they are not in the estimate; it is a floor, and says so with "about".
+// The one constant behind "about N minutes". Calibrated on the golden run recorded 2026-09-13: six cycles in
+// 452 s of `data/golden/status_log.jsonl` (`t_rel` of its last row) → 75 s per cycle. Runs now default to
+// three seeds and gate against an 11-row legit suite, so real cycles run somewhat longer; repair attempts
+// and the second pass only cost time when attacks land and are not in the estimate either. It is a floor,
+// and says so with "about".
 export const MINUTES_PER_CYCLE = 1.25;
 
 function clampInt(v: unknown, min: number, max: number, fallback: number): number {

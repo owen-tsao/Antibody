@@ -348,7 +348,7 @@ export interface RecordingInfo {
 export interface ReplayInfo {
   active: boolean;
   recording: RecordingInfo | null;
-  /** Frozen by Back on Agents (resumes from the same position), or the tape has ended (see `ended`). */
+  /** Frozen by the run page's ReplayControls (resumes from the same position), or the tape has ended (see `ended`). */
   paused?: boolean;
   /** The recording has played out. The session stays on its last frame until stopped; resume restarts it. */
   ended?: boolean;
@@ -459,10 +459,10 @@ export const api = {
   replayStart: (speed = 1, recording?: RecordingInfo["source"]) =>
     post<ReplayInfo>(`/api/replay/start?speed=${speed}${recording ? `&recording=${recording}` : ""}`),
   replayStop: () => post<{ stopped: boolean }>("/api/replay/stop"),
-  /** Back on Agents freezes the replay where it is; Heal's "Resume replay" continues it. 404 if none is active. */
+  /** ReplayControls' play/pause on the run page; pause freezes the tape where it is. 404 if none is active. Leaving the run stops the tape instead (App). */
   replayPause: () => post<ReplayInfo>("/api/replay/pause"),
   replayResume: () => post<ReplayInfo>("/api/replay/resume"),
-  /** Transport controls on Agents. Both keep pause state; the position is continuous across a speed change. */
+  /** ReplayControls' speed picker and scrubber. Both keep pause state; the position is continuous across a speed change. */
   replaySpeed: (speed: number) => post<ReplayInfo>(`/api/replay/speed?speed=${speed}`),
   replaySeek: (t: number) => post<ReplayInfo>(`/api/replay/seek?t=${Math.max(0, t).toFixed(1)}`),
   replay: () => get<ReplayInfo>("/api/replay"),
