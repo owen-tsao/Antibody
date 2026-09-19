@@ -22,7 +22,7 @@ dependency: `lib/routes.ts` is `parse(pathname)`, `href(route)`, `navigate(route
 | `/app/runs` | `runs` | `pages/Runs` — every run newest first: started · agent · cycles · `v0 → vN` · duration · status (`running` / `finished · not archived` / `demo tape` / `finished`); row → the run. **Start a run** → the start dialog | `/api/runs` 5 s (a live row's cycle count moves) |
 | `/app/runs/:id` | `run` | the run page — see "Run page" below | see "Run page" |
 | `/app/runs/:id/replay` | `run` with `replay: true` | the same page, arriving to watch the run's tape (the Replays page's **watch**) | see "Run page" |
-| `/app/runs/:id/cycles/:n` | `cycle` | `pages/Cycle` — one cycle's handoffs and config diff | `/api/cycles` 10 s, `/api/configs/{v}` ×2 for the diff |
+| `/app/runs/:id/cycles/:n` | `cycle` | `pages/Cycle` — one cycle's five steps, gate chart and config diff | `/api/cycles` 10 s, `/api/configs/{v}` ×2 for the diff |
 | `/app/replays` | `replays` | `pages/Replays` — rows whose `recording` is true, `golden` first then newest: recorded · duration · cycles · agent · **watch** | `/api/runs` 15 s |
 | `/app/settings` | `settings` | `pages/Settings` — **Run defaults** (the shared fields, persisted in localStorage), **Models** (five values from `manifest.models`, read-only), **Environment** (key status, Weave, API version). Nothing here writes to the API | `/api/manifest` 60 s; `health` from the shell |
 | unknown under `/app` | — | → `/app/runs` | — |
@@ -40,10 +40,12 @@ hook the start dialog uses). The onboarding wizard and the landing render outsid
 
 The shell polls `/api/loop` and `/api/replay` every 2 s, `/api/status` every 1 s while something is running
 or replaying (2 s otherwise), and `/api/health` every 60 s. That feeds its "Current run" item (the dot pulses
-while the loop runs; "Current run · paused" while a replay is paused) and the no-key line in the rail
-footer, and is handed to the page underneath as `ShellData = {loop, replay, status, statusError, health,
-refresh}` — no page polls those four routes itself. `ApiDown` renders in the shell's status slot when both
-`/api/loop` and `/api/replay` have never answered. Content fades 120 ms on route change (off under reduced
+while the loop runs; "Current run · paused" while a replay is paused; it links to the tape's own run —
+`/app/runs/golden` — while one plays, and to `live` otherwise) and the no-key line in the rail footer, and
+is handed to the page underneath as `ShellData = {loop, replay, status, statusError, health, refresh}` — no
+page polls those four routes itself. `ApiDown` renders in the shell's status slot when `/api/loop` and
+`/api/replay` have never answered, or have both missed two ticks in a row (`usePoll`'s `failing`); pages
+keep their last-good data meanwhile. Content fades 120 ms on route change (off under reduced
 motion); nothing slides. Page titles keep the serif `display` class at 48 px; everything else is Inter.
 
 ## Starting a run
@@ -140,13 +142,20 @@ web/src/
   lib/derive.ts              every label, count and state derived from records
   lib/previewSvg.ts          cycleChartSvg (the run page's hover chart) and sparkline (Home's cards)
   lib/ui.ts                  shared class strings (primaryButton, textButton) and NO_KEY_LINE
-  hooks/usePoll.ts           {data, error, refresh} on an interval, paused while the tab is hidden
+  lib/utils.ts               cn()
+  hooks/usePoll.ts           {data, error, failing, refresh} on an interval, paused while the tab is hidden
+  hooks/useDwell.ts          holds each polled phase on screen for a minimum time so sub-second phases still show
   hooks/useModal.ts          focus trap + scroll lock for the dialog and the small-screen menu
   components/Shell.tsx       the rail, its polls, ShellData
   components/StartDialog.tsx the start dialog
   components/RunSettingsFields.tsx  the settings rows (dialog, Settings page, wizard step 4)
   components/ApiDown.tsx     "API unreachable · retry"
-  components/ui/             liquid-metal-border (MetalFrame), splash-backdrop, orb, agent-plan, interactive-list-preview
+  components/ErrorBoundary.tsx  keeps a render error to an inline note (root, run page, MetalFrame)
+  components/OrbButton.tsx   the landing page's one control: a disc in a liquid-metal rim
+  components/WizardRail.tsx  the onboarding step rail
+  components/ui/             liquid-metal-border (MetalFrame), splash-backdrop, orb, agent-plan, interactive-list-preview,
+                             liquid-metal-hero (the verbatim demo splash-backdrop was tuned from) and the shadcn
+                             badge / button / card it imports
   pages/Intro Home Onboarding Agents Runs Replays Settings Run Cycle
   components/CyclesBox CycleTimeline ConfigDiff ReplayControls PreviewRow   (the run page's parts)
 ```

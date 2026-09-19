@@ -4,11 +4,14 @@ The Vite dev server proxies /api to this in development; in production the same 
 serves the built dashboard from web/dist (mounted at "/" after every /api route, only when the
 directory exists), so `make demo` is one server. Read routes serve the loop's files with a golden
 fallback (api.store) from one of three sources, `live`, `golden` or `run:<id>` (a past run under
-history/); /api/runs lists those runs with their manifests and names the agent each ran against.
+history/): /api/state, /api/status, /api/cycles, /api/configs (every saved version's summary row),
+/api/configs/{v} and /api/regression (the captured suite). /api/runs lists those runs with their manifests
+and names the agent each ran against; /api/runs/{id} is one run plus its config versions.
 /api/agents/* is the list of connected agents: add one by URL, ping it (or ping a bare URL before saving it),
-delete it, or start and stop the bundled example agent (api.agents, api.example_agent). /api/loop/* spawns
-and controls the loop as a subprocess with the settings in the request body, including which agent to
-attack (api.loop_ctl); there is no reset route — wiping runs/ is the CLI's `chaos.loop reset`;
+delete it, or start and stop the bundled example agent and read its log tail (api.agents, api.example_agent).
+/api/loop/* spawns and controls the loop as a subprocess with the settings in the request body, including
+which agent to attack, and /api/loop/log tails runs/loop.log (api.loop_ctl); there is no reset route —
+wiping runs/ is the CLI's `chaos.loop reset`;
 /api/manifest describes the default target and the models for the Intro line and carries the settings defaults;
 /api/attack runs one seed scenario in-process as a preview, against the running loop's agent when there is
 one (api.attack); /api/replay/* plays a recorded
