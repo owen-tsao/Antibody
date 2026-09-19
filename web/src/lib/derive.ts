@@ -1104,25 +1104,6 @@ export function runSummary(cycles: CycleRecord[], legitSize: number): RunSummary
 }
 
 /**
- * The Results headline as a sentence: `v0 → v3 · 3 patches shipped · 3 refused by the gate · legit users
- * never broke`. Rejections read as the gate doing its job, not as failures. "never broke" is only claimed
- * when every shipped patch passed the whole legit suite; otherwise the last gate's rate is shown.
- */
-export function storyLine(cycles: CycleRecord[], legitSize: number): string | null {
-  if (cycles.length === 0) return null;
-  const s = runSummary(cycles, legitSize);
-  const from = cycles[0].config_before;
-  const to = s.version ?? from;
-  const parts = [from === to ? `v${to}` : `v${from} → v${to}`];
-  parts.push(`${s.accepted} ${s.accepted === 1 ? "patch" : "patches"} shipped`);
-  if (s.rejected > 0) parts.push(`${s.rejected} refused by the gate`);
-  const shipped = cycles.filter((c) => c.gate?.accepted);
-  const legitHeld = shipped.length > 0 && shipped.every((c) => (c.gate?.legit_pass_rate ?? 0) >= 1);
-  parts.push(legitHeld ? "legit users never broke" : `legit users ${s.legit}`);
-  return parts.join(" · ");
-}
-
-/**
  * The real Zendesk ticket an episode worked, when the run was on the Zendesk world. The URL is only
  * trusted if it is an https link to a Zendesk agent ticket page: the record is data, not a place to
  * put an arbitrary href.
