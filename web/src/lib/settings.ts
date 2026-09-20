@@ -21,6 +21,8 @@ export interface RunSettings {
   world: World;
   /** The agent to attack (an id from GET /api/agents); null = the API's own default. */
   target: string | null;
+  /** false → `--no-vulnerability`: skip the end-of-run measurement of what still lands on v0 and the final version. */
+  vulnerability: boolean;
 }
 
 // Bounds are A1's `Field(ge=, le=)`; `SEEDS.max` is the API's cap when the manifest cannot say how many
@@ -39,6 +41,7 @@ export const DEFAULT_SETTINGS: RunSettings = {
   untilQuiet: null,
   world: "auto",
   target: null,
+  vulnerability: true,
 };
 
 const SETTINGS_KEY = "antibody.settings.v1";
@@ -70,6 +73,7 @@ function normalizeSettings(raw: unknown): RunSettings {
     // `world` has no field any more; a "mock" persisted by an older build must not keep steering runs unseen.
     world: "auto",
     target: typeof r.target === "string" && r.target ? r.target : null,
+    vulnerability: typeof r.vulnerability === "boolean" ? r.vulnerability : DEFAULT_SETTINGS.vulnerability,
   };
 }
 
@@ -99,7 +103,8 @@ export function isDefaultSettings(s: RunSettings): boolean {
     s.repairAttempts === DEFAULT_SETTINGS.repairAttempts &&
     s.secondPass === DEFAULT_SETTINGS.secondPass &&
     s.untilQuiet === DEFAULT_SETTINGS.untilQuiet &&
-    s.world === DEFAULT_SETTINGS.world
+    s.world === DEFAULT_SETTINGS.world &&
+    s.vulnerability === DEFAULT_SETTINGS.vulnerability
   );
 }
 
@@ -113,6 +118,7 @@ export function toStartBody(s: RunSettings): LoopStartBody {
     until_quiet: s.untilQuiet,
     world: s.world,
     target: s.target,
+    vulnerability: s.vulnerability,
   };
 }
 

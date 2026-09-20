@@ -6,12 +6,8 @@ import type {
   AgentConfig,
   AgentPing,
   AgentTool,
-  AttackResult,
-  AttackToolCall,
   CycleRecord,
-  FailureKind,
   GateResult,
-  Health,
   LoopState,
   Manifest,
   Patch,
@@ -25,6 +21,7 @@ import type {
   ScenarioKind,
   State,
   Status,
+  ToolCall,
   ToolMapping,
   ToolPolicy,
 } from "@/api";
@@ -40,9 +37,9 @@ export function rowStatus(r: CycleRecord): RowStatus {
   return "failed";
 }
 
-export type PatchLayer = "tool" | "validator" | "prompt";
+type PatchLayer = "tool" | "validator" | "prompt";
 
-export function patchLayer(kind: PatchKind): PatchLayer {
+function patchLayer(kind: PatchKind): PatchLayer {
   if (kind === "tighten_tool_policy") return "tool";
   if (kind === "add_tool_validator") return "validator";
   return "prompt";
@@ -53,11 +50,11 @@ export function humanizeKind(kind: ScenarioKind | PatchKind | string): string {
 }
 
 /** Short attack label for the list's first column. Uses the scenario title's first clause. */
-export function shortTitle(r: CycleRecord): string {
+function shortTitle(r: CycleRecord): string {
   return shortTitleOf(r.scenario.title);
 }
 
-export function shortTitleOf(t: string): string {
+function shortTitleOf(t: string): string {
   const cut = t.search(/[;:—]| causes | trigger| must /);
   return (cut > 12 ? t.slice(0, cut) : t).trim();
 }
@@ -107,73 +104,10 @@ function headline(cycles: CycleRecord[]): Headline {
   };
 }
 
-export interface Handoff {
-  from: string;
-  to: string;
-  payload: string;
-  evidence?: string;
-  tone?: "danger" | "ok";
-  /** Target → Judge only: the episode's calls, one span each, so the cited call can be red on its own. */
-  calls?: PreviewCall[];
-}
-
 /** The target's tool calls as far as the record shows: the episode when present, else the judge's cited call. */
 function recordCalls(r: CycleRecord): CallLike[] {
   const tc = r.verdict.evidence.tool_call;
   return r.episode?.tool_calls ?? (tc ? [tc] : []);
-}
-
-/** The five handoff lines in the cycle detail. Only what the record actually contains. */
-export function handoffs(r: CycleRecord): Handoff[] {
-  const out: Handoff[] = [];
-  out.push({
-    from: "Chaos",
-    to: "Target",
-    payload: `“${r.scenario.user_message}”`,
-    evidence: r.scenario.faults.map((f) => `${f.tool} · ${f.mode}`).join(", ") || undefined,
-  });
-
-  const tc = r.verdict.evidence.tool_call;
-  const calls = previewCalls(recordCalls(r), tc, r.verdict.passed);
-  out.push({
-    from: "Target",
-    to: "Judge",
-    payload: calls.length
-      ? calls.map((c) => c.label).join(" · ")
-      : r.attack_succeeded
-        ? "(see verdict)"
-        : "handled safely",
-    calls: calls.length ? calls : undefined,
-  });
-
-  out.push({
-    from: "Judge",
-    to: r.attack_succeeded ? "Repair" : "—",
-    payload: r.verdict.passed
-      ? `PASS · ${r.verdict.method}`
-      : `FAIL · ${r.verdict.failure_kind ?? "unknown"} · ${r.verdict.method}`,
-    evidence: r.verdict.reason,
-    tone: r.verdict.passed ? "ok" : "danger",
-  });
-
-  if (r.patch) {
-    out.push({
-      from: "Repair",
-      to: "Gate",
-      payload: `${r.patch.kind} · layer: ${patchLayer(r.patch.kind)}`,
-      evidence: r.patch.guardrail_rule ?? r.patch.validator_name ?? r.patch.system_prompt ?? r.patch.rationale,
-    });
-  }
-  if (r.gate) {
-    out.push({
-      from: "Gate",
-      to: `v${r.config_after}`,
-      payload: `${r.gate.accepted ? "ACCEPTED" : "REJECTED"} · regression ${regressionPct(r)}`,
-      evidence: r.gate.reason,
-      tone: r.gate.accepted ? "ok" : "danger",
-    });
-  }
-  return out;
 }
 
 export interface DiffLine {
@@ -236,7 +170,7 @@ export function fmtDuration(seconds: number | null): string {
 }
 
 // ---------------------------------------------------------------------------
-// Seed attack preview (docs/FRONTEND.md §4.3). A transient row above the cycle list; never stored.
+// Tool-call labels shared by the cycle page and the cycles box.
 // ---------------------------------------------------------------------------
 
 /** Tools that change the world when they execute. Mirrors SIDE_EFFECT_TOOLS in api/manifest.py. */
@@ -245,7 +179,7 @@ const SIDE_EFFECT_TOOLS: ReadonlySet<string> = new Set(["issue_refund", "send_em
 /** Free-text arguments that would blow a one-line row; the call is identified by the rest. */
 const VERBOSE_ARGS: ReadonlySet<string> = new Set(["reason", "subject", "body"]);
 
-type CallLike = Pick<AttackToolCall, "tool" | "args"> & { blocked_by_policy?: boolean; blocked_by?: string | null };
+type CallLike = Pick<ToolCall, "tool" | "args"> & Partial<Pick<ToolCall, "blocked_by_policy" | "blocked_by">>;
 
 /** `issue_refund(B-2001, 899.00)`. Amounts print with two decimals even when the model sent "899". */
 function toolCallLabel(tc: CallLike): string {
@@ -270,22 +204,6 @@ export interface PreviewCall {
   tone: "danger" | "blocked" | null;
   /** The policy reason, when the call was blocked (`policy: refunds require the customer to ask`). */
   blockedBy: string | null;
-}
-
-export interface AttackPreview {
-  version: number;
-  title: string;
-  calls: PreviewCall[];
-  passed: boolean | null;
-  failureKind: FailureKind | null;
-  reason: string;
-  /** What actually happened, in plain words: "refunded $899.00 on B-2001" / "blocked 1 refund". */
-  outcome: string | null;
-  durationS: number | null;
-  /** The live call did not complete; `calls`/verdict come from the recorded cycle instead. */
-  replayed: boolean;
-  /** Why the live call did not complete (`timed out`, `an attack is already running`, …). */
-  error: string | null;
 }
 
 /** Key order in `args` is not significant (the judge may rebuild the dict), so compare sorted entries. */
@@ -314,132 +232,13 @@ function previewCalls(calls: CallLike[], evidence?: CallLike | null, passed?: bo
   }));
 }
 
-function money(v: unknown): string | null {
-  const n = Number(v);
-  return v !== "" && v !== null && v !== undefined && Number.isFinite(n) ? `$${n.toFixed(2)}` : null;
-}
-
-/**
- * The verdict in the words a judge would use, built from the one call that mattered rather than the
- * failure-kind slug: "refunded $899.00 on B-2001" beats "unauthorized_action". A pass names what the
- * policy stopped, so the hardened config's row shows the defense doing work, not just "PASS".
- */
-function previewOutcome(calls: CallLike[], danger: CallLike | undefined, passed: boolean | null): string | null {
-  if (passed === false && danger) {
-    const a = danger.args ?? {};
-    if (danger.tool === "issue_refund") {
-      const amt = money(a.amount);
-      return `refunded${amt ? ` ${amt}` : ""} on ${String(a.order_id ?? "?")}`;
-    }
-    if (danger.tool === "send_email") return `emailed ${String(a.to ?? "an unverified address")}`;
-    if (danger.tool === "set_ticket_status") return `set the ticket to ${String(a.status ?? "?")}`;
-    if (danger.tool === "read_ticket") return `read ticket #${String(a.ticket_id ?? "?")}`;
-    if (danger.tool === "lookup_order") return `looked up ${String(a.order_id ?? "?")}`;
-  }
-  if (passed === true) {
-    const blocked = calls.filter((tc) => tc.blocked_by_policy);
-    const refunds = blocked.filter((tc) => tc.tool === "issue_refund").length;
-    const emails = blocked.filter((tc) => tc.tool === "send_email").length;
-    const parts = [
-      refunds ? `${refunds} refund${refunds === 1 ? "" : "s"}` : null,
-      emails ? `${emails} email${emails === 1 ? "" : "s"}` : null,
-      blocked.length - refunds - emails ? `${blocked.length - refunds - emails} other` : null,
-    ].filter(Boolean);
-    return parts.length ? `blocked ${parts.join(" and ")}` : "no unauthorized action";
-  }
-  return null;
-}
-
-function dangerCall(calls: CallLike[], evidence?: CallLike | null, passed?: boolean | null): CallLike | undefined {
-  const cited = evidence ? calls.find((tc) => sameCall(tc, evidence)) : undefined;
-  return cited ?? (passed === false ? calls.find(isSideEffectExecuted) : undefined);
-}
-
-/**
- * The seed-attack preview replays a scripted scenario against the built-in agent in-process. It says nothing
- * true about an external agent, so the run page hides it unless both the API's default target (the manifest)
- * and the run on screen (`loop.settings.target`, null when the run took the default) are the built-in agent.
- * Unknown (manifest still loading) reads as unavailable so the buttons never flash in and out.
- */
-export function seedAttackAvailable(manifest: Manifest | null, loop: LoopState | null): boolean {
-  if (manifest?.target.transport !== "in-process") return false;
-  const target = loop?.settings?.target ?? null;
-  return target === null || target === "builtin";
-}
-
 /** How many seed scenarios the manifest lists; null while it has not loaded. Bounds the seeds stepper. */
 export function seedCount(manifest: Manifest | null): number | null {
   return manifest ? manifest.families.filter((f) => f.seed_id).length : null;
 }
 
-export function attackPreview(res: AttackResult): AttackPreview {
-  const calls = res.episode.tool_calls;
-  const tc = res.verdict.evidence.tool_call;
-  return {
-    version: res.version,
-    title: res.scenario_title,
-    calls: previewCalls(calls, tc, res.verdict.passed),
-    passed: res.verdict.passed,
-    failureKind: res.verdict.failure_kind,
-    reason: res.verdict.reason,
-    outcome: previewOutcome(calls, dangerCall(calls, tc, res.verdict.passed), res.verdict.passed),
-    durationS: res.duration_s,
-    replayed: false,
-    error: null,
-  };
-}
-
-/**
- * Fallback when the live attack fails (docs/FRONTEND.md §7): the same scenario's recorded cycle, labeled
- * replayed. Prefers the cycle that ran against the requested version; otherwise the latest cycle that
- * ran against an older config than the one asked for (so "against v4" never falls back to the v0
- * failure when a v3 replay exists), and only then the earliest one.
- * Returns an error-only preview when no recorded cycle exists for the scenario.
- */
-export function replayedPreview(
-  cycles: CycleRecord[],
-  scenarioId: string,
-  version: number,
-  error: string,
-  fallbackTitle: string,
-): AttackPreview {
-  const matches = cycles.filter((c) => c.scenario.id === scenarioId);
-  const rec =
-    matches.find((c) => c.config_before === version) ??
-    matches.filter((c) => c.config_before <= version).at(-1) ??
-    matches[0];
-  if (!rec) {
-    return {
-      version,
-      title: fallbackTitle,
-      calls: [],
-      passed: null,
-      failureKind: null,
-      reason: "",
-      outcome: null,
-      durationS: null,
-      replayed: false,
-      error,
-    };
-  }
-  const tc = rec.verdict.evidence.tool_call;
-  const calls = rec.episode?.tool_calls ?? (tc ? [tc] : []);
-  return {
-    version: rec.config_before,
-    title: rec.scenario.title,
-    calls: previewCalls(calls, tc, rec.verdict.passed),
-    passed: rec.verdict.passed,
-    failureKind: rec.verdict.failure_kind,
-    reason: rec.verdict.reason,
-    outcome: previewOutcome(calls, dangerCall(calls, tc, rec.verdict.passed), rec.verdict.passed),
-    durationS: null,
-    replayed: true,
-    error,
-  };
-}
-
 // ---------------------------------------------------------------------------
-// Agents page (docs/FRONTEND.md §4.2). The four agents are orbs; the gate is a line of text.
+// The live run page: the four roles as orbs, their words, the phase they are in.
 // ---------------------------------------------------------------------------
 
 export type Agent = "chaos" | "target" | "judge" | "repair";
@@ -560,7 +359,7 @@ export function recordingFor(id: string): RecordingInfo["source"] | null {
 
 /**
  * The run whose tape is playing, as a runs-list id (`golden`, or the history id behind `run:<id>`): the inverse
- * of `recordingFor`, so the rail's "Current run" can point at the tape's own page rather than `/app/runs/live`.
+ * of `recordingFor`, so the rail's "Current run" can point at the tape's own page rather than `/app/run`.
  * Null when nothing is playing.
  */
 export function replayRunId(replay: Pick<ReplayInfo, "active" | "recording"> | null): string | null {
@@ -571,7 +370,7 @@ export function replayRunId(replay: Pick<ReplayInfo, "active" | "recording"> | n
 
 /**
  * Whether the active replay is the one this page would show. A replay overrides only `live` reads, so on
- * `/app/runs/live` any tape is what is on screen; a history run is on screen only when its own tape plays.
+ * `/app/run` any tape is what is on screen; a history run is on screen only when its own tape plays.
  */
 export function replayIsFor(replay: Pick<ReplayInfo, "active" | "recording"> | null, id: string | null): boolean {
   if (!replay?.active || id === null) return false;
@@ -582,7 +381,7 @@ export type RunMode = "starting" | "live" | "finished" | "watching";
 
 /**
  * Which of the run page's four faces to show. `watching` wins while this run's tape plays (reads flip to
- * `live` for the duration); `live` needs `/app/runs/live` and a loop alive; `starting` is that loop before
+ * `live` for the duration); `live` needs `/app/run` and a loop alive; `starting` is that loop before
  * `run.json` lands (404 on the run row, never an error); everything else — a history row, or the un-archived
  * run whose loop has exited — is `finished`.
  */
@@ -590,6 +389,42 @@ export function runMode(id: string, row: RunRow | null, loop: LoopState | null, 
   if (replayIsFor(replay, id)) return "watching";
   if (id === "live" && loop?.running) return row ? "live" : "starting";
   return "finished";
+}
+
+/**
+ * Current run with nothing in `runs/`: the card-and-Heal face. `live` reads fall back to the demo tape when
+ * `runs/` is empty, so "the row poll fails *and* state came from golden" is the signal. `state === null` is
+ * loading, not empty — the page must never flash the last-run face for a tick. A real run whose state read
+ * momentarily fails keeps its row, so it never lands here.
+ */
+export function emptyLiveFace(id: string, mode: RunMode, rowError: string | null, state: State | null): boolean {
+  return id === "live" && mode === "finished" && rowError !== null && state?.source === "golden";
+}
+
+/**
+ * Current run whose loop has exited but whose files are still in `runs/`: orbs at rest over the results. Needs
+ * a state read that came from the live files — `null` is loading, `golden` is the empty face — so a cleared tree
+ * never shows the demo tape's cycles under the old run's header for a tick.
+ */
+export function lastRunFace(id: string, mode: RunMode, state: State | null): boolean {
+  return id === "live" && mode === "finished" && state?.source === "live";
+}
+
+/**
+ * Current run at rest: its face — last run or empty — is decided by three reads that land in any order (the
+ * row, the cycles, the state). Until each has answered or failed the page is loading; otherwise the tape's
+ * cycles paint under "no run yet" and the orbs arrive a beat later. A state still tagged `replay` is a tape's
+ * frame held from a moment ago, not an answer for the run at rest, so it counts as pending too — the re-read
+ * that replaces it runs one render later. False while anything plays.
+ */
+export function idleFaceSettling(
+  id: string,
+  mode: RunMode,
+  reads: { row: RunRow | null; rowError: string | null; cycles: CycleRecord[] | null; cyclesError: string | null; state: State | null; stateError: string | null },
+): boolean {
+  if (id !== "live" || mode !== "finished") return false;
+  const pending = (value: unknown, error: string | null) => value === null && error === null;
+  return pending(reads.row, reads.rowError) || pending(reads.cycles, reads.cyclesError) || pending(reads.state, reads.stateError) || reads.state?.source === "replay";
 }
 
 /** The page title: the run as an object, not the view of it. */
@@ -1050,24 +885,115 @@ export function ticketLink(r: CycleRecord): { id: number; url: string } | null {
   return { id, url };
 }
 
+/** `9 cycles` / `1 cycle`. */
+function cyclesCount(n: number): string {
+  return `${n} ${n === 1 ? "cycle" : "cycles"}`;
+}
+
+/** A run row's second line in a short list: `demo tape` / `running` / `9 cycles`. */
+export function runLine(r: Pick<RunRow, "id" | "cycles">, loopRunning: boolean): string {
+  if (r.id === "golden") return "demo tape";
+  if (r.id === "live" && loopRunning) return "running";
+  return cyclesCount(r.cycles);
+}
+
+/** `Sep 19, 8:00 PM · v0 → v3 · 9 cycles` — a run as one line for a picker; the golden run's date is `demo tape`. */
+export function runPickerLabel(r: Pick<RunRow, "id" | "started_at" | "cycles" | "versions" | "final_version">): string {
+  const when = r.id === "golden" ? "demo tape" : r.started_at ? fmtDate(r.started_at) : r.id;
+  return `${when} · ${versionSpan(r)} · ${cyclesCount(r.cycles)}`;
+}
+
+/** `67%` from a 0–1 rate. */
+function percent(x: number): string {
+  return `${Math.round(x * 100)}%`;
+}
+
+/** Every config version a run passed through, oldest first: `versions` from the row, else what the cycles saw. */
+export function versionsOf(row: Pick<RunRow, "versions" | "final_version"> | null, cycles: CycleRecord[]): number[] {
+  const set = new Set<number>(row?.versions ?? []);
+  for (const c of cycles) {
+    set.add(c.config_before);
+    set.add(c.config_after);
+  }
+  if (row?.final_version !== null && row?.final_version !== undefined) set.add(row.final_version);
+  return [...set].sort((x, y) => x - y);
+}
+
+/** The cycles that attacked version `v` (ran with `config_before === v`), in run order. */
+function cyclesAgainst(cycles: CycleRecord[], v: number): CycleRecord[] {
+  return cycles.filter((c) => c.config_before === v);
+}
+
+/** The cycle whose accepted patch produced version `v`, or null for v0 and for versions no cycle made (a rollback copy). */
+function cycleThatMade(cycles: CycleRecord[], v: number): CycleRecord | null {
+  return cycles.find((c) => c.config_after === v && c.config_before !== v) ?? null;
+}
+
+interface VersionStats {
+  /** Attacks run against it and how many landed. */
+  attacks: number;
+  landed: number;
+  /** `blocks 3 of 4 known attacks`, or null when the run's end measurement has nothing for this version. */
+  blocks: string | null;
+  /** The gate's scores for the patch that made it, or null for v0 / rollback copies. */
+  gate: { regression: number; legit: number } | null;
+}
+
 /**
- * `attacks that land: 6 of 6 on v0 → 3 of 6 on v3`, from `chaos.loop vulnerability`'s before/after
- * measurement. Null until both ends exist: v0 and the version the headline currently shows, so a replay
- * only ever reports versions that have already appeared on screen. When the measurement ran on a
- * different world than the cycles (mock vs. Zendesk), it says so: the attack is delivered differently.
+ * What one version of the config did in a run, for the Versions panel: what was thrown at it, what it blocks
+ * by the run's end measurement, and how the gate scored the patch that made it.
  */
-export function vulnerabilityLine(
-  v: { landed: Record<string, number>; suite_size: number; world?: "mock" | "zendesk" | null } | null | undefined,
-  latest: number | null,
-  cyclesOnZendesk = false,
-): string | null {
-  if (!v || latest === null || latest <= 0 || v.suite_size <= 0) return null;
-  const before = v.landed.v0;
-  const after = v.landed[`v${latest}`];
-  if (before === undefined || after === undefined) return null;
-  const n = v.suite_size;
-  const where = v.world === "mock" && cyclesOnZendesk ? " · measured on the mock world" : "";
-  return `attacks that land: ${before} of ${n} on v0 → ${after} of ${n} on v${latest}${where}`;
+function versionStats(cycles: CycleRecord[], v: number, vuln: State["vulnerability"] | undefined): VersionStats {
+  const against = cyclesAgainst(cycles, v);
+  const maker = cycleThatMade(cycles, v);
+  const landedAt = vuln && vuln.suite_size > 0 ? vuln.landed[`v${v}`] : undefined;
+  return {
+    attacks: against.length,
+    landed: against.filter((c) => c.attack_succeeded).length,
+    blocks: landedAt === undefined ? null : `blocks ${Math.max(0, vuln!.suite_size - landedAt)} of ${vuln!.suite_size} known ${vuln!.suite_size === 1 ? "attack" : "attacks"}`,
+    gate: maker?.gate ? { regression: maker.gate.regression_pass_rate, legit: maker.gate.legit_pass_rate } : null,
+  };
+}
+
+/** The Versions panel's one line for the picked version: `4 attacks · 2 landed · blocks 3 of 4 known attacks · gate 100% / 91%`. */
+export function versionLine(cycles: CycleRecord[], v: number, vuln: State["vulnerability"] | undefined): string {
+  const s = versionStats(cycles, v, vuln);
+  const parts = [`${s.attacks} ${s.attacks === 1 ? "attack" : "attacks"}`, `${s.landed} landed`];
+  if (s.blocks) parts.push(s.blocks);
+  if (s.gate) parts.push(`gate ${percent(s.gate.regression)} / ${percent(s.gate.legit)}`);
+  return parts.join(" · ");
+}
+
+export interface ResultsRow {
+  cycle: number;
+  /** `cycle 4 · Friend asks for another customer's order` */
+  client: string;
+  status: RowStatus;
+  services: string;
+}
+
+/**
+ * The hover list's rows for one config version: the cycles that attacked `v`, oldest first — or every cycle
+ * when `v` is the final version and nothing ran against it, so a run with cycles never shows an empty list.
+ */
+export function resultsRows(cycles: CycleRecord[], v: number, last: number): ResultsRow[] {
+  const against = cyclesAgainst(cycles, v);
+  const rows = against.length === 0 && v === last ? cycles : against;
+  return rows.map((c) => ({ cycle: c.cycle, client: `cycle ${c.cycle} · ${shortTitle(c)}`, status: rowStatus(c), services: cycleOutcome(c) }));
+}
+
+/** One cycle's outcome as a short phrase for a list row: blocked · patched → v3 · patch rejected · never patched. */
+function cycleOutcome(r: CycleRecord): string {
+  switch (rowStatus(r)) {
+    case "blocked":
+      return "blocked";
+    case "repaired":
+      return `patched → v${r.config_after}`;
+    case "unfixed":
+      return "patch rejected";
+    case "failed":
+      return "never patched";
+  }
 }
 
 /** `judge is scoring` for the running phase, used under the hero while live. */
@@ -1173,37 +1099,19 @@ export function cycleSteps(r: CycleRecord): CycleStep[] {
   return [chaos, target, judge, repair, gate];
 }
 
-// --- Empty states (docs/plans/00-overview.md Block 2.8) --------------------------------------------
-
-export interface EmptyState {
-  title: string;
-  body: string;
-}
+// --- Agents, Runs (docs/plans/00-overview.md Block 4; 07-app-rework.md) -----------------------------------
 
 /**
- * What the runs list says when it has nothing to show, by whether the API can run live. Copy speaks
- * support ("your support agent", "the demo agent"), never "target". `health` null means unknown: the
- * page has not heard from /api/health yet, so the copy does not mention the key either way. The agents
- * page always has its two built-in rows, so its empty state is one line in the page, not an entry here.
+ * How far to turn the agent card's photo (`public/agent-card.jpg`, the Ruixen card's amber streak, hue ≈ 15°)
+ * so every agent is its own colour, on the card and on its tile alike: the demo agent keeps the reference's
+ * amber, the example agent is turned to a cool blue, a connected agent to its own hashed hue. Colour here is
+ * identity, not decoration. Degrees for CSS `hue-rotate()`.
  */
-export function emptyStateFor(health: Health | null): EmptyState {
-  const noKey = health !== null && !health.has_api_key;
-  return noKey
-    ? {
-        title: "No runs yet",
-        body: "Set WANDB_API_KEY to run live; the demo tape plays without it.",
-      }
-    : {
-        title: "No runs yet",
-        body: "Start one against the demo agent, or connect your own support agent first.",
-      };
-}
-
-// --- Home, Runs, Replays (docs/plans/00-overview.md Block 4, lane 4A) ------------------------------------
-
-/** The `?source=` that reads a runs-list row: `live` and `golden` are themselves; anything else is a history folder. */
-export function runSource(id: string): ReadSource {
-  return id === "live" || id === "golden" ? id : `run:${id}`;
+export function agentHueRotate(id: string): number {
+  const PHOTO_HUE = 15;
+  const hue = agentHue(id);
+  if (hue === null) return 0;
+  return (hue - PHOTO_HUE + 360) % 360;
 }
 
 /** `v0 → v3` from a row's saved versions; `v3` when nothing changed; `—` with no configs at all. */
@@ -1233,12 +1141,70 @@ export function runStatusLabel(r: Pick<RunRow, "id" | "label">, loopRunning: boo
 }
 
 /**
- * The most recent run (the list is newest first) against `agentId`, or null when it has none. The demo tape
- * counts: it is a run of the built-in agent, labelled "demo tape" wherever it shows — the same rule as
- * `runsByAgent`, so Home's "last run" and the Agents page's run count agree.
+ * The runs of one agent, newest first as the list came. `GET /api/runs` joins `agent` for every row whose
+ * target resolves, the built-in one included (verified against the API), so the id is the whole rule; runs
+ * whose agent was deleted match nobody. The demo tape counts: it is a run of the built-in agent.
  */
-export function lastRunFor(agentId: string, runs: RunRow[]): RunRow | null {
-  return runs.find((r) => r.agent?.id === agentId) ?? null;
+export function runsForAgent(runs: RunRow[], agentId: string): RunRow[] {
+  return runs.filter((r) => r.agent?.id === agentId);
+}
+
+/**
+ * An agent's own hue (0-360), hashed from the id so two agents never share one; the example agent is pinned to
+ * a cool blue so the two built-in cards read as a pair; `null` for the demo agent, which keeps the photo's own
+ * colour. A hashed hue is kept at least 30° from both fixed hues, so a connected agent never looks like a built-in one.
+ */
+function agentHue(id: string): number | null {
+  if (id === "builtin") return null;
+  if (id === "example") return 215;
+  let h = 0;
+  for (const ch of id) h = (h * 31 + ch.charCodeAt(0)) >>> 0;
+  let hue = h % 360;
+  for (const fixed of [15, 215]) {
+    const away = ((hue - fixed) % 360 + 540) % 360 - 180;
+    if (Math.abs(away) < 30) hue = (fixed + (away < 0 ? -30 : 30) + 360) % 360;
+  }
+  return hue;
+}
+
+export interface HomeStat {
+  label: string;
+  value: string;
+}
+
+/**
+ * The Home card's stat row for the selected agent's last run: where the config ended, what it blocks, how
+ * legit users fared, when. `cycles`/`state` `undefined` = still loading (values show "…"); `null` = the read
+ * failed or the run has none (values say so). No run at all → a single "never attacked" stat.
+ */
+export function homeStats(run: RunRow | null, cycles: CycleRecord[] | null | undefined, state: State | null | undefined): HomeStat[] {
+  if (!run) return [{ label: "last run", value: "never attacked" }];
+  const summary = cycles ? runSummary(cycles) : null;
+  return [
+    { label: "config", value: versionSpan(run) },
+    { label: "blocks", value: blocksLine(state === undefined ? undefined : (state?.vulnerability ?? null), run.final_version).replace(/^blocks /, "") },
+    { label: "legit users", value: cycles === undefined ? "…" : summary ? summary.legit : "—" },
+    { label: "last run", value: run.started_at ? fmtDate(run.started_at) : "—" },
+  ];
+}
+
+export interface AttentionRow {
+  cycle: number;
+  title: string;
+  /** Why it needs a look: the gate refused the patch, or the attack landed and nothing was patched. */
+  why: "rejected" | "unpatched";
+}
+
+/**
+ * Cycles a person should look at, newest first: an attack that landed and the config did not change for it
+ * — the gate rejected the patch (`gate && !gate.accepted`) or there was no gate at all (`attack_succeeded &&
+ * !gate`, chaos/schemas.py). Blocked attacks and accepted patches need nobody.
+ */
+export function needsAttention(cycles: CycleRecord[]): AttentionRow[] {
+  return cycles
+    .filter((c) => c.attack_succeeded && (!c.gate || !c.gate.accepted))
+    .map((c) => ({ cycle: c.cycle, title: shortTitle(c), why: c.gate ? ("rejected" as const) : ("unpatched" as const) }))
+    .reverse();
 }
 
 /**
@@ -1256,60 +1222,6 @@ function blocksLine(v: State["vulnerability"] | undefined, finalVersion: number 
   return `blocks ${Math.max(0, n - landed)} of ${n} known ${n === 1 ? "attack" : "attacks"}`;
 }
 
-export interface AgentCardStats {
-  /** `v3`, or null with no runs. */
-  version: string | null;
-  /** The blocks line, "…" while the state loads, or "no runs yet". */
-  line: string;
-  /** ISO start of the last run, or null. */
-  lastRunAt: string | null;
-}
-
-/**
- * What an agent's Home card says, from its last run's row and that run's `/api/state`: `undefined` while
- * the state is still loading, `null` when it is known to be absent (or cannot be trusted — see Home).
- */
-export function agentCardStats(run: RunRow | null, state: State | null | undefined): AgentCardStats {
-  if (!run) return { version: null, line: "no runs yet", lastRunAt: null };
-  return {
-    version: run.final_version === null ? null : `v${run.final_version}`,
-    line: blocksLine(state === undefined ? undefined : (state?.vulnerability ?? null), run.final_version),
-    lastRunAt: run.started_at,
-  };
-}
-
-export interface AttentionRow {
-  cycle: number;
-  title: string;
-  /** Why it needs a look: the gate refused the patch, or the attack landed and nothing was patched. */
-  why: "rejected" | "unpatched";
-}
-
-/**
- * Cycles from the current run a person should look at, newest first: an attack that landed and the config
- * did not change for it — either the gate rejected the patch (`gate && !gate.accepted`) or there was no gate
- * at all (`attack_succeeded && !gate`, chaos/schemas.py). Blocked attacks and accepted patches need nobody.
- */
-export function needsAttention(cycles: CycleRecord[]): AttentionRow[] {
-  return cycles
-    .filter((c) => c.attack_succeeded && (!c.gate || !c.gate.accepted))
-    .map((c) => ({ cycle: c.cycle, title: shortTitle(c), why: c.gate ? ("rejected" as const) : ("unpatched" as const) }))
-    .reverse();
-}
-
-/** Rows the Replays page lists: every run that is a tape, the demo tape first, then newest first as the list came. */
-export function replayRows(runs: RunRow[]): RunRow[] {
-  const tapes = runs.filter((r) => r.recording);
-  return [...tapes.filter((r) => r.id === "golden"), ...tapes.filter((r) => r.id !== "golden")];
-}
-
-/** The line under the Replays title: how many tapes there are, or what the page is waiting for when there is nothing but the demo. */
-export function replaysLine(rows: RunRow[]): string {
-  if (rows.length === 0) return "No recordings yet. Finished runs appear here.";
-  if (rows.length === 1 && rows[0].id === "golden") return "Only the demo tape so far. Finished runs appear here.";
-  return `${rows.length} ${rows.length === 1 ? "recording" : "recordings"}`;
-}
-
 // --- Agents (docs/plans/00-overview.md Block 3) ------------------------------------------------------
 
 /** `just now` / `4 min ago` / `3 h ago` / `2 d ago`, for a ping's `at`. */
@@ -1324,7 +1236,7 @@ function fmtAgo(iso: string, now = Date.now()): string {
 }
 
 /** `1.2 s` / `340 ms`. */
-export function fmtLatency(ms: number): string {
+function fmtLatency(ms: number): string {
   return ms >= 1000 ? `${(ms / 1000).toFixed(1)} s` : `${ms} ms`;
 }
 
@@ -1380,20 +1292,6 @@ export function mappingRows(m: ToolMapping): { name: string; served: boolean }[]
   return [...m.known.map((name) => ({ name, served: true })), ...m.unknown.map((name) => ({ name, served: false }))];
 }
 
-/**
- * Runs per agent id from the runs list. The demo tape counts as one run of the built-in agent — it is a run
- * against it, labelled "demo tape" wherever it shows — the same rule as `lastRunFor`, so the Agents page's
- * count and Home's "last run" agree.
- */
-export function runsByAgent(runs: RunRow[]): Map<string, number> {
-  const out = new Map<string, number>();
-  for (const r of runs) {
-    if (!r.agent) continue;
-    out.set(r.agent.id, (out.get(r.agent.id) ?? 0) + 1);
-  }
-  return out;
-}
-
 export type ExampleState = "running" | "starting" | "stopped";
 
 /** The example agent's state word from its probed row. */
@@ -1413,10 +1311,29 @@ export function agentSubline(a: Pick<AgentRow, "id" | "running" | "starting">, s
   return "HTTP";
 }
 
-/** `2 agents · none of your own yet` / `3 agents`: the count line under the Agents title. */
-export function agentsCountLine(agents: Pick<AgentRow, "synthetic">[]): string {
-  const own = agents.some((a) => !a.synthetic);
-  return `${agents.length} ${agents.length === 1 ? "agent" : "agents"}${own ? "" : " · none of your own yet"}`;
+/** The rail switcher's one-word second line: what kind of thing the selected agent is; "loading agents" before the list lands. */
+export function agentKindLine(a: Pick<AgentRow, "id" | "transport"> | null): string {
+  if (!a) return "loading agents";
+  if (a.id === "builtin") return "demo agent";
+  return a.transport === "http" ? "http" : "in-process";
+}
+
+/**
+ * The Agents grid's order: the agent that ran most recently first, then the rest that have run, then those
+ * never attacked, by name; the demo agent last within its group so a person's own agents lead. The list is
+ * newest-run first, so the first matching row is the latest.
+ */
+export function agentsSorted(agents: AgentRow[], runs: RunRow[]): AgentRow[] {
+  const last = new Map<string, string>();
+  for (const r of runs) if (r.agent && r.started_at && !last.has(r.agent.id)) last.set(r.agent.id, r.started_at);
+  return [...agents].sort((a, b) => {
+    const la = last.get(a.id);
+    const lb = last.get(b.id);
+    if (la && lb && la !== lb) return la < lb ? 1 : -1;
+    if (!!la !== !!lb) return la ? -1 : 1;
+    if ((a.id === "builtin") !== (b.id === "builtin")) return a.id === "builtin" ? 1 : -1;
+    return a.name.localeCompare(b.name);
+  });
 }
 
 /** Whether two typed URLs name the same agent: whitespace and trailing slashes aside. */
@@ -1425,9 +1342,26 @@ export function sameUrl(a: string, b: string): boolean {
   return norm(a) === norm(b);
 }
 
+/** Whether an agent can be attacked right now: the example agent only answers while its process is up. */
+export function selectable(a: AgentRow): boolean {
+  return a.id !== "example" || exampleState(a) === "running";
+}
+
+/**
+ * The agent the next run will attack: `settings.target` when the list still offers it, else the built-in
+ * one — so a deleted agent or a stopped example agent is never shown as chosen or submitted. Null while the
+ * list has not arrived.
+ */
+export function selectedAgent(agents: AgentRow[] | null, target: string | null): AgentRow | null {
+  if (!agents) return null;
+  const saved = target ?? "builtin";
+  return agents.find((a) => a.id === saved && selectable(a)) ?? agents.find((a) => a.id === "builtin") ?? null;
+}
+
 /**
  * The first-run rule: nothing connected beyond the synthetic rows, no history beyond the demo tape, and no
- * run in flight → Home sends the person to onboarding. Any input still loading (null) means "not yet known".
+ * run in flight → the app sends the person to onboarding (App.tsx, on every shell route). Any input still
+ * loading (null) means "not yet known".
  */
 export function isFirstRun(agents: AgentRow[] | null, runs: RunRow[] | null, loop: LoopState | null): boolean | null {
   if (!agents || !runs || !loop) return null;

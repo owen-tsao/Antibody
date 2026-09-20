@@ -13,7 +13,7 @@ export default function ApiDown({ onRetry, className }: { onRetry: () => void; c
         onClick={onRetry}
         className="group rounded text-[var(--faint)] transition-colors hover:text-[var(--muted)]"
       >
-        <span className="u-line">retry</span>
+        retry
       </button>
     </span>
   );

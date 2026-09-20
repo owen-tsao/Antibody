@@ -1,13 +1,15 @@
-import { motion, useReducedMotion } from "framer-motion";
-import { Check, Copy, Globe, Server, Sparkles } from "lucide-react";
+import { motion } from "framer-motion";
+import { Check, Copy, Plugs } from "@phosphor-icons/react";
 import { useEffect, useRef, useState } from "react";
 
-import { api, ApiError, type PingResult, type ToolMapping } from "@/api";
+import { api, ApiError, type Agent, type PingResult, type ToolMapping } from "@/api";
+import AgentTile from "@/components/AgentTile";
 import RunSettingsFields from "@/components/RunSettingsFields";
 import WizardRail from "@/components/WizardRail";
 import { usePoll } from "@/hooks/usePoll";
+import { useMotionPref } from "@/hooks/useMotionPref";
 import { mappingLine, mappingRows, pingResultLine, sameUrl, seedCount } from "@/lib/derive";
-import { HOME, href, LIVE_RUN, linkProps, navigate, onboarding, type OnboardingStep, replace, skipOnboarding } from "@/lib/routes";
+import { AGENTS, HOME, href, LIVE_RUN, linkProps, navigate, onboarding, type OnboardingStep, replace, skipOnboarding } from "@/lib/routes";
 import { estimateLabel, toStartBody, type RunSettings } from "@/lib/settings";
 import { NO_KEY_LINE, primaryButton, textButton } from "@/lib/ui";
 import { cn } from "@/lib/utils";
@@ -91,7 +93,7 @@ export default function Onboarding({
   settings: RunSettings;
   onSettingsChange: (next: RunSettings) => void;
 }) {
-  const reduced = useReducedMotion();
+  const reduced = useMotionPref();
   const { data: health } = usePoll(api.health, STATIC_MS);
   const { data: manifest } = usePoll(api.manifest, STATIC_MS);
   const [furthest, setFurthest] = useState<OnboardingStep>(step);
@@ -276,14 +278,14 @@ export default function Onboarding({
           onGoTo={(i) => go((i + 1) as OnboardingStep)}
         />
         <a
-          href={href(HOME)}
+          href={href(AGENTS)}
           onClick={(e) => {
             skipOnboarding();
-            linkProps(HOME).onClick(e);
+            linkProps(AGENTS).onClick(e);
           }}
-          className="group justify-self-end rounded text-[12px] text-[var(--muted)] transition-colors hover:text-[var(--fg)]"
+          className="justify-self-end rounded text-[12px] text-[var(--muted)] transition-colors hover:text-[var(--fg)]"
         >
-          <span className="u-line">Skip for now</span>
+          Skip for now
         </a>
       </header>
 
@@ -294,9 +296,9 @@ export default function Onboarding({
           <>
             <Title sub="Antibody deploys it into a sandbox storefront and attacks it there. Pick one to start with.">Which support agent should Antibody attack?</Title>
             <div className="mt-10 grid gap-3 sm:grid-cols-3">
-              <ChoiceCard icon={Sparkles} title="Demo agent" body="Built in. See a full heal in minutes with nothing to set up." selected={choice === "builtin"} onSelect={() => setChoice("builtin")} disabled={exampleBusy} />
+              <ChoiceCard tile={{ id: "builtin", name: "Demo agent" }} title="Demo agent" body="Built in. See a full heal in minutes with nothing to set up." selected={choice === "builtin"} onSelect={() => setChoice("builtin")} disabled={exampleBusy} />
               <ChoiceCard
-                icon={Server}
+                tile={{ id: "example", name: "Example agent" }}
                 title="Example agent"
                 body="An OpenAI Agents SDK agent we start for you on this machine."
                 selected={choice === "example"}
@@ -304,7 +306,7 @@ export default function Onboarding({
                 disabled={exampleBusy || noKey}
                 reason={noKey ? `${NO_KEY_LINE}; the example agent calls inference` : undefined}
               />
-              <ChoiceCard icon={Globe} title="Your own" body="Any agent that answers POST /episode over HTTP." selected={choice === "own"} onSelect={() => setChoice("own")} disabled={exampleBusy} />
+              <ChoiceCard tile="connect" title="Your own" body="Any agent that answers POST /episode over HTTP." selected={choice === "own"} onSelect={() => setChoice("own")} disabled={exampleBusy} />
             </div>
             {(exampleBusy || exampleNote) && (
               <p role={exampleNote ? "alert" : undefined} className={cn("mt-4 text-[12px]", exampleNote ? "text-[var(--danger)]" : "text-[var(--muted)]")}>
@@ -338,7 +340,7 @@ export default function Onboarding({
             </div>
             <div className="mt-4 flex items-baseline gap-4">
               <button type="button" onClick={() => void doPing()} disabled={pinging || !url.trim()} className={textButton}>
-                <span className="u-line">{pinging ? "pinging…" : "Ping"}</span>
+                {pinging ? "pinging…" : "Ping"}
               </button>
               {ping && (
                 <span role={ping.result.ok ? undefined : "alert"} className={cn("text-[13px]", ping.result.ok ? "text-[var(--muted)]" : "text-[var(--danger)]")}>
@@ -425,8 +427,8 @@ export default function Onboarding({
 function Title({ children, sub }: { children: React.ReactNode; sub: string }) {
   return (
     <>
-      <h1 className="display mt-3 text-center text-[48px] leading-[1]">{children}</h1>
-      <p className="mx-auto mt-4 max-w-[52ch] text-center text-[13px] leading-[1.6] text-[var(--muted)]">{sub}</p>
+      <h1 className="mt-3 text-center text-[24px] font-semibold leading-[1.2] tracking-[-0.02em] text-[var(--fg)]">{children}</h1>
+      <p className="mx-auto mt-3 max-w-[52ch] text-center text-[13px] leading-[1.6] text-[var(--muted)]">{sub}</p>
     </>
   );
 }
@@ -436,7 +438,7 @@ function Footer({ onBack, children }: { onBack?: () => void; children: React.Rea
     <div className="mt-10 flex items-center justify-between">
       {onBack ? (
         <button type="button" onClick={onBack} className={textButton}>
-          <span className="u-line">← Back</span>
+          ← Back
         </button>
       ) : (
         <span />
@@ -448,7 +450,7 @@ function Footer({ onBack, children }: { onBack?: () => void; children: React.Rea
 
 /** The choice-card pattern from the Clad onboarding: icon, title, one-line body, a check when selected. */
 function ChoiceCard({
-  icon: Icon,
+  tile,
   title,
   body,
   selected,
@@ -456,7 +458,8 @@ function ChoiceCard({
   disabled,
   reason,
 }: {
-  icon: typeof Globe;
+  /** The agent this card stands for, or `connect` for the bring-your-own card. */
+  tile: Pick<Agent, "id" | "name"> | "connect";
   title: string;
   body: string;
   selected: boolean;
@@ -474,15 +477,19 @@ function ChoiceCard({
       disabled={disabled}
       title={reason}
       className={cn(
-        "relative flex flex-col items-stretch rounded-xl border bg-[var(--card)] p-4 text-left transition-colors disabled:cursor-default",
-        selected ? "border-[var(--fg)]" : "border-[var(--border)] hover:border-[var(--border-2)]",
+        "relative flex flex-col items-stretch rounded-xl border bg-[var(--card)] p-5 text-left transition-colors focus-visible:outline-white disabled:cursor-default",
+        selected ? "border-[var(--border-2)] bg-[var(--hover)]" : "border-[var(--border)] hover:border-[var(--border-2)]",
         disabled && !selected && "opacity-50 hover:border-[var(--border)]",
       )}
     >
       <span className="flex items-start justify-between">
-        <span className="grid h-7 w-7 place-items-center rounded-md border border-[var(--border)] text-[var(--muted)]">
-          <Icon className="h-[15px] w-[15px]" strokeWidth={1.75} aria-hidden />
-        </span>
+        {tile === "connect" ? (
+          <span className="grid h-7 w-7 place-items-center rounded-[8px] border border-dashed border-[var(--border-2)] text-[var(--muted)]">
+            <Plugs size={15} aria-hidden />
+          </span>
+        ) : (
+          <AgentTile agent={tile} size={28} />
+        )}
         <span
           aria-hidden
           className={cn(
@@ -490,7 +497,7 @@ function ChoiceCard({
             selected ? "border-[var(--fg)] bg-[var(--fg)] text-[var(--bg)]" : "border-[var(--border-2)]",
           )}
         >
-          {selected && <Check className="h-2.5 w-2.5" strokeWidth={3} />}
+          {selected && <Check size={10} weight="bold" aria-hidden />}
         </span>
       </span>
       <span className="mt-4 block text-[13px] font-medium">{title}</span>
@@ -514,17 +521,17 @@ function Contract() {
   return (
     <details className="group/details mt-8 text-[13px]">
       <summary className="cursor-pointer list-none text-[var(--muted)] transition-colors hover:text-[var(--fg)]">
-        <span className="u-line">What your agent needs to answer</span>
+        What your agent needs to answer
         <span className="ml-2 text-[var(--faint)]">20 lines</span>
       </summary>
       <div className="mt-3 rounded-lg border border-[var(--border)] bg-[var(--card)]">
         <div className="flex items-center justify-between border-b border-[var(--border)] px-3 py-2 text-[12px] text-[var(--faint)]">
           <a href={EXAMPLE_README} target="_blank" rel="noreferrer" className="group rounded transition-colors hover:text-[var(--muted)]">
-            <span className="u-line">the example agent's README ↗</span>
+            the example agent's README ↗
           </a>
           <button type="button" onClick={() => void copy()} className="group inline-flex items-center gap-1.5 rounded transition-colors hover:text-[var(--muted)]">
-            <Copy className="h-3 w-3" strokeWidth={1.75} aria-hidden />
-            <span className="u-line">{copied ? "copied" : "copy"}</span>
+            <Copy size={12} aria-hidden />
+            {copied ? "copied" : "copy"}
           </button>
         </div>
         <pre className="code overflow-x-auto px-3 py-3 text-[11.5px] leading-[1.6] text-[var(--muted)]">{CONTRACT}</pre>

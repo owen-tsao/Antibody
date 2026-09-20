@@ -1,30 +1,46 @@
 import { useEffect, useState } from "react";
 
-import { api } from "@/api";
+import { api, type Agent, type LoopState, type RunRow } from "@/api";
 import ErrorBoundary from "@/components/ErrorBoundary";
 import Shell from "@/components/Shell";
 import SplashBackdrop from "@/components/ui/splash-backdrop";
-import { HOME, navigate, type Route, useRoute } from "@/lib/routes";
+import { isFirstRun, replayIsFor } from "@/lib/derive";
+import { loadPrefs, PrefsContext, savePrefs, type Prefs } from "@/lib/prefs";
+import { HOME, navigate, onboarding, onboardingSkipped, replace, type Route, useRoute } from "@/lib/routes";
 import { loadSettings, saveSettings, type RunSettings } from "@/lib/settings";
 import Intro from "@/pages/Intro";
 import Home from "@/pages/Home";
-import AgentsList from "@/pages/Agents";
+import AgentPage from "@/pages/Agent";
+import Agents from "@/pages/Agents";
 import Onboarding from "@/pages/Onboarding";
 import Runs from "@/pages/Runs";
-import Replays from "@/pages/Replays";
 import Settings from "@/pages/Settings";
 import Run from "@/pages/Run";
 import Cycle from "@/pages/Cycle";
-import { replayIsFor } from "@/lib/derive";
+
+/** Display preferences live above every page so `usePoll` and every motion read see one value. */
+export default function App() {
+  const [prefs, setPrefsState] = useState<Prefs>(loadPrefs);
+  const setPrefs = (next: Prefs) => {
+    setPrefsState(next);
+    savePrefs(next);
+  };
+  return (
+    <PrefsContext.Provider value={{ prefs, setPrefs }}>
+      <Routed />
+    </PrefsContext.Provider>
+  );
+}
 
 /**
  * `/` is the landing page: the gradient and liquid metal live only here, and unmount before the run
  * page mounts its four orb canvases (docs/FRONTEND.md §5). Everything else is the app, inside the shell.
  */
-export default function App() {
+function Routed() {
   const route = useRoute();
-  // The shape of the next run, edited in the start dialog, the Settings page and the wizard's First run
-  // step. Read from localStorage once; written on every change (not on mount) so an untouched browser keeps no key.
+  // The shape of the next run, edited on the Settings page, the rail's agent switcher
+  // and the wizard's First run step. Read from localStorage once; written on every change (not on mount)
+  // so an untouched browser keeps no key.
   const [settings, setSettings] = useState<RunSettings>(loadSettings);
   const changeSettings = (next: RunSettings) => {
     setSettings(next);
@@ -48,11 +64,11 @@ export default function App() {
 }
 
 /**
- * The pages under /app. `run` is the run page for any id (`pages/Run`), `cycle` its cycle page; the rest are
- * the shell's pages. Only the replay rule lives here, above the shell's per-route fade.
+ * The pages under /app. `run` is the run page for any id (`pages/Run`; `live` is Current run), `cycle` its
+ * cycle page; the rest are the shell's pages. Only the replay rule and the first-run rule live here, above
+ * the shell's per-route fade.
  */
 function AppPages({ route, settings, onSettingsChange }: { route: Route; settings: RunSettings; onSettingsChange: (next: RunSettings) => void }) {
-
   // Nothing plays off-screen (Block 4's replay rule): whenever the run on screen changes — a shell link,
   // browser Back, another run's page — a tape that is not that run's is stopped, so the rail's "Current
   // run" only ever reports what is visible. Decided on the API's fresh answer, never a stale poll. A
@@ -68,36 +84,64 @@ function AppPages({ route, settings, onSettingsChange }: { route: Route; setting
   }, [runOnScreen, arrivingToWatch]);
 
   return (
-    <Shell route={route}>
-      {({ loop, replay, status, statusError, health, refresh }) => {
-        switch (route.kind) {
-          case "home":
-            return <Home loop={loop} health={health} refresh={refresh} settings={settings} onSettingsChange={onSettingsChange} />;
-          case "onboarding":
-          case "landing":
-            // Rendered above the shell by App; never reached here.
-            return null;
-          case "replays":
-            return <Replays />;
-          case "settings":
-            return <Settings settings={settings} onSettingsChange={onSettingsChange} health={health} />;
-          case "agents":
-            return <AgentsList health={health} />;
-          case "runs":
-            return <Runs loop={loop} health={health} refresh={refresh} settings={settings} onSettingsChange={onSettingsChange} />;
-          case "run":
-            return <Run id={route.id} replay={route.replay === true} shell={{ loop, replay, status, statusError, health, refresh }} navigate={navigate} />;
-          case "cycle":
-            return (
-              <Cycle
-                id={route.id}
-                n={route.n}
-                onBack={() => navigate({ kind: "run", id: route.id })}
-                onCycle={(n) => navigate({ kind: "cycle", id: route.id, n })}
-              />
-            );
-        }
+    <Shell route={route} settings={settings} onSettingsChange={onSettingsChange}>
+      {(data) => {
+        const { loop, replay, status, statusError, health, agents, agentsError, runs, runsError, refresh } = data;
+        return (
+          <>
+            <FirstRun agents={agents} runs={runs} loop={loop} />
+            {(() => {
+              switch (route.kind) {
+                case "onboarding":
+                case "landing":
+                  // Rendered above the shell by App; never reached here.
+                  return null;
+                case "home":
+                  return <Home shell={data} settings={settings} onSettingsChange={onSettingsChange} />;
+                case "settings":
+                  return <Settings section={route.section} settings={settings} onSettingsChange={onSettingsChange} shell={data} />;
+                case "agents":
+                  return <Agents shell={data} settings={settings} onSettingsChange={onSettingsChange} />;
+                case "agent":
+                  return <AgentPage id={route.id} shell={data} />;
+                case "runs":
+                  return <Runs runs={runs} runsError={runsError} loop={loop} refresh={refresh} />;
+                case "run":
+                  return (
+                    <Run
+                      id={route.id}
+                      replay={route.replay === true}
+                      shell={{ loop, replay, status, statusError, health, agents, agentsError, runs, runsError, refresh }}
+                      settings={settings}
+                      onSettingsChange={onSettingsChange}
+                    />
+                  );
+                case "cycle":
+                  return (
+                    <Cycle
+                      id={route.id}
+                      n={route.n}
+                      onBack={() => navigate({ kind: "run", id: route.id })}
+                      onCycle={(n) => navigate({ kind: "cycle", id: route.id, n })}
+                    />
+                  );
+              }
+            })()}
+          </>
+        );
       }}
     </Shell>
   );
+}
+
+/**
+ * The first-run rule on every shell page: nothing connected, nothing run → the wizard. Lives here rather than
+ * on Home so it holds on any deep link; a component so it can sit inside the shell's render prop without hooks in a switch.
+ */
+function FirstRun({ agents, runs, loop }: { agents: Agent[] | null; runs: RunRow[] | null; loop: LoopState | null }) {
+  const redirect = isFirstRun(agents, runs, loop) === true && !onboardingSkipped();
+  useEffect(() => {
+    if (redirect) replace(onboarding(1));
+  }, [redirect]);
+  return null;
 }

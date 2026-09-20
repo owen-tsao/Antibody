@@ -6,8 +6,11 @@
   --card: #0c0c0e;
   --inset: #131316;
   --hover: #19191d;
-  --border: rgba(255, 255, 255, 0.08);
-  --border-2: rgba(255, 255, 255, 0.16);
+  /* Hairline dividers and the hover step above them. 8 % read as invisible on pure black (Owen, Sep 20). */
+  --border: rgba(255, 255, 255, 0.14);
+  --border-2: rgba(255, 255, 255, 0.22);
+  /* The outer edge of a framed surface on black (panel, table, pill). Dividers inside stay `--border`. */
+  --frame: rgba(255, 255, 255, 0.3);
   --fg: #fafafa;
   --muted: #a1a1aa;
   --faint: #5f5f68;
@@ -153,10 +156,14 @@ h1, h2, h3 {
   transform: scaleX(0);
 }
 
-/* Keyboard focus: a hairline ring, brightened rather than colorized, on anything focusable. */
-:focus-visible {
-  outline: 1px solid var(--border-2);
-  outline-offset: 2px;
+/* Keyboard focus: a hairline ring, brightened rather than colorized, on anything focusable. In the base layer,
+   so a utility (`outline-offset-[-6px]`, `outline-none`) can still say otherwise — an unlayered rule would win
+   over every Tailwind utility regardless of specificity. */
+@layer base {
+  :focus-visible {
+    outline: 1px solid var(--border-2);
+    outline-offset: 2px;
+  }
 }
 
 ::selection {

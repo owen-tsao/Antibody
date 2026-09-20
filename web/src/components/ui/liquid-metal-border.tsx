@@ -15,16 +15,15 @@
 // Motion follows the original too: idle 0.6, hover 1.0, a 2.4 burst on click that settles back.
 // Reduced motion freezes the ring (a still chrome rim, not a flat border).
 //
-// Every frame is one WebGL context. Browsers allow ~16 per page, and the Agents page already spends
-// four on the orbs, so this is for the few button-shaped controls and the cycles box, not for text
-// links. `maxPixelCount` keeps a large frame (the box) from rendering millions of pixels a frame for
-// a rim that is 1.5 px wide.
+// Every frame is one WebGL context (browsers allow ~16 per page), so frames go on surfaces worth the
+// cost: the Heal orb, the cycles box, the stats plate. Agent cards are photos with a plain rim, not metal.
 
 import { LiquidMetal } from "@paper-design/shaders-react";
 import { useEffect, useState, type CSSProperties, type HTMLAttributes, type ReactNode } from "react";
 
 import ErrorBoundary from "@/components/ErrorBoundary";
 import { cn } from "@/lib/utils";
+import { useMotionPref } from "@/hooks/useMotionPref";
 
 const IDLE = 0.6;
 const HOVER = 1;
@@ -48,19 +47,6 @@ const SHADER = {
 } as const;
 
 const GL = { antialias: false, powerPreference: "low-power" } as const;
-
-function usePrefersReducedMotion() {
-  const [reduced, setReduced] = useState(
-    () => typeof window !== "undefined" && window.matchMedia("(prefers-reduced-motion: reduce)").matches,
-  );
-  useEffect(() => {
-    const mq = window.matchMedia("(prefers-reduced-motion: reduce)");
-    const onChange = (e: MediaQueryListEvent) => setReduced(e.matches);
-    mq.addEventListener("change", onChange);
-    return () => mq.removeEventListener("change", onChange);
-  }, []);
-  return reduced;
-}
 
 export interface MetalFrameProps extends HTMLAttributes<HTMLDivElement> {
   /** Outer corner radius in px. Use a large number (9999) for a circle. */
@@ -92,7 +78,7 @@ export function MetalFrame({
   onClick,
   ...rest
 }: MetalFrameProps) {
-  const reduced = usePrefersReducedMotion();
+  const reduced = useMotionPref();
   const [hovered, setHovered] = useState(false);
   const [burst, setBurst] = useState(false);
 

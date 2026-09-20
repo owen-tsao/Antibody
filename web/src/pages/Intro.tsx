@@ -1,10 +1,11 @@
-import { motion, useReducedMotion } from "framer-motion";
-import { ArrowUpRight } from "lucide-react";
+import { motion } from "framer-motion";
+import { ArrowUpRight } from "@phosphor-icons/react";
 
 import OrbButton from "@/components/OrbButton";
+import { useMotionPref } from "@/hooks/useMotionPref";
 
 export default function Intro({ onNext }: { onNext: () => void }) {
-  const reduced = useReducedMotion();
+  const reduced = useMotionPref();
   const fade = (delay: number) => ({
     initial: { opacity: 0, y: reduced ? 0 : 12 },
     animate: { opacity: 1, y: 0 },
@@ -41,7 +42,7 @@ export default function Intro({ onNext }: { onNext: () => void }) {
 
       <motion.div {...fade(0.55)} className="mt-16">
         <OrbButton onClick={onNext} aria-label="Continue" className="h-24 w-24" lift={{ x: 2, y: -2 }}>
-          <ArrowUpRight className="h-7 w-7" strokeWidth={1.75} />
+          <ArrowUpRight size={28} />
         </OrbButton>
       </motion.div>
     </section>

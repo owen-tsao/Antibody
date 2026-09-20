@@ -1,12 +1,13 @@
-import { motion, useReducedMotion } from "framer-motion";
-import { Check } from "lucide-react";
+import { motion } from "framer-motion";
+import { Check } from "@phosphor-icons/react";
 
+import { useMotionPref } from "@/hooks/useMotionPref";
 import { cn } from "@/lib/utils";
 
 /**
  * The step rail from Owen's `wizard-steps` component (component-library, `prompts/wizard-steps-rail-integration.md`),
  * extracted on its own: 28 px rounded tiles, number → check once done, a spring scale on the current tile,
- * connectors whose fill scales in from the left. Adapted to the monochrome tokens, `framer-motion` and lucide;
+ * connectors whose fill scales in from the left. Adapted to the monochrome tokens, `framer-motion` and Phosphor;
  * the step content, buttons and crossfade panel stayed behind — the wizard page owns those.
  *
  * Steps up to `furthest` are buttons (you can go back to anything you have reached); later ones, and
@@ -41,7 +42,7 @@ export default function WizardRail({
   label?: string;
   className?: string;
 }) {
-  const reduced = useReducedMotion();
+  const reduced = useMotionPref();
   const total = steps.length;
   const transition = reduced ? { duration: 0 } : RAIL;
 
@@ -72,7 +73,7 @@ export default function WizardRail({
               animate={{ scale: here ? 1 : 0.92 }}
               transition={transition}
             >
-              {done ? <Check className="h-3 w-3" strokeWidth={2.5} aria-hidden /> : i + 1}
+              {done ? <Check size={12} weight="bold" aria-hidden /> : i + 1}
             </motion.span>
           );
           return (

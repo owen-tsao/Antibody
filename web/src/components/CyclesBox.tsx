@@ -1,8 +1,9 @@
-import { AnimatePresence, motion, useReducedMotion } from "framer-motion";
+import { AnimatePresence, motion } from "framer-motion";
 import { useState } from "react";
 
 import CycleTimeline from "@/components/CycleTimeline";
 import { MetalFrame } from "@/components/ui/liquid-metal-border";
+import { useMotionPref } from "@/hooks/useMotionPref";
 import { fmtTime, type CycleResult, type CycleView } from "@/lib/derive";
 import { cn } from "@/lib/utils";
 
@@ -19,7 +20,7 @@ const RESULT_DOT: Record<CycleResult, string> = {
 };
 
 export default function CyclesBox({ views }: { views: CycleView[] }) {
-  const reduced = useReducedMotion();
+  const reduced = useMotionPref();
   const newest = views[0]?.cycle ?? null;
   const [picked, setPicked] = useState<number | null>(null);
 
@@ -141,7 +142,7 @@ function CycleTabs({
   onPick: (cycle: number) => void;
 }) {
   const [hover, setHover] = useState<number | null>(null);
-  const reduced = useReducedMotion();
+  const reduced = useMotionPref();
   return (
     <ol className="flex flex-wrap items-center gap-0.5">
       {[...views].reverse().map((v) => {

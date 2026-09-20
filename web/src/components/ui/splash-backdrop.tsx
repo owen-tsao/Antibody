@@ -20,26 +20,15 @@
 // shader. Both unmount before the Agents page mounts its four orb canvases.
 
 import { LiquidMetal, liquidMetalPresets, MeshGradient } from "@paper-design/shaders-react";
-import { useEffect, useState } from "react";
+
+import { useMotionPref } from "@/hooks/useMotionPref";
 
 const MESH_COLORS = ["#000000", "#1a1a1a", "#333333", "#ffffff"];
 const GL = { antialias: false, powerPreference: "high-performance" } as const;
 
-function usePrefersReducedMotion() {
-  const [reduced, setReduced] = useState(
-    () => typeof window !== "undefined" && window.matchMedia("(prefers-reduced-motion: reduce)").matches,
-  );
-  useEffect(() => {
-    const mq = window.matchMedia("(prefers-reduced-motion: reduce)");
-    const onChange = (e: MediaQueryListEvent) => setReduced(e.matches);
-    mq.addEventListener("change", onChange);
-    return () => mq.removeEventListener("change", onChange);
-  }, []);
-  return reduced;
-}
 
 export default function SplashBackdrop() {
-  const reduced = usePrefersReducedMotion();
+  const reduced = useMotionPref();
   return (
     <>
       <MeshGradient

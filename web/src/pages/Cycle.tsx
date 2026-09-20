@@ -1,11 +1,13 @@
-import { motion, useReducedMotion } from "framer-motion";
-import { ArrowUpRight } from "lucide-react";
+import { motion } from "framer-motion";
+import { ArrowUpRight } from "@phosphor-icons/react";
 import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
 
 import { api, type CycleRecord, type ReadSource } from "@/api";
 import ApiDown from "@/components/ApiDown";
+import Page from "@/components/Page";
 import ConfigDiff from "@/components/ConfigDiff";
 import { usePoll } from "@/hooks/usePoll";
+import { useMotionPref } from "@/hooks/useMotionPref";
 import { cycleSteps, fmtTime, humanizeKind, readSource, runTitle, ticketLink } from "@/lib/derive";
 import { CHART_H, CHART_W, cycleChartSvg } from "@/lib/previewSvg";
 import { cn } from "@/lib/utils";
@@ -31,7 +33,7 @@ export default function Cycle({
   const source: ReadSource = readSource(id);
   const cyclesFn = useCallback(() => api.cycles(source), [source]);
   const { data: cycles, error, refresh } = usePoll(cyclesFn, 10_000);
-  const reduced = useReducedMotion();
+  const reduced = useMotionPref();
   const r = cycles?.find((c) => c.cycle === n);
 
   const idx = cycles && r ? cycles.indexOf(r) : -1;
@@ -39,15 +41,16 @@ export default function Cycle({
   const next = cycles && idx >= 0 && idx < cycles.length - 1 ? cycles[idx + 1] : undefined;
 
   return (
-    <main className="min-h-full px-6 pb-20 pt-8 md:px-10 md:pt-7">
-      {/* The shell's "Runs" goes to the list; the way back to this run is the page's own, in text. */}
-      <nav className="mx-auto w-full max-w-6xl pb-6 text-[13px]">
-        <button type="button" onClick={onBack} className="group rounded text-[var(--muted)] transition-colors hover:text-[var(--fg)]">
-          ← <span className="u-line">back to {runTitle(id).toLowerCase()}</span>
+    <Page
+      eyebrow={
+        // The shell's "Runs" goes to the list; the way back to this run is the page's own.
+        <button type="button" onClick={onBack} className="rounded transition-colors hover:text-[var(--fg)]">
+          {runTitle(id)} /
         </button>
-      </nav>
+      }
+      title={`Cycle ${n}`}
+    >
       <motion.div
-        className="mx-auto w-full max-w-6xl"
         initial={reduced ? false : { opacity: 0, y: 8 }}
         animate={{ opacity: 1, y: 0 }}
         transition={{ duration: 0.3, ease: [0.2, 0.65, 0.3, 0.9] }}
@@ -80,7 +83,7 @@ export default function Cycle({
           </>
         )}
       </motion.div>
-    </main>
+    </Page>
   );
 }
 
@@ -109,12 +112,12 @@ function Header({ r }: { r: CycleRecord }) {
                 className={link}
                 title="The real Zendesk ticket this episode worked; the agent's actions and reply are on it as an internal note"
               >
-                <span className="u-line">Ticket #{ticket.id} in Zendesk</span> <ArrowUpRight className={arrow} strokeWidth={1.75} />
+                Ticket #{ticket.id} in Zendesk <ArrowUpRight className={arrow} />
               </a>
             )}
             {r.weave_call_url && (
               <a href={r.weave_call_url} target="_blank" rel="noreferrer" className={link}>
-                <span className="u-line">Trace in Weave</span> <ArrowUpRight className={arrow} strokeWidth={1.75} />
+                <span className="u-line">Trace in Weave</span> <ArrowUpRight className={arrow} />
               </a>
             )}
             {evalUrl && (
@@ -125,7 +128,7 @@ function Header({ r }: { r: CycleRecord }) {
                 className={link}
                 title={`${evalUrls.length} gate ${evalUrls.length === 1 ? "evaluation" : "evaluations"} (new, regression, legit); opens the last`}
               >
-                <span className="u-line">Gate evaluation</span> <ArrowUpRight className={arrow} strokeWidth={1.75} />
+                Gate evaluation <ArrowUpRight className={arrow} />
               </a>
             )}
           </div>
@@ -155,7 +158,7 @@ const REVEAL_MS = 1400;
 function Body({ r, all, source }: { r: CycleRecord; all: CycleRecord[]; source: ReadSource }) {
   const steps = cycleSteps(r);
   const changed = r.config_before !== r.config_after;
-  const reduced = useReducedMotion();
+  const reduced = useMotionPref();
 
   // The chart is as tall as the left column (steps + diff) so the two share top and bottom edges,
   // but never taller than the viewport: past that it caps and sticks, riding beside a long diff

@@ -1,7 +1,8 @@
-import { AnimatePresence, motion, useReducedMotion } from "framer-motion";
-import { Check, ChevronRight, Minus, X } from "lucide-react";
+import { AnimatePresence, motion } from "framer-motion";
+import { CaretRight, Check, Minus, X } from "@phosphor-icons/react";
 import { useEffect, useState } from "react";
 
+import { useMotionPref } from "@/hooks/useMotionPref";
 import type { StepView, SubItem } from "@/lib/derive";
 import { cn } from "@/lib/utils";
 
@@ -15,7 +16,7 @@ import { cn } from "@/lib/utils";
 // default view is the story and the paragraphs are one click away.
 
 export default function CycleTimeline({ steps, expanded = false }: { steps: StepView[]; expanded?: boolean }) {
-  const reduced = useReducedMotion();
+  const reduced = useMotionPref();
   return (
     <ol className="relative">
       {steps.map((s, i) => {
@@ -78,7 +79,7 @@ function stripAgent(headline: string, label: string): string {
 }
 
 function Node({ state }: { state: StepView["state"] }) {
-  const reduced = useReducedMotion();
+  const reduced = useMotionPref();
   const base = "relative z-10 mt-0.5 flex h-5 w-5 items-center justify-center rounded-full";
   if (state === "done") {
     return (
@@ -88,14 +89,14 @@ function Node({ state }: { state: StepView["state"] }) {
         animate={{ scale: 1 }}
         transition={{ type: "spring", stiffness: 420, damping: 22 }}
       >
-        <Check className="h-3 w-3" strokeWidth={2.5} />
+        <Check size={12} weight="bold" />
       </motion.span>
     );
   }
   if (state === "failed") {
     return (
       <span className={cn(base, "border border-[var(--danger)] text-[var(--danger)]")}>
-        <X className="h-3 w-3" strokeWidth={2.5} />
+        <X size={12} weight="bold" />
       </span>
     );
   }
@@ -114,7 +115,7 @@ function Node({ state }: { state: StepView["state"] }) {
   if (state === "skipped") {
     return (
       <span className={cn(base, "border border-[var(--border)] text-[var(--faint)]")}>
-        <Minus className="h-3 w-3" strokeWidth={2} />
+        <Minus size={12} weight="bold" />
       </span>
     );
   }
@@ -179,7 +180,7 @@ function Clamped({ text, expanded }: { text: string; expanded: boolean }) {
 /** A closed-by-default paragraph. The trigger is a quiet text row; the body slides open. */
 function Disclosure({ label, text, open: initialOpen }: { label: string; text: string; open: boolean }) {
   const [open, setOpen] = useState(initialOpen);
-  const reduced = useReducedMotion();
+  const reduced = useMotionPref();
   const isPrompt = label.includes("prompt");
   return (
     <div className="mt-3">
@@ -189,10 +190,7 @@ function Disclosure({ label, text, open: initialOpen }: { label: string; text: s
         aria-expanded={open}
         className="group -ml-1 flex items-center gap-1 rounded px-1 py-0.5 text-[12px] text-[var(--faint)] transition-colors hover:text-[var(--fg)]"
       >
-        <ChevronRight
-          className={cn("h-3 w-3 transition-transform duration-200", open && "rotate-90")}
-          strokeWidth={2}
-        />
+        <CaretRight size={12} weight="bold" className={cn("transition-transform duration-200", open && "rotate-90")} />
         {open ? `hide ${label}` : `show ${label}`}
       </button>
       <AnimatePresence initial={false}>

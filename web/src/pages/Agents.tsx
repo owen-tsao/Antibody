@@ -1,232 +1,70 @@
-import { useState } from "react";
+import { Plugs } from "@phosphor-icons/react";
 
-import { api, ApiError, type Health, type PingResult } from "@/api";
+import AgentCard from "@/components/AgentCard";
 import ApiDown from "@/components/ApiDown";
-import { usePoll } from "@/hooks/usePoll";
-import { agentsCountLine, agentSubline, exampleState, pingLabel, pingResultLine, runsByAgent, toolMapping, toolsMappedLabel } from "@/lib/derive";
-import { linkProps, onboarding } from "@/lib/routes";
-import { NO_KEY_LINE, primaryButton } from "@/lib/ui";
-import { cn } from "@/lib/utils";
+import Page from "@/components/Page";
+import type { ShellData } from "@/components/Shell";
+import { agentsSorted, agentSubline, exampleState, selectable, selectedAgent } from "@/lib/derive";
+import { agent as agentRoute, linkProps, onboarding } from "@/lib/routes";
+import type { RunSettings } from "@/lib/settings";
 
 /**
- * `/app/agents` (docs/plans/00-overview.md Block 3.3): every connected support agent as a hairline table —
- * name · how it is reached · last ping · tools mapped · runs — with quiet actions per row and one primary
- * action, Connect agent, top-right. The built-in agent is the demo; the example agent can be started and
- * stopped from here; stored agents can be pinged and deleted (confirm on the second click).
- *
- * `GET /api/agents` is polled at 3 s, never faster: each call probes port 8790 with a 1 s timeout while the
- * example agent is down. Pings made here live in page state — synthetic rows have nowhere to keep one.
+ * `/app/agents` (docs/plans/08-rework-round-2.md §6): the fleet as a grid of pictures — each agent on its own
+ * photo card in its own colour, the one that ran most recently first, a dashed Connect card last. The card's face
+ * is a link to the agent's page, where every per-agent action (ping, start/stop, delete) lives; a quiet button
+ * in its corner makes the agent the one the next run attacks. Nothing here starts a run.
  */
-
-const AGENTS_MS = 3_000;
-const RUNS_MS = 10_000;
-
-const quiet =
-  "group rounded text-[12px] text-[var(--muted)] transition-colors hover:text-[var(--fg)] disabled:cursor-default disabled:text-[var(--faint)] disabled:hover:text-[var(--faint)]";
-
-type Pinging = PingResult | "pending";
-
-export default function AgentsList({ health }: { health: Health | null }) {
-  const { data: agents, error, refresh } = usePoll(api.agents, AGENTS_MS);
-  const { data: runs } = usePoll(api.runs, RUNS_MS);
-  // The built-in row lists exactly the storefront's tools (api/agents.py `_builtin_row`). /api/manifest's
-  // `tools` is the shorter TOOL_SPECS list (3 of 5), which would make the demo agent read "3/5" against itself.
-  const storefront = agents?.find((a) => a.id === "builtin")?.tools?.map((t) => t.name) ?? null;
-  const runCounts = runsByAgent(runs ?? []);
-
-  const [pings, setPings] = useState<Record<string, Pinging>>({});
-  // One inline message per row: a ping error is a result, not a message; these are HTTP failures (409, 503).
-  const [notes, setNotes] = useState<Record<string, string>>({});
-  const [confirming, setConfirming] = useState<string | null>(null);
-  // "starting…" from the click until the next poll's `starting`/`running` takes over (a few seconds at most).
-  const [justStarted, setJustStarted] = useState(false);
-
-  const note = (id: string, text: string | null) =>
-    setNotes((n) => {
-      const next = { ...n };
-      if (text === null) delete next[id];
-      else next[id] = text;
-      return next;
-    });
-
-  const ping = async (id: string) => {
-    setPings((p) => ({ ...p, [id]: "pending" }));
-    note(id, null);
-    try {
-      const r = await api.agentPing(id);
-      setPings((p) => ({ ...p, [id]: r }));
-    } catch (e) {
-      setPings((p) => {
-        const next = { ...p };
-        delete next[id];
-        return next;
-      });
-      note(id, e instanceof Error ? e.message : String(e));
-    } finally {
-      refresh();
-    }
-  };
-
-  const remove = async (id: string) => {
-    setConfirming(null);
-    try {
-      await api.agentDelete(id);
-    } catch (e) {
-      note(id, e instanceof Error ? e.message : String(e));
-    } finally {
-      refresh();
-    }
-  };
-
-  const startExample = async () => {
-    note("example", null);
-    setJustStarted(true);
-    setTimeout(() => setJustStarted(false), 2 * AGENTS_MS);
-    try {
-      await api.exampleStart();
-    } catch (e) {
-      setJustStarted(false);
-      note("example", e instanceof Error ? e.message : String(e));
-    } finally {
-      refresh();
-    }
-  };
-
-  const stopExample = async () => {
-    note("example", null);
-    setJustStarted(false);
-    try {
-      await api.exampleStop();
-    } catch (e) {
-      // 404 = nothing was running; the row already says so.
-      if (!(e instanceof ApiError && e.status === 404)) note("example", e instanceof Error ? e.message : String(e));
-    } finally {
-      refresh();
-    }
-  };
-
-  const noKey = health !== null && !health.has_api_key;
+export default function Agents({ shell, settings, onSettingsChange }: { shell: ShellData; settings: RunSettings; onSettingsChange: (next: RunSettings) => void }) {
+  const { agents, agentsError, runs, refresh } = shell;
+  const selected = selectedAgent(agents, settings.target);
+  const sorted = agents ? agentsSorted(agents, runs ?? []) : null;
 
   return (
-    <main className="px-6 pb-16 pt-8 md:px-10 md:pt-7">
-      <div className="mx-auto w-full max-w-[1040px]">
-        <header className="flex items-end justify-between gap-6">
-          <h1 className="display text-[48px] leading-[1]">Agents</h1>
-          <a {...linkProps(onboarding(1))} className={primaryButton}>
-            Connect agent
+    <Page title="Agents">
+      {!sorted ? (
+        <p className="text-[13px]">{agentsError ? <ApiDown onRetry={refresh} /> : <span className="text-[var(--faint)]">loading…</span>}</p>
+      ) : (
+        <div className="grid gap-6 sm:grid-cols-2 xl:grid-cols-3">
+          {sorted.map((a) => {
+            const on = a.id === selected?.id;
+            const starting = a.id === "example" && exampleState(a) === "starting";
+            return (
+              <AgentCard key={a.id} agent={a} subline={agentSubline(a, starting)} name={a.name}>
+                <a {...linkProps(agentRoute(a.id))} aria-label={`Open ${a.name}`} className="absolute inset-0 z-10 rounded-[26px] outline-offset-[-6px]" />
+                {on ? (
+                  <span className="pointer-events-none absolute bottom-4 left-5 z-30 text-[11px] uppercase tracking-[0.08em] text-white/70">selected</span>
+                ) : (
+                  selectable(a) && (
+                    <button
+                      type="button"
+                      aria-label={`Attack ${a.name} next`}
+                      onClick={() => onSettingsChange({ ...settings, target: a.id })}
+                      className="absolute bottom-4 left-5 z-30 rounded text-[11px] uppercase tracking-[0.08em] text-white/70 opacity-0 transition-opacity hover:text-white focus-visible:opacity-100 group-hover:opacity-100"
+                    >
+                      attack next
+                    </button>
+                  )
+                )}
+              </AgentCard>
+            );
+          })}
+
+          <a
+            {...linkProps(onboarding(1))}
+            className="flex aspect-video flex-col items-start justify-between rounded-[30px] border-4 border-dashed border-[var(--border-2)] p-6 text-left transition-colors hover:border-[var(--muted)] hover:bg-[var(--card)]"
+          >
+            <span className="grid h-10 w-10 place-items-center rounded-[11px] border border-dashed border-[var(--border-2)] text-[var(--muted)]">
+              <Plugs size={18} aria-hidden />
+            </span>
+            <span>
+              <span className="block text-[14px] font-medium text-[var(--fg)]">Connect an agent</span>
+              <span className="mt-1 block text-[12px] leading-[1.5] text-[var(--muted)]">
+                {sorted.some((a) => !a.synthetic) ? "Any support agent that answers POST /episode over HTTP." : "None of your own yet. Any support agent that answers POST /episode over HTTP."}
+              </span>
+            </span>
           </a>
-        </header>
-
-        <p className="mt-4 min-h-[1.25rem] text-[13px] text-[var(--muted)]">
-          {agents ? (
-            agentsCountLine(agents)
-          ) : error ? (
-            <ApiDown onRetry={refresh} />
-          ) : (
-            <span className="text-[var(--faint)]">loading…</span>
-          )}
-        </p>
-
-        {agents && (
-          <table className="mt-6 w-full table-fixed border-collapse text-[13px]">
-            <colgroup>
-              <col className="w-[26%]" />
-              <col className="w-[20%]" />
-              <col className="w-[30%]" />
-              <col className="w-[7%]" />
-              <col className="w-[7%]" />
-              <col />
-            </colgroup>
-            <thead>
-              <tr className="border-b border-[var(--border)] text-left text-[10.5px] font-medium uppercase tracking-[0.08em] text-[var(--faint)]">
-                <th className="py-2 pr-4 font-medium">Name</th>
-                <th className="py-2 pr-4 font-medium">Reached at</th>
-                <th className="py-2 pr-4 font-medium">Last ping</th>
-                <th className="py-2 pr-4 text-right font-medium">Tools</th>
-                <th className="py-2 pr-4 text-right font-medium">Runs</th>
-                <th className="py-2 text-right font-medium">
-                  <span className="sr-only">Actions</span>
-                </th>
-              </tr>
-            </thead>
-            <tbody className="divide-y divide-[var(--border)]">
-              {agents.map((a) => {
-                const p = pings[a.id];
-                const inSession = p && p !== "pending" ? p : null;
-                const mapping = inSession ? inSession.mapping : toolMapping(a.tools, storefront);
-                const isExample = a.id === "example";
-                const state = isExample ? exampleState(a) : null;
-                const starting = state === "starting" || (isExample && state === "stopped" && justStarted);
-                return (
-                  <tr key={a.id} className="align-top">
-                    <td className="py-3 pr-4">
-                      <div className="font-medium text-[var(--fg)]">{a.name}</div>
-                      <div className="mt-0.5 text-[12px] text-[var(--faint)]">{agentSubline(a, starting)}</div>
-                      {notes[a.id] && (
-                        <div role="alert" className="mt-1 text-[12px] text-[var(--danger)]">
-                          {notes[a.id]}
-                        </div>
-                      )}
-                    </td>
-                    <td className="code py-3 pr-4 text-[12px] text-[var(--muted)]">{a.url ?? "—"}</td>
-                    <td className="py-3 pr-4 text-[var(--muted)]">
-                      {p === "pending" ? (
-                        <span className="text-[var(--faint)]">pinging…</span>
-                      ) : inSession ? (
-                        <span className={cn(!inSession.ok && "text-[var(--danger)]")}>{pingResultLine(inSession)}</span>
-                      ) : (
-                        <span className={cn(a.last_ping && !a.last_ping.ok && "text-[var(--danger)]")}>{pingLabel(a.last_ping)}</span>
-                      )}
-                    </td>
-                    <td className="tabular py-3 pr-4 text-right text-[var(--muted)]">{toolsMappedLabel(mapping)}</td>
-                    <td className="tabular py-3 pr-4 text-right text-[var(--muted)]">{runCounts.get(a.id) ?? 0}</td>
-                    <td className="py-3 text-right">
-                      <div className="flex justify-end gap-4">
-                        {a.id !== "builtin" && (
-                          <button type="button" onClick={() => void ping(a.id)} disabled={p === "pending"} className={quiet}>
-                            <span className="u-line">ping</span>
-                          </button>
-                        )}
-                        {isExample &&
-                          (state === "running" || state === "starting" ? (
-                            <button type="button" onClick={() => void stopExample()} className={quiet}>
-                              <span className="u-line">stop</span>
-                            </button>
-                          ) : (
-                            <button
-                              type="button"
-                              onClick={() => void startExample()}
-                              disabled={starting || noKey}
-                              title={noKey ? `${NO_KEY_LINE}; the example agent calls inference` : undefined}
-                              className={quiet}
-                            >
-                              <span className="u-line">{starting ? "starting…" : "start"}</span>
-                            </button>
-                          ))}
-                        {!a.synthetic &&
-                          (confirming === a.id ? (
-                            <span className="inline-flex gap-3">
-                              <button type="button" onClick={() => void remove(a.id)} className={cn(quiet, "text-[var(--danger)] hover:text-[var(--danger)]")}>
-                                <span className="u-line">confirm delete</span>
-                              </button>
-                              <button type="button" onClick={() => setConfirming(null)} className={quiet}>
-                                <span className="u-line">cancel</span>
-                              </button>
-                            </span>
-                          ) : (
-                            <button type="button" onClick={() => setConfirming(a.id)} className={quiet}>
-                              <span className="u-line">delete</span>
-                            </button>
-                          ))}
-                      </div>
-                    </td>
-                  </tr>
-                );
-              })}
-            </tbody>
-          </table>
-        )}
-      </div>
-    </main>
+        </div>
+      )}
+    </Page>
   );
 }

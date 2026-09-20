@@ -1,153 +1,161 @@
+import { CaretDown } from "@phosphor-icons/react";
+import type { ReactNode } from "react";
+
+import Dropdown from "@/components/Dropdown";
+
 import { CHAOS_CYCLES, REPAIR_ATTEMPTS, SEEDS, UNTIL_QUIET, type RunSettings } from "@/lib/settings";
-import { textButton } from "@/lib/ui";
 import { cn } from "@/lib/utils";
 
 /**
- * The run-settings rows — Seeds · Chaos cycles · Repair attempts · Second pass · Until quiet — as one block
- * of hairline rows, shared by the start dialog, the Settings page's run defaults and the onboarding wizard's
- * First run step. The parent owns the values; this only edits them. Every field is a flag `chaos.loop run`
- * already has (lib/settings.ts). `world` left the fields: the API default `auto` resolves to the mock
- * storefront without Zendesk credentials, which is the only world the sandbox runs in.
+ * The run-settings rows — Seeds · Chaos cycles · Repair attempts · Second pass · Until quiet · Vulnerability —
+ * shared by the Settings page's run defaults and the onboarding wizard's First run step.
+ * The parent owns the values; this only edits them. Every field is a flag `chaos.loop run` already has
+ * (lib/settings.ts). Numbers are a `Select` (the app's `Dropdown`) over the allowed values; booleans a switch. `world` left
+ * the fields: the API default `auto` resolves to the mock storefront without Zendesk credentials.
  */
 
 export default function RunSettingsFields({
   settings,
   onChange,
   seedCount,
+  framed = true,
 }: {
   settings: RunSettings;
   onChange: (next: RunSettings) => void;
   /** How many seed scenarios exist (from the manifest); null while unknown, which falls back to the API's cap. */
   seedCount: number | null;
+  /** Draw the hairline frame around the rows (off when a panel already frames them). */
+  framed?: boolean;
 }) {
-  // The seeds stepper walks 0 … S−1 then "all" (= S, so no duplicate stop). S is the manifest's count,
-  // or the API's cap while the manifest is unknown.
+  // Seeds offers 0 … S−1 then "all" (= S, so no duplicate stop). S is the manifest's count, or the API's cap
+  // while the manifest is unknown.
   const seedTop = Math.max(1, seedCount ?? SEEDS.max);
   const set = (patch: Partial<RunSettings>) => onChange({ ...settings, ...patch });
-
-  const seedsDown = () => set({ seeds: settings.seeds === null ? seedTop - 1 : settings.seeds - 1 });
-  const seedsUp = () => set({ seeds: settings.seeds !== null && settings.seeds + 1 >= seedTop ? null : (settings.seeds ?? 0) + 1 });
 
   // The API rejects a streak longer than the cap, so lowering the cap drags the streak down with it.
   const setChaos = (chaosCycles: number) =>
     set({ chaosCycles, untilQuiet: settings.untilQuiet === null ? null : chaosCycles === 0 ? null : Math.min(settings.untilQuiet, chaosCycles) });
   const quietMax = Math.min(UNTIL_QUIET.max, settings.chaosCycles);
-  const untilQuiet = settings.untilQuiet;
 
   return (
-    <div className="divide-y divide-[var(--border)] border-y border-[var(--border)]">
-      <Row label="Seeds">
-        <Stepper
-          value={settings.seeds === null ? "all" : settings.seeds}
-          onDown={seedsDown}
-          onUp={seedsUp}
-          downDisabled={settings.seeds === SEEDS.min}
-          upDisabled={settings.seeds === null}
-          name="seeds"
+    <div className={cn("divide-y divide-[var(--border)]", framed && "rounded-xl border border-[var(--border)]")}>
+      <Row label="Seeds" hint="Scripted attacks the run starts with; the chaos agent invents the rest.">
+        <Select
+          value={settings.seeds === null ? "all" : String(settings.seeds)}
+          onChange={(v) => set({ seeds: v === "all" ? null : Number(v) })}
+          options={[...range(SEEDS.min, seedTop - 1).map((n) => ({ value: String(n), label: String(n) })), { value: "all", label: `all (${seedTop})` }]}
+          name="Seeds"
         />
       </Row>
-      <Row label="Chaos cycles">
-        <Stepper
-          value={settings.chaosCycles}
-          onDown={() => setChaos(settings.chaosCycles - 1)}
-          onUp={() => setChaos(settings.chaosCycles + 1)}
-          downDisabled={settings.chaosCycles <= CHAOS_CYCLES.min}
-          upDisabled={settings.chaosCycles >= CHAOS_CYCLES.max}
-          name="chaos cycles"
-        />
+      <Row label="Chaos cycles" hint="Attacks the chaos agent invents after the seeds.">
+        <Select value={String(settings.chaosCycles)} onChange={(v) => setChaos(Number(v))} options={numbers(CHAOS_CYCLES.min, CHAOS_CYCLES.max)} name="Chaos cycles" />
       </Row>
-      <Row label="Repair attempts">
-        <Stepper
-          value={settings.repairAttempts}
-          onDown={() => set({ repairAttempts: settings.repairAttempts - 1 })}
-          onUp={() => set({ repairAttempts: settings.repairAttempts + 1 })}
-          downDisabled={settings.repairAttempts <= REPAIR_ATTEMPTS.min}
-          upDisabled={settings.repairAttempts >= REPAIR_ATTEMPTS.max}
-          name="repair attempts"
-        />
+      <Row label="Repair attempts" hint="How many patches the repair agent may try per landed attack before giving up.">
+        <Select value={String(settings.repairAttempts)} onChange={(v) => set({ repairAttempts: Number(v) })} options={numbers(REPAIR_ATTEMPTS.min, REPAIR_ATTEMPTS.max)} name="Repair attempts" />
       </Row>
-      <Row label="Second pass">
-        <button
-          type="button"
-          role="switch"
-          aria-checked={settings.secondPass}
-          onClick={() => set({ secondPass: !settings.secondPass })}
-          className={cn(textButton, "tabular w-10 text-right", settings.secondPass && "text-[var(--fg)]")}
-        >
-          <span className="u-line">{settings.secondPass ? "on" : "off"}</span>
-        </button>
+      <Row label="Second pass" hint="Re-run every attack that landed against the final config.">
+        <Switch checked={settings.secondPass} onChange={(on) => set({ secondPass: on })} name="Second pass" />
       </Row>
-      <Row label="Until quiet" hint="stop early once this many chaos attacks in a row are blocked">
-        {untilQuiet === null ? (
-          <button
-            type="button"
-            role="switch"
-            aria-checked={false}
+      <Row label="Until quiet" hint="Stop early once this many chaos attacks in a row are blocked.">
+        <div className="flex items-center gap-3">
+          {settings.untilQuiet !== null && (
+            <Select value={String(settings.untilQuiet)} onChange={(v) => set({ untilQuiet: Number(v) })} options={numbers(UNTIL_QUIET.min, Math.max(UNTIL_QUIET.min, quietMax))} name="Blocked attacks in a row" />
+          )}
+          <Switch
+            checked={settings.untilQuiet !== null}
             disabled={settings.chaosCycles === 0}
             title={settings.chaosCycles === 0 ? "needs at least one chaos cycle" : undefined}
-            onClick={() => set({ untilQuiet: Math.min(2, quietMax) })}
-            className={cn(textButton, "tabular w-10 text-right")}
-          >
-            <span className="u-line">off</span>
-          </button>
-        ) : (
-          <div className="flex items-baseline gap-3">
-            <Stepper
-              value={untilQuiet}
-              onDown={() => set({ untilQuiet: untilQuiet - 1 })}
-              onUp={() => set({ untilQuiet: untilQuiet + 1 })}
-              downDisabled={untilQuiet <= UNTIL_QUIET.min}
-              upDisabled={untilQuiet >= quietMax}
-              name="blocked attacks in a row"
-            />
-            <button type="button" onClick={() => set({ untilQuiet: null })} className={cn(textButton, "text-[12px]")}>
-              <span className="u-line">off</span>
-            </button>
-          </div>
-        )}
+            onChange={(on) => set({ untilQuiet: on ? Math.min(2, quietMax) : null })}
+            name="Until quiet"
+          />
+        </div>
+      </Row>
+      <Row label="Vulnerability measurement" hint="After the run, measure which known attacks still land on v0 and on the final config.">
+        <Switch checked={settings.vulnerability} onChange={(on) => set({ vulnerability: on })} name="Vulnerability measurement" />
       </Row>
     </div>
   );
 }
 
-function Row({ label, hint, children }: { label: string; hint?: string; children: React.ReactNode }) {
+function range(from: number, to: number): number[] {
+  return Array.from({ length: Math.max(0, to - from + 1) }, (_, i) => from + i);
+}
+
+function numbers(from: number, to: number): { value: string; label: string }[] {
+  return range(from, to).map((n) => ({ value: String(n), label: String(n) }));
+}
+
+/** A setting row: label and one-line description left, the control right, hairline between rows (the parent's `divide-y`). */
+export function Row({ label, hint, children }: { label: string; hint?: string; children: ReactNode }) {
   return (
-    <div className="flex items-baseline justify-between gap-6 py-3">
-      <span className="text-[13px]" title={hint}>
-        {label}
-      </span>
-      {children}
+    <div className="flex items-center justify-between gap-6 px-4 py-3">
+      <div className="min-w-0">
+        <div className="text-[13px] text-[var(--fg)]">{label}</div>
+        {hint && <div className="mt-0.5 text-[12px] leading-[1.5] text-[var(--faint)]">{hint}</div>}
+      </div>
+      <div className="shrink-0">{children}</div>
     </div>
   );
 }
 
-function Stepper({
+/** A `Dropdown` in the shape of a compact right-aligned select: the value with a caret, the list beneath. */
+export function Select({
   value,
-  onDown,
-  onUp,
-  downDisabled,
-  upDisabled,
+  onChange,
+  options,
   name,
+  className,
+  panelWidth = 160,
 }: {
-  value: number | string;
-  onDown: () => void;
-  onUp: () => void;
-  downDisabled: boolean;
-  upDisabled: boolean;
-  /** For the buttons' accessible names ("fewer seeds", "more seeds"). */
+  value: string;
+  onChange: (value: string) => void;
+  options: { value: string; label: string }[];
   name: string;
+  className?: string;
+  panelWidth?: number;
 }) {
   return (
-    <div className="flex items-baseline gap-3">
-      <button type="button" onClick={onDown} disabled={downDisabled} aria-label={`fewer ${name}`} className={textButton}>
-        <span className="u-line">−</span>
-      </button>
-      <span className="tabular w-7 text-center text-[13px]" aria-live="polite">
-        {value}
-      </span>
-      <button type="button" onClick={onUp} disabled={upDisabled} aria-label={`more ${name}`} className={textButton}>
-        <span className="u-line">+</span>
-      </button>
-    </div>
+    <Dropdown
+      value={value}
+      options={options}
+      onChange={onChange}
+      label={name}
+      align="end"
+      panelWidth={panelWidth}
+      className={cn("inline-block", className)}
+      trigger={({ open, selected }) => (
+        <span
+          className={cn(
+            "tabular inline-flex h-8 min-w-[72px] max-w-[320px] items-center justify-end gap-2 rounded-lg border bg-[var(--bg)] pl-3 pr-2.5 text-[12.5px] text-[var(--fg)] transition-colors",
+            open ? "border-[var(--border-2)]" : "border-[var(--border)] hover:border-[var(--border-2)]",
+          )}
+        >
+          <span className="sr-only">{name}: </span>
+          <span className="truncate">{selected?.label ?? value}</span>
+          <CaretDown size={12} className={cn("shrink-0 text-[var(--faint)] transition-transform", open && "rotate-180")} aria-hidden />
+        </span>
+      )}
+    />
+  );
+}
+
+/** An on/off switch: a 32×18 track, the knob slides; the state is also announced (`role="switch"`). */
+export function Switch({ checked, onChange, name, disabled, title }: { checked: boolean; onChange: (on: boolean) => void; name: string; disabled?: boolean; title?: string }) {
+  return (
+    <button
+      type="button"
+      role="switch"
+      aria-checked={checked}
+      aria-label={name}
+      disabled={disabled}
+      title={title}
+      onClick={() => onChange(!checked)}
+      className={cn(
+        "relative inline-flex h-[18px] w-8 shrink-0 items-center rounded-full border transition-colors focus-visible:outline-white disabled:cursor-default disabled:opacity-40",
+        checked ? "border-[var(--fg)] bg-[var(--fg)]" : "border-[var(--border-2)] bg-transparent",
+      )}
+    >
+      <span className={cn("absolute h-3 w-3 rounded-full transition-[left,background-color] duration-150", checked ? "left-[15px] bg-[var(--bg)]" : "left-[2px] bg-[var(--muted)]")} />
+    </button>
   );
 }

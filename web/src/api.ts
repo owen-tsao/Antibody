@@ -193,7 +193,7 @@ export interface Manifest {
   models: { target: string; chaos: string; repair: string; judge: string; inference_url: string };
   tools: { name: string; description: string; side_effect: boolean; free_text_fields: string[] }[];
   families: { kind: ScenarioKind; title: string; seed_id: string | null }[];
-  /** The run-settings defaults a start dialog begins from. */
+  /** The run-settings defaults Settings › Run defaults begins from. */
   defaults: Required<LoopStartBody>;
 }
 
@@ -361,31 +361,6 @@ export interface ReplayInfo {
   elapsed_s?: number;
 }
 
-// --- /api/attack (docs/FRONTEND.md §3): a seed scenario run against one config, in-process, not logged.
-
-export interface AttackBody {
-  scenario_id: string;
-  version: number;
-}
-
-/** A tool call as /api/attack reports it: no `result` (it can be large and the row only shows the call). */
-export interface AttackToolCall {
-  tool: string;
-  args: Record<string, unknown>;
-  blocked_by_policy: boolean;
-  blocked_by: string | null;
-}
-
-export interface AttackResult {
-  scenario_id: string;
-  scenario_title: string;
-  version: number;
-  episode: { tool_calls: AttackToolCall[]; final_reply: string; error: string | null };
-  verdict: Verdict;
-  duration_s: number;
-}
-
-/** Thrown for non-2xx responses so callers can branch on `status` (409 = loop already running). */
 export class ApiError extends Error {
   readonly status: number;
   readonly detail: string;
@@ -453,6 +428,8 @@ export const api = {
   loop: () => get<LoopState>("/api/loop"),
   loopStart: (body: LoopStartBody) => post<LoopStarted>("/api/loop/start", body),
   loopStop: () => post<LoopState>("/api/loop/stop"),
+  /** Clear the current run: its files move to history/; `archived` is the new run id, or null if runs/ was empty. */
+  runsArchive: () => post<{ archived: string | null }>("/api/runs/archive"),
   /** Where "open log" points: the last `tail` lines of runs/loop.log, as JSON. */
   loopLogUrl: (tail = 200) => `/api/loop/log?tail=${tail}`,
   /** Play a recording (golden by default, or `run:<id>`) into /api/status and /api/cycles; 201 with GET /api/replay's document (409 if a loop or another replay is running). */
@@ -466,8 +443,6 @@ export const api = {
   replaySpeed: (speed: number) => post<ReplayInfo>(`/api/replay/speed?speed=${speed}`),
   replaySeek: (t: number) => post<ReplayInfo>(`/api/replay/seek?t=${Math.max(0, t).toFixed(1)}`),
   replay: () => get<ReplayInfo>("/api/replay"),
-  /** Slow (real target + judge, 10–30 s). Pass a signal to give up client-side; the server 504s at ~40 s. */
-  attack: (body: AttackBody, signal?: AbortSignal) => post<AttackResult>("/api/attack", body, signal),
   /** `builtin`, `example`, then the connected agents. Each call probes port 8790 (1 s timeout), so poll at ≥ 3 s. */
   agents: () => get<Agent[]>("/api/agents"),
   /** 201 with the new row; 400 for a bad name or URL, 409 when that URL is already connected. */

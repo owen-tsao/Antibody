@@ -1,6 +1,7 @@
-import { motion, useReducedMotion, type HTMLMotionProps } from "framer-motion";
+import { motion, type HTMLMotionProps } from "framer-motion";
 
 import { MetalFrame } from "@/components/ui/liquid-metal-border";
+import { useMotionPref } from "@/hooks/useMotionPref";
 import { cn } from "@/lib/utils";
 
 // The splash pages' one control: a white disc in a liquid-metal rim that paints black on hover while
@@ -17,7 +18,7 @@ export default function OrbButton({
   /** Direction the content nudges on hover; the arrow lifts along its own diagonal. */
   lift?: { x: number; y: number };
 }) {
-  const reduced = useReducedMotion();
+  const reduced = useMotionPref();
   // Softer spring: less overshoot, so the bump reads as a nudge rather than a jump.
   const spring = { type: "spring", stiffness: 380, damping: 22, mass: 0.7 } as const;
 

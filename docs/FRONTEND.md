@@ -15,48 +15,64 @@ dependency: `lib/routes.ts` is `parse(pathname)`, `href(route)`, `navigate(route
 | Path | Route kind | Page | Data it reads |
 | --- | --- | --- | --- |
 | `/` | `landing` | `pages/Intro` + `ui/splash-backdrop` — the only page with the shaders; they unmount before anything under `/app` mounts | nothing |
-| `/app`, `/app/home` | `home` | `pages/Home` — **Heal** top-right (the one filled button, metal rim); a card per agent; **Needs attention**; **Recent runs** (five, → `/app/runs`). Owns the first-run rule and shows `ApiDown` when a load has never answered | `/api/agents` 15 s, `/api/runs` 15 s; then one `useEffect` fetch of `/api/state` + `/api/cycles` with `?source=run:<id>` for each agent's last run (and `live`, for Needs attention), re-run when the runs list changes — no per-card polls |
+| `/app`, `/app/home` | `home` | `pages/Home` — one agent, right now: its `AgentCard` (the name is `AgentSwitcher size="hero"`) with the last run's stats strip under it, beside **Needs attention** (cycles of the last run where the attack landed and nothing was patched) and **Recent runs** (this agent's last three). `/app` → here | shell data; `/api/cycles` + `/api/state` of the last run every 10 s |
 | `/app/onboarding/:step` | `onboarding` | `pages/Onboarding` (outside the shell) — Choose · Connect · Tools · First run, rail from `components/WizardRail`; bad step → 1. Connect pings the typed URL (`POST /api/agents/ping`) and only Save stores the agent | `/api/health` 60 s, `/api/manifest` 60 s; `/api/agents` + `/api/agents/example/log` every 3 s while the example agent starts |
-| `/app/agents` | `agents` | `pages/Agents` — name · transport · url · last ping · tools mapped · runs; Ping, start/stop the example agent, delete with inline confirm; **Connect agent** → the wizard | `/api/agents` 3 s, `/api/runs` 10 s |
+| `/app/agents` | `agents` | `pages/Agents` — the fleet as a grid of `AgentCard`s (16:9, most recently run first): the card face is a link to the agent's page; a quiet **attack next** button in the corner (visible on hover / focus; **selected** at rest on the current target) makes the agent the next run's target; a dashed **Connect an agent** card → the wizard. Cards move only under the cursor. No page action — nothing here starts a run | shell data |
 | `/app/agents/new` | — | → `/app/onboarding/2` | — |
-| `/app/runs` | `runs` | `pages/Runs` — every run newest first: started · agent · cycles · `v0 → vN` · duration · status (`running` / `finished · not archived` / `demo tape` / `finished`); row → the run. **Start a run** → the start dialog | `/api/runs` 5 s (a live row's cycle count moves) |
+| `/app/agents/:id` | `agent` | `pages/Agent` — the agent, whole: tile · name · subline · tools mapped, the per-agent actions as quiet text (ping with its last result, start/stop the example agent, delete with a second click; a 409 while a run is on shows inline), a run `Dropdown` (newest first) with one link — **watch replay** when the run has a recording, else **open run** — and, for the picked run, `components/RunResults`: a **Versions** panel (the rail v0 → vN, final selected, and one stats line for the picked version) over the hover list of the cycles that attacked it (chart beside the cursor, click → the cycle page) | `/api/cycles`, `/api/state` of the picked run, once per pick; `/api/agents` 3 s while the example agent starts |
+| `/app/run`, `/app/run/replay`, `/app/run/cycles/:n` | `run` / `cycle` with `id: "live"` | **Current run**: the run page for the live run (identity rule below). `/app/runs/live…` redirects here | see "Run page" |
+| `/app/runs` | `runs` | `pages/Runs` — every run newest first: started · agent · cycles · `v0 → vN` · duration · status (`running` / `finished · not archived` / `demo tape` / `finished`) · **watch** on rows with a recording; row → the run. Runs are started from Current run, not here | `runs` from the shell |
 | `/app/runs/:id` | `run` | the run page — see "Run page" below | see "Run page" |
-| `/app/runs/:id/replay` | `run` with `replay: true` | the same page, arriving to watch the run's tape (the Replays page's **watch**) | see "Run page" |
+| `/app/runs/:id/replay` | `run` with `replay: true` | the same page, arriving to watch the run's tape (Runs' **watch**) | see "Run page" |
 | `/app/runs/:id/cycles/:n` | `cycle` | `pages/Cycle` — one cycle's five steps, gate chart and config diff | `/api/cycles` 10 s, `/api/configs/{v}` ×2 for the diff |
-| `/app/replays` | `replays` | `pages/Replays` — rows whose `recording` is true, `golden` first then newest: recorded · duration · cycles · agent · **watch** | `/api/runs` 15 s |
-| `/app/settings` | `settings` | `pages/Settings` — **Run defaults** (the shared fields, persisted in localStorage), **Models** (five values from `manifest.models`, read-only), **Environment** (key status, Weave, API version). Nothing here writes to the API | `/api/manifest` 60 s; `health` from the shell |
+| `/app/replays` | — | → `/app/runs` (merged into Runs) | — |
+| `/app/settings/:section?` | `settings` (`run-defaults` default · `display` · `models` · `environment`) | `pages/Settings` — a left sub-nav and one section at a time, each a panel of rows (label + one-line hint left, control right). **Run defaults**: default agent + the shared fields (`Select` — the app's `Dropdown` — and switches; incl. **vulnerability measurement**), persisted in localStorage. **Display** (`lib/prefs.ts`, its own key): replay speed, poll cadence (scales every `usePoll` interval), motion (`hooks/useMotionPref` — every animated component reads it). **Models** and **Environment** read-only. Nothing here writes to the API | `/api/manifest` 60 s; `health`/`agents` from the shell |
 | unknown under `/app` | — | → `/app/runs` | — |
 | unknown elsewhere | — | → `/` | — |
 
-`id` in the `run` and `cycle` kinds is `live`, `golden`, or a history folder name (see the identity rule).
+`id` in the `run` and `cycle` kinds is `live`, `golden`, or a history folder name (see the identity rule). `live`
+has its own address, `/app/run`; `href` and `parse` are inverses for every canonical path, and the retired
+paths above are rewritten once on load by `redirectLegacy()`.
 
 ## The shell
 
-`components/Shell.tsx` is a Linear-style left rail from `md` up — Home · Current run (only while a run or
-replay is on screen) · *Workspace*: Agents · Runs · Replays · Settings — collapsible to a 48 px icon rail
-with `[`, the state kept in localStorage; below `md` it is a top bar whose menu opens as a modal
-(`hooks/useModal`: focus moves in, Tab wraps, Esc closes, the page stops scrolling, focus returns — the same
-hook the start dialog uses). The onboarding wizard and the landing render outside it.
+`components/Shell.tsx` is a 240 px left rail from `md` up (the 21st.dev `dashboard-sidebar` shape): the
+wordmark and a collapse button; the **agent switcher** — the agent the next run attacks (`settings.target`,
+resolved by `selectedAgent`), shown with its `AgentTile`, opening a popover of every agent plus "Connect an
+agent"; *Workspace*: Home · Agents · Current run (suffixed `running` / `watching` / `paused` while something plays;
+a word, never a dot; while a tape plays it lights for the tape's address and Runs does not) · Runs; and at the bottom Settings and the no-key line. It collapses to a 52 px icon
+rail from its own button (no keyboard shortcut), the state kept in localStorage; below `md` it is a top bar
+whose menu opens as a modal (`hooks/useModal`). The onboarding wizard and the landing render outside it.
+
+Every agent is drawn by `components/AgentTile.tsx`: the agent card's photo (`public/agent-card.jpg`) cropped
+square and turned to the agent's hue (`agentHueRotate(id)` in `derive.ts` — 0 for the demo agent, which keeps
+the photo's amber; blue for the example agent; a hue hashed from the id otherwise), so the tile is the card at
+thumbnail size. No letters, no generic icons and no third-party logos stand for an agent.
+
+Every page under the shell is a `components/Page.tsx`: a 56 px sticky header — title (Inter 16/600), the
+page's one primary action on the right — with a hairline below, then the content at `px-8 py-6`, left-aligned
+up to 1200 px. Icons are Phosphor (`@phosphor-icons/react`, regular weight; `fill` for the active nav row).
 
 The shell polls `/api/loop` and `/api/replay` every 2 s, `/api/status` every 1 s while something is running
-or replaying (2 s otherwise), and `/api/health` every 60 s. That feeds its "Current run" item (the dot pulses
-while the loop runs; "Current run · paused" while a replay is paused; it links to the tape's own run —
-`/app/runs/golden` — while one plays, and to `live` otherwise) and the no-key line in the rail footer, and
-is handed to the page underneath as `ShellData = {loop, replay, status, statusError, health, refresh}` — no
-page polls those four routes itself. `ApiDown` renders in the shell's status slot when `/api/loop` and
+or replaying (2 s otherwise), `/api/health` every 60 s, and `/api/agents` + `/api/runs` every 10 s (they
+change when someone acts; `refresh()` after an action). That feeds the switcher, the "Current run" item (it
+links to the tape's own run — `/app/runs/golden` — while one plays, and to `/app/run` otherwise), the no-key
+line, and the first-run rule, and is handed to the page underneath as `ShellData = {loop, replay, status,
+statusError, health, agents, agentsError, runs, runsError, refresh}` — no page polls those routes itself. `ApiDown` renders in the shell's status slot when `/api/loop` and
 `/api/replay` have never answered, or have both missed two ticks in a row (`usePoll`'s `failing`); pages
 keep their last-good data meanwhile. Content fades 120 ms on route change (off under reduced
-motion); nothing slides. Page titles keep the serif `display` class at 48 px; everything else is Inter.
+motion); nothing slides. The serif `display` face is the wordmark's and the landing page's; app pages are Inter.
 
 ## Starting a run
 
-One dialog, `components/StartDialog.tsx`, opened from **Heal** on Home, **Start a run** on Runs, and (as the
-empty state) "Start your first heal". It is `RunSettingsFields` — the rows the wizard's First run step also
-uses — plus an **agent picker** from `GET /api/agents` (the example agent is disabled with "stopped" unless
-its row says `running`), the estimate line, and **Heal**. Submit is `POST /api/loop/start` with
-`toStartBody(settings)` → `/app/runs/live`; a 409 (something already running) also goes there; any other
-error is shown inline. Without `WANDB_API_KEY` (`health.has_api_key === false`) Heal is disabled with the
-reason in its tooltip. The dialog fetches agents and the manifest once per opening.
+One way in. The **Heal orb** (`components/HealOrb.tsx`) sits on Current run's empty face — over the selected
+agent's card, with the estimate line under it — and starts a run against that agent with the saved defaults in
+one press (`POST /api/loop/start`, `toStartBody`); while a loop runs or a tape plays it yields to a line
+pointing at what is on screen. A 409 (something already running) stays on `/app/run`; any other error is shown
+inline. Without `WANDB_API_KEY` (`health.has_api_key === false`) Heal is disabled with the reason in its
+tooltip. Shaping a run means changing the defaults on Settings › Run defaults (or the wizard's First run
+step) first; there is no per-run dialog. Home, Agents and the Agent page never start a run — Home's card and
+the rail carry the switcher, Current run carries Heal.
 
 The settings themselves (`lib/settings.ts`, `RunSettings`) live in `App` state and are written to
 localStorage on every change (never on mount, so an untouched browser keeps no key). The Settings page edits
@@ -64,16 +80,16 @@ the same object, so what it shows is literally what the next dialog opens with.
 
 ## Rules the pages share
 
-**First-run rule** (Home). Nothing connected beyond the built-in rows, no history beyond the demo tape, and
-nothing running → `replace` to `/app/onboarding/1`, so Back does not bounce through Home. "Skip for now" is
-remembered for the tab's session (`sessionStorage`). Home renders nothing until the rule can be decided, so it
-never flashes before redirecting.
+**First-run rule** (`App.tsx`, on every shell page). Nothing connected beyond the built-in rows, no history
+beyond the demo tape, and nothing running → `replace` to `/app/onboarding/1`, so Back does not bounce through
+the page that redirected. "Skip for now" is remembered for the tab's session (`sessionStorage`). The rule is
+decided from the shell's `agents`/`runs`/`loop` polls, so it needs no fetch of its own.
 
 **Identity rule** (from Block 4). `GET /api/runs` names the un-archived run literally `"live"`; it is
-archived and given a real id when the *next* run starts. So `/app/runs/live` always means "the current run"
+archived and given a real id when the *next* run starts. So `/app/run` always means "the current run"
 (running, or finished but not yet archived) and history runs are `/app/runs/<id>`. `POST /api/loop/start`
 returns no id, and the live row appears only after cycle 1 — the run page treats 404-while-`loop.running`
-as "starting…", never as an error. A bookmark to `/app/runs/live` changes meaning when a new run starts;
+as "starting…", never as an error. A bookmark to `/app/run` changes meaning when a new run starts;
 that is what the word says.
 
 **Replay rule** (from Block 4). During a replay only `live` reads are overridden by the tape;
@@ -85,9 +101,9 @@ plays off-screen, so the rail's "Current run" item only ever reports what is vis
 **Display rules** live in `lib/derive.ts` as pure functions, never in JSX: a run's status label, its
 `v0 → vN` span, its agent's name (`agent.name`, else the raw `target`), the agent card's "blocks N of M known
 attacks" (from `state.vulnerability`: `suite_size − landed[vFinal]`; "not measured" when the run has none),
-the Needs-attention rows (landed and unpatched, or patch rejected — only from a `live` read whose
-`state.source` is really `"live"`, since an idle API answers `live` with the golden tape), and the replay
-rows (`recording === true`, golden first).
+the Needs-attention rows (landed and unpatched, or patch rejected — from the last run's own read; Home and
+Agent tag each read with the source it came from and ignore a stale tag, so a run that just finished never
+shows the previous run's numbers), a run's one-line label for a picker (`runPickerLabel`) and a list (`runLine`).
 
 ## Run page
 
@@ -98,16 +114,21 @@ faces, picked by `runMode(id, row, loop, replay)` in `lib/derive.ts`:
 | Mode | When | Reads | Shows |
 | --- | --- | --- | --- |
 | `starting` | `id === "live"`, `loop.running`, and `GET /api/runs/live` still 404s (no `run.json` yet) | `live` | title, "starting · measuring baseline…", the plate saying the same, grey orbs |
-| `live` | `id === "live"` and `loop.running` | `live` cycles/state 2 s, `status` from the shell | stats plate, four orbs, "stop run", the cycles box following the newest cycle, **Results so far** |
-| `finished` | a history row, `golden`, or `live` with `loop.running === false` | `run:<id>` / `golden` / `live` cycles/state 10 s, `GET /api/runs/{id}` | header facts (`started · agent · world · flags · v0 → vN`), the numbers line, the vulnerability line, **watch it back** and **roll back to v<n>** as quiet text, the cycles box (static, nothing lit), **Results** |
-| `watching` | `GET /api/replay` is active and its `recording.source` is this run's tape (on `/app/runs/live`, any tape) | `live` cycles/state 2 s + `status` from the shell | the live face with `ReplayControls` under the title; **stop** returns to `finished` |
+| `live` | `id === "live"` and `loop.running` | `live` cycles/state 2 s, `status` from the shell | stats plate, four orbs, **stop run** in the header, the cycles box following the newest cycle |
+| `finished` (history) | a history row or `golden` | `run:<id>` / `golden` cycles/state 10 s, `GET /api/runs/{id}` | header facts (`started · agent · world · flags · v0 → vN`), the numbers line, **watch it back** and **roll back to v<n>** as quiet text, then `RunResults` (Versions panel + the hover list on the page's black, its rows on the content edge and its white bar running 20 px into the gutter) |
+| `finished` (`live`, **last run**) | `lastRunFace`: `id === "live"`, `loop.running === false`, and `state.source === "live"` (run files still in `runs/`; `null` is loading) | `live` cycles/state 10 s | the four orbs at rest (grey, no plate), header facts, the numbers line, the cycles box; header actions **clear** (quiet, disabled while `loop.running`; errors inline) and **See results** (the one `.u-line` action → the agent's page) |
+| `finished` (`live`, **empty**) | `emptyLiveFace`: `id === "live"`, the live row poll failing (404) *and* `state.source === "golden"` — an empty `runs/` makes `live` reads fall back to the demo tape; `state === null` is loading, not empty | `live` cycles/state 10 s | the selected agent's `AgentCard` (720 px, name = `AgentSwitcher size="hero"`, title in the upper third) with the **Heal orb** and estimate on its lower half; nothing else |
+| `finished` (`live`, **settling**) | `idleFaceSettling`: at rest, until the row, the cycles *and* the state have each answered or failed — they land in any order, and the two faces above are only decidable once all three are in | — | `loading…`, nothing else: never the tape's cycles under "no run yet" with the orbs arriving a beat later. Clear, **watch it back** and a tape letting go of `live` all call `dropLive`: the held `live` frame goes and the row / cycles / state polls `reset()` then refresh (the polls keep last-good answers on purpose, so forgetting is what makes the drop stick), so every hand-over passes through here |
+| `watching` | `GET /api/replay` is active and its `recording.source` is this run's tape (on `/app/run`, any tape) | `live` cycles/state 2 s + `status` from the shell | the live face with `ReplayControls` under the title; **stop** returns to `finished` |
+
+**Clear** is `POST /api/runs/archive`: the run's files move to `history/<timestamp>/` (the same hand-over the loop performs before a fresh run), any tape is stopped, and the page drops its held `live` frame and refreshes so it lands on the empty face on the next read. The archived run appears in Runs and on the agent's page under its new id. The seed-attack preview rows left with the rework; a cycle's evidence is its own page.
 
 **The replay rule.** A replay only overrides `live` reads (`api/main.py` `_read_source`); `run:<id>` is served
-as asked and `/api/status` has no `source`. So "watch it back" — `POST /api/replay/start {speed: 3,
+as asked and `/api/status` has no `source`. So "watch it back" — `POST /api/replay/start {speed: <Display preference, default 3>,
 recording: "golden" | "run:<id>"}` — flips the page's reads to `live` for the duration and back when the tape
 stops. Every answer is tagged with the source it was read from and the page keeps the last answer per source,
 so stopping shows the run's own rows immediately rather than the tape's last frame or a "loading…" flash.
-`/app/runs/:id/replay` arrives already watching (the Replays page's "watch"); an ended tape of the same run is
+`/app/runs/:id/replay` arrives already watching (Runs' "watch"); an ended tape of the same run is
 resumed, which restarts it from 0; a 409 shows the same note as the button. Stopping from that address
 rewrites it to `/app/runs/:id` so a refresh does not start the tape again. Leaving the run (any route that is
 not this run's page or one of its cycles) **stops** the replay — `App.tsx`, one effect keyed on the run on
@@ -127,10 +148,6 @@ while a loop runs or across targets) show the API's message in the same slot.
 that run's configs. Back goes to the run. Gate copy reads the sampled fix: `fixed 2/2` on accept, `fixed 1/2 —
 not accepted` on a reject where a sample failed; nothing extra when the gate ran the fix once (`fixLine`).
 
-The seed-attack preview under the results list appears only on `/app/runs/live` with a run row present,
-against the built-in agent (`seedAttackAvailable`), with a key set: it runs the API's default agent against
-the *live* config tree, which says nothing about a history run's versions.
-
 ## Files
 
 ```
@@ -139,25 +156,35 @@ web/src/
   api.ts                     typed fetchers, one per route; types mirror chaos/schemas.py and api/store.py rows
   lib/routes.ts              parse / href / navigate / replace / useRoute; the Route kinds in the table above
   lib/settings.ts            RunSettings, defaults, localStorage, toStartBody, the estimate line
+  lib/prefs.ts               Prefs (replay speed, poll cadence, motion), localStorage, PrefsContext (provided in App.tsx)
   lib/derive.ts              every label, count and state derived from records
-  lib/previewSvg.ts          cycleChartSvg (the run page's hover chart) and sparkline (Home's cards)
+  lib/previewSvg.ts          cycleChartSvg (the cycle page's gate chart)
   lib/ui.ts                  shared class strings (primaryButton, textButton) and NO_KEY_LINE
   lib/utils.ts               cn()
-  hooks/usePoll.ts           {data, error, failing, refresh} on an interval, paused while the tab is hidden
+  hooks/usePoll.ts           {data, error, failing, refresh, reset} on an interval, paused while the tab is hidden; `reset()` forgets the last answer when the files behind it changed
   hooks/useDwell.ts          holds each polled phase on screen for a minimum time so sub-second phases still show
+  hooks/useMotionPref.ts     reduced motion: the Display preference, else the OS setting (replaces useReducedMotion everywhere)
   hooks/useModal.ts          focus trap + scroll lock for the dialog and the small-screen menu
   components/Shell.tsx       the rail, its polls, ShellData
-  components/StartDialog.tsx the start dialog
-  components/RunSettingsFields.tsx  the settings rows (dialog, Settings page, wizard step 4)
+  components/Page.tsx        the page anatomy every shell page shares: 56 px header (title · one action), content gutters
+  components/Panel.tsx       the structured panel (title row · rows · →) Home, Agent and Settings are built from
+  components/AgentTile.tsx   an agent's tile: the card photo, square, turned to the agent's hue
+  components/Dropdown.tsx    the app's one listbox: trigger + floating panel, ↑/↓ Home/End typeahead Enter Escape, flips when short on room, opens sideways for the collapsed rail
+  components/AgentSwitcher.tsx  the agent picker on Dropdown (rail · hero sizes; Shell, Home, Current run, Settings)
+  components/AgentCard.tsx   an agent as a picture: the Ruixen Container-Text-Scroll card as pasted (4 px #6C6C6C rim on #222, 30 px radius, its shadow stack) around the paste's photo, hue-rotated per agent (agentHueRotate), the name large over it; no shader. Hover: the photo zooms 5 %, the rim brightens, the title lifts — CSS, gated on useMotionPref. The card does not clip (the switcher's panel may hang below it); the photo is clipped alone. The title layer lets clicks fall through to a full-face link except on its own controls
+  components/HealOrb.tsx     the Heal orb + estimate (Current run's empty face)
+  components/RunResults.tsx  a finished run's results: Versions panel + hover list (Agent page, history run page)
+  components/RunSettingsFields.tsx  the settings rows + Row / Select / Switch (Settings page, wizard step 4)
   components/ApiDown.tsx     "API unreachable · retry"
   components/ErrorBoundary.tsx  keeps a render error to an inline note (root, run page, MetalFrame)
   components/OrbButton.tsx   the landing page's one control: a disc in a liquid-metal rim
   components/WizardRail.tsx  the onboarding step rail
-  components/ui/             liquid-metal-border (MetalFrame), splash-backdrop, orb, agent-plan, interactive-list-preview,
-                             liquid-metal-hero (the verbatim demo splash-backdrop was tuned from) and the shadcn
-                             badge / button / card it imports
-  pages/Intro Home Onboarding Agents Runs Replays Settings Run Cycle
-  components/CyclesBox CycleTimeline ConfigDiff ReplayControls PreviewRow   (the run page's parts)
+  components/ui/             liquid-metal-border (MetalFrame — always the shader; Heal orb, cycles box, stats plate),
+                             interactive-list-preview (the results hover list, verbatim 21st.dev + our six changes),
+                             splash-backdrop, orb, agent-plan, liquid-metal-hero (the verbatim demo splash-backdrop
+                             was tuned from) and the shadcn badge / button / card it imports
+  pages/Intro Onboarding Home Agents Agent Runs Settings Run Cycle
+  components/CyclesBox CycleTimeline ConfigDiff ReplayControls   (the run page's parts)
 ```
 
 Commands: `npm --prefix web run build`, `npm --prefix web run lint` (oxlint; 10 known warnings in `ui/*` and
@@ -256,6 +283,7 @@ Runs on `:8000`. Vite dev server proxies `/api` to it. CORS not needed with the 
 | GET | `/api/regression` | `Scenario[]` |
 | GET | `/api/runs` | Every run there is to open, newest first: `[{id, label, current, started_at, finished_at, world: "mock"\|"zendesk", target: "builtin"\|"<ANTIBODY_TARGET url>", cycles, accepted, rejected, versions: number[], final_version, flags: string[], synthesized}]`. The live run comes first with `current: true` (only once it has a cycle; `finished_at` is null while its loop is alive), then `history/*` and the committed golden run (`id: "golden", label: "demo tape"`) ordered by `started_at`. Runs with zero cycles are hidden. `world/target/flags` come from the run's `run.json` (written by the loop at start; `flags` are the *first* process's, a `--resume` does not rewrite them); everything countable is derived from `cycles.jsonl`/`configs/`/`status_log.jsonl` at read time. Archives from before `run.json` existed get `world: "mock"`, `target: "builtin"`, `flags: []` and `synthesized: true`. Open one with `?source=run:<id>`. |
 | GET | `/api/runs/{id}` | The same row plus `configs: [{version, parent_version, patch_note}]`. `id` is `live`, `golden` or a history folder name; 400 for a malformed name, 404 when there is no such run. |
+| POST | `/api/runs/archive` | **Clear** on Current run. Under `runs_lock` moves the live run's files (`configs/`, `regression.json`, `cycles.jsonl`, `run.json`, `status*.json*`, `vulnerability*.json`) to `history/<UTC timestamp>/` via `chaos.state.archive_previous_run` — the same hand-over the loop does before a fresh run; `loop.log`, `loop_settings.json` and the example agent's log stay. Then stops any replay (only once the archive succeeded, so a refused Clear leaves a playing tape alone). 200 `{archived: "<folder name>" \| null}` (null when `runs/` held no run); 409 `loop is running`. Never touches `history/`'s existing folders. |
 | GET | `/api/manifest` | `{ target: {name, model, model_short}, tools: [{name, description, side_effect: bool, free_text_fields: string[]}], families: [{kind, title, seed_id}], defaults: LoopStartBody }` — built from `TOOL_SPECS`, `SEED_SCENARIOS`; `defaults` are the run-settings defaults the drawer starts from. Used for the one line under the Start button. |
 | POST | `/api/loop/start` | body is `LoopStartBody` (`api/loop_ctl.py`, plan 02 A1): `{chaos_cycles: 0–10 (3), seeds: 0–10 \| null (null = all), repair_attempts: 1–5 (3), second_pass: bool (true), resume: bool (false), until_quiet: 1–10 \| null (null = off), world: "auto"\|"mock" ("auto")}`. Unknown keys are ignored. 400 with a plain message when `chaos_cycles == 0 && seeds == 0` ("nothing to run"), when `until_quiet > chaos_cycles`, or when `resume: true` and there is no saved config ("nothing to resume"); out-of-range fields are 422. Then 503 without `WANDB_API_KEY`; otherwise stops an active replay (Heal always means a real run) and spawns `uv run python -m chaos.loop run <flags>` with `PYTHONUNBUFFERED=1` (`world: "mock"` adds `ANTIBODY_NO_ZENDESK=1` to the child only), stdout to `runs/loop.log` after a `$ <command>` note line, and records `{body, pid, started_at, cmd}` in `runs/loop_settings.json` once the spawn succeeded; 201 with `{pid, started_at, settings}`; 409 if a loop is already running (ours or one found by `pgrep -f "chaos.loop run"` *in this checkout*). |
 | GET | `/api/loop` | `{running, pid, started_at, exit_code, settings, external}`; `settings` is the `LoopStartBody` of the last run this API spawned, read from `runs/loop_settings.json` (so it survives an API restart; a fresh run moves it to history/ with the rest) and `null` for an external loop or when the run on disk was started by hand with other flags. `external: true` for a loop this API did not spawn (terminal-started, or ours after a `--reload`). Only processes whose working directory is this repo count — a loop in a second clone (e.g. under /tmp) is ignored; the cwd check uses `lsof` and is skipped when `lsof` is missing. |
@@ -353,7 +381,7 @@ Plan: `Plan` from `prompts/interactive-list-preview-and-agent-plan-integration.m
 2. The two status-randomizing click handlers (`toggleTaskStatus`, `toggleSubtaskStatus`) are removed. In the demo they set a random status on click; here status is truth from the backend and clicking must not change it. The icon stays, it just is not a button.
 3. The `MCP Servers:` label reads `tool calls:`.
 
-Everything else (framer-motion variants, lucide icons, the colored status badges, dashed connector, expand/collapse) is untouched. The colored badges are status signal, which the standard allows; nothing else on the page uses color.
+Everything else (framer-motion variants, the status icons — Phosphor since the app rework, the colored status badges, dashed connector, expand/collapse) is untouched. The colored badges are status signal, which the standard allows; nothing else on the page uses color.
 
 Mapping `CycleRecord` → `Task`: `id` = cycle number; `title` = `Cycle N · {scenario.title}`; `description` = `scenario.user_message`; `status` = `in-progress` while this cycle is the one in `status.json`, else `completed` (repaired or blocked), `failed` (unfixed or failed), `need-help` (gate rejected but a later cycle exists — rare); `priority` unused (`"high"`); `level` = 0; `dependencies` = `[ "v{config_before}" ]` or `["v2 → v3"]` when accepted (the chips render config versions). Five `Subtask`s in order — Chaos, Target, Judge, Repair, Gate — each with `title` = one line (`Chaos generated the scenario`, `Target responded`, `Judge failed the target · unauthorized_action`, `Repair proposed add_guardrail_rule`, `Gate accepted · regression 2/2 · legit 3/3`), `description` = the evidence (fault list; final reply; verdict reason; guardrail text; gate reason), `tools` = tool names actually called by the Target (from `episode` once ask #2 lands; from `scenario.forbidden_tool_calls` hit in `verdict.evidence` until then), `status` per step: `completed` when its data exists, `in-progress` when `status.phase` equals it, `failed` for a Judge FAIL or Gate REJECTED, `pending` otherwise. Newest cycle first and expanded (`expandedTasks = [latest]`); older cycles collapsed to one line.
 

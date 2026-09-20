@@ -1,5 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 
+import { POLL_CADENCES, usePrefs } from "@/lib/prefs";
+
 /**
  * Poll `fn` every `intervalMs`, pausing while the tab is hidden. Keeps the last good value
  * across transient errors so the UI never flashes empty during a hiccup. A response that is
@@ -7,9 +9,16 @@ import { useCallback, useEffect, useRef, useState } from "react";
  * `data` do not re-run every tick while nothing has changed. `refresh()` polls now and restarts
  * the interval, for right after an action whose effect the next tick would otherwise show late.
  * `failing` counts consecutive failed ticks (0 after any success), so a caller holding last-good data
- * can still tell a one-tick hiccup from an API that has gone away.
+ * can still tell a one-tick hiccup from an API that has gone away. The Display preference "poll cadence"
+ * scales every interval here, so no call site knows about it. `baseIntervalMs: 0` reads once per `fn`
+ * identity (and on `refresh()`) — the one-shot read for files that do not change under the page.
+ * `reset()` forgets the last answer (data and error null, as at mount) and asks again at once, retiring any
+ * fetch in flight — for a caller that knows the files behind it just changed: keeping last-good data would
+ * otherwise show the old answer as if it were new.
  */
-export function usePoll<T>(fn: () => Promise<T>, intervalMs: number) {
+export function usePoll<T>(fn: () => Promise<T>, baseIntervalMs: number) {
+  const { prefs } = usePrefs();
+  const intervalMs = baseIntervalMs * POLL_CADENCES[prefs.pollCadence];
   const [data, setData] = useState<T | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [failing, setFailing] = useState(0);
@@ -17,7 +26,8 @@ export function usePoll<T>(fn: () => Promise<T>, intervalMs: number) {
   const tickRef = useRef<() => void>(() => undefined);
   useEffect(() => {
     fnRef.current = fn;
-  }, [fn]);
+    if (intervalMs === 0) tickRef.current();
+  }, [fn, intervalMs]);
 
   useEffect(() => {
     let alive = true;
@@ -44,7 +54,7 @@ export function usePoll<T>(fn: () => Promise<T>, intervalMs: number) {
           }
         }
       }
-      if (alive && g === gen) timer = setTimeout(() => tick(g), intervalMs);
+      if (alive && g === gen && intervalMs > 0) timer = setTimeout(() => tick(g), intervalMs);
     };
     const now = () => {
       clearTimeout(timer);
@@ -66,5 +76,11 @@ export function usePoll<T>(fn: () => Promise<T>, intervalMs: number) {
   }, [intervalMs]);
 
   const refresh = useCallback(() => tickRef.current(), []);
-  return { data, error, failing, refresh };
+  const reset = useCallback(() => {
+    setData(null);
+    setError(null);
+    setFailing(0);
+    tickRef.current();
+  }, []);
+  return { data, error, failing, refresh, reset };
 }

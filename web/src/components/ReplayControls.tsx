@@ -1,4 +1,4 @@
-import { Pause, Play } from "lucide-react";
+import { Pause, Play } from "@phosphor-icons/react";
 import { useCallback, useEffect, useRef, useState } from "react";
 
 import { api, type ReplayInfo, type Status } from "@/api";
@@ -126,9 +126,9 @@ export default function ReplayControls({ status, recordedAt, onChanged, onStop }
         className="flex h-6 w-6 shrink-0 items-center justify-center rounded-full border border-[var(--border-2)] text-[var(--muted)] transition-colors hover:border-white/30 hover:text-[var(--fg)]"
       >
         {anchor.paused ? (
-          <Play className="ml-px h-3 w-3" strokeWidth={2} fill="currentColor" />
+          <Play size={12} weight="fill" className="ml-px" />
         ) : (
-          <Pause className="h-3 w-3" strokeWidth={2} fill="currentColor" />
+          <Pause size={12} weight="fill" />
         )}
       </button>
 
@@ -181,7 +181,7 @@ export default function ReplayControls({ status, recordedAt, onChanged, onStop }
         onClick={onStop}
         className="group shrink-0 rounded transition-colors hover:text-[var(--muted)]"
       >
-        <span className="u-line">stop</span>
+        stop
       </button>
     </div>
   );

@@ -13,6 +13,8 @@
 //      touch it is not rendered. `item.spanGutter` is kept for the attack preview row's colspan.
 //   5. `item.preview` (SVG markup) is inlined instead of loaded through <img>, so chart text can
 //      use the page's web font.
+//   6. the inner gutter is the app's page gutter (32 px, `Page`'s px-8) with no max-width of its own, so a
+//      caller that pulls the list out by that much (`RunResults`) lands its rows exactly on the content edge.
 // Plus, as the prompt instructs ("Fill image assets with Unsplash stock images you know exist"),
 // the DEFAULT_ITEMS base64 JPEGs are replaced by Unsplash URLs.
 //
@@ -468,7 +470,7 @@ export default function InteractiveListPreview({
       onMouseMove={handleContainerMouseMove}
       onMouseLeave={handleContainerMouseLeave}
     >
-      <div className="relative z-10 mx-auto w-full max-w-6xl px-6 pb-2 pt-3 md:px-10">
+      <div className="relative z-10 w-full px-8 pb-2 pt-3">
         <div ref={wrapRef} className="relative">
           {/* The bar bleeds 20px past the table on both ends so hovered text never sits on its edge. */}
           <div

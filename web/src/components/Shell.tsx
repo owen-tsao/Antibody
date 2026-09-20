@@ -1,22 +1,27 @@
-import { AnimatePresence, motion, useReducedMotion } from "framer-motion";
-import { Activity, Bot, History, House, KeyRound, Menu, PanelLeft, Play, Settings, Unplug, X } from "lucide-react";
+import { Gear, House, Key, List, Plugs, Pulse, SidebarSimple, SquaresFour, VideoCamera, X } from "@phosphor-icons/react";
+import { AnimatePresence, motion } from "framer-motion";
 import { type ReactNode, useCallback, useEffect, useRef, useState } from "react";
 
-import { api, type Health, type LoopState, type ReplayInfo, type Status } from "@/api";
+import { api, type Agent, type Health, type LoopState, type ReplayInfo, type RunRow, type Status } from "@/api";
+import AgentSwitcher from "@/components/AgentSwitcher";
 import ApiDown from "@/components/ApiDown";
 import { useModal } from "@/hooks/useModal";
 import { usePoll } from "@/hooks/usePoll";
-import { replayRunId } from "@/lib/derive";
-import { AGENTS, HOME, href, LANDING, linkProps, REPLAYS, RUNS, SETTINGS, type Route } from "@/lib/routes";
+import { useMotionPref } from "@/hooks/useMotionPref";
+import { replayRunId, selectedAgent } from "@/lib/derive";
+import { AGENTS, HOME, href, LANDING, linkProps, LIVE_RUN, RUNS, SETTINGS, type Route } from "@/lib/routes";
+import type { RunSettings } from "@/lib/settings";
 import { NO_KEY_LINE } from "@/lib/ui";
 import { cn } from "@/lib/utils";
 
 /**
- * The persistent frame around everything under /app (docs/plans/00-overview.md Block 3): a Linear-style
- * rail from md up — sections of nouns, one active row, a "Current run" item while something plays — and a
+ * The persistent frame around everything under /app (docs/plans/07-app-rework.md §2): a 240 px rail —
+ * wordmark, the selected agent as a switcher, Home and three nouns in one group, Settings and the key line
+ * at the bottom — and a
  * top bar with a menu button below md that opens the same rail as an overlay. The rail collapses to icons
- * (`[`, persisted). It owns the polls the pages share (`loop`, `replay`, `status`, `health`) and renders
- * its children as a function of that data, so no page polls those routes a second time.
+ * from its own toggle (persisted; no keyboard shortcut — nothing in the app has one). It owns the polls the
+ * pages share (`loop`, `replay`, `status`, `health`, `agents`, `runs`) and renders its children as a
+ * function of that data, so no page polls those routes a second time.
  *
  * Content fades 120 ms on route change; no slides. Reduced motion turns every animation off.
  */
@@ -25,12 +30,14 @@ import { cn } from "@/lib/utils";
 // Status drives the run page's orbs, whose spec cadence is 1 s while something is playing.
 const POLL_MS = 2_000;
 const LIVE_STATUS_MS = 1_000;
+// Agents and runs change when someone acts, not by themselves; pages `refresh()` after an action.
+const LIST_MS = 10_000;
 // Whether a key is set is static for the API's lifetime.
 const HEALTH_MS = 60_000;
 const FADE_S = 0.12;
 
 const RAIL_W = 240;
-const RAIL_COLLAPSED_W = 48;
+const RAIL_COLLAPSED_W = 52;
 const RAIL_KEY = "antibody.rail.v1";
 
 export interface ShellData {
@@ -41,32 +48,30 @@ export interface ShellData {
   statusError: string | null;
   /** GET /api/health; null until it answers. `has_api_key === false` disables every start control. */
   health: Health | null;
-  /** Poll all three run routes now (after an action whose effect the next tick would show late). */
+  /** GET /api/agents and GET /api/runs, shared by the rail and the pages; null until each answers. */
+  agents: Agent[] | null;
+  agentsError: string | null;
+  runs: RunRow[] | null;
+  runsError: string | null;
+  /** Poll every shared route now (after an action whose effect the next tick would show late). */
   refresh: () => void;
 }
 
 interface Item {
   route: Route;
   label: string;
-  icon: typeof House;
+  icon: typeof SquaresFour;
   active: (r: Route) => boolean;
 }
 
-const HOME_ITEM: Item = { route: HOME, label: "Home", icon: House, active: (r) => r.kind === "home" };
-/** "Current run" points at whatever is on screen right now: the live loop, or the run whose tape is playing. */
-const currentRunItem = (id: string): Item => ({
-  route: { kind: "run", id },
-  label: "Current run",
-  icon: Activity,
-  active: (r) => r.kind === "run" && r.id === id,
-});
-const WORKSPACE: Item[] = [
-  { route: AGENTS, label: "Agents", icon: Bot, active: (r) => r.kind === "agents" },
-  // The live run is "Current run" above; Runs stays lit for it too, as the section it belongs to.
-  { route: RUNS, label: "Runs", icon: Play, active: (r) => r.kind === "runs" || r.kind === "run" || r.kind === "cycle" },
-  { route: REPLAYS, label: "Replays", icon: History, active: (r) => r.kind === "replays" },
-  { route: SETTINGS, label: "Settings", icon: Settings, active: (r) => r.kind === "settings" },
+const NAV: Item[] = [
+  { route: HOME, label: "Home", icon: House, active: (r) => r.kind === "home" },
+  { route: AGENTS, label: "Agents", icon: SquaresFour, active: (r) => r.kind === "agents" || r.kind === "agent" },
+  // Always present: idle it holds the Heal orb, live it is the run. A playing tape is also "current".
+  { route: LIVE_RUN, label: "Current run", icon: Pulse, active: (r) => (r.kind === "run" || r.kind === "cycle") && r.id === "live" },
+  { route: RUNS, label: "Runs", icon: VideoCamera, active: (r) => r.kind === "runs" || ((r.kind === "run" || r.kind === "cycle") && r.id !== "live") },
 ];
+const SETTINGS_ITEM: Item = { route: SETTINGS, label: "Settings", icon: Gear, active: (r) => r.kind === "settings" };
 
 function readCollapsed(): boolean {
   try {
@@ -84,24 +89,32 @@ function writeCollapsed(v: boolean): void {
   }
 }
 
-/** `[` toggles the rail unless the person is typing somewhere. */
-function isTyping(target: EventTarget | null): boolean {
-  if (!(target instanceof HTMLElement)) return false;
-  return target.isContentEditable || ["INPUT", "TEXTAREA", "SELECT"].includes(target.tagName);
-}
-
-export default function Shell({ route, children }: { route: Route; children: (data: ShellData) => ReactNode }) {
-  const reduced = useReducedMotion();
+export default function Shell({
+  route,
+  settings,
+  onSettingsChange,
+  children,
+}: {
+  route: Route;
+  settings: RunSettings;
+  onSettingsChange: (next: RunSettings) => void;
+  children: (data: ShellData) => ReactNode;
+}) {
+  const reduced = useMotionPref();
   const { data: loop, error: loopError, failing: loopFailing, refresh: refreshLoop } = usePoll(api.loop, POLL_MS);
   const { data: replay, error: replayError, failing: replayFailing, refresh: refreshReplay } = usePoll(api.replay, POLL_MS);
   const live = !!loop?.running || !!replay?.active;
   const { data: status, error: statusError, refresh: refreshStatus } = usePoll(api.status, live ? LIVE_STATUS_MS : POLL_MS);
   const { data: health } = usePoll(api.health, HEALTH_MS);
+  const { data: agents, error: agentsError, refresh: refreshAgents } = usePoll(api.agents, LIST_MS);
+  const { data: runs, error: runsError, refresh: refreshRuns } = usePoll(api.runs, LIST_MS);
   const refresh = useCallback(() => {
     refreshLoop();
     refreshReplay();
     refreshStatus();
-  }, [refreshLoop, refreshReplay, refreshStatus]);
+    refreshAgents();
+    refreshRuns();
+  }, [refreshLoop, refreshReplay, refreshStatus, refreshAgents, refreshRuns]);
 
   // Down means the API never answered, or both polls have now missed two ticks in a row (~4 s): one miss
   // is a hiccup and keeps the last value silently; a page already open keeps its last-good data either way.
@@ -111,15 +124,6 @@ export default function Shell({ route, children }: { route: Route; children: (da
   const [collapsed, setCollapsed] = useState(readCollapsed);
   const toggle = useCallback(() => setCollapsed((c) => !c), []);
   useEffect(() => writeCollapsed(collapsed), [collapsed]);
-  useEffect(() => {
-    const onKey = (e: KeyboardEvent) => {
-      if (e.key !== "[" || e.metaKey || e.ctrlKey || e.altKey || isTyping(e.target)) return;
-      e.preventDefault();
-      toggle();
-    };
-    window.addEventListener("keydown", onKey);
-    return () => window.removeEventListener("keydown", onKey);
-  }, [toggle]);
 
   // Below md the rail is an overlay. It is open *for one address*, so navigating anywhere closes it
   // without an effect; the backdrop closes it too, and `useModal` handles Esc, focus and scroll.
@@ -132,16 +136,23 @@ export default function Shell({ route, children }: { route: Route; children: (da
   useModal(menuPanel, closeMenu, menuOpen);
 
   // One page-level key per screen: cycle 3 → cycle 4 is a new screen, the run's live/finished swap is not.
-  const key = route.kind === "cycle" ? `cycle-${route.id}-${route.n}` : route.kind === "run" ? `run-${route.id}` : route.kind;
+  const key =
+    route.kind === "cycle" ? `cycle-${route.id}-${route.n}` : route.kind === "run" ? `run-${route.id}` : route.kind === "agent" ? `agent-${route.id}` : route.kind;
 
   const noKey = health !== null && !health.has_api_key;
-  // A paused replay is still the current run, but the dot alone would read as "nothing happening".
-  const currentRunLabel = replay?.active && replay.paused ? "Current run · paused" : "Current run";
-  // A playing tape is the current run, and its page is the tape's own (`/app/runs/golden`), not `live`.
-  const currentRun = currentRunItem(replayRunId(replay) ?? "live");
+  const selected = selectedAgent(agents, settings.target);
+  // A word, not a dot: the label itself says what state the run is in.
+  const currentRunSuffix = loop?.running ? "running" : replay?.active ? (replay.paused ? "paused" : "watching") : null;
+  // A playing tape is the current run; its address is the tape's own (`/app/runs/golden`), not `live`.
+  const tapeId = replayRunId(replay);
+  const currentRun: Item = tapeId
+    ? { ...NAV[2], route: { kind: "run", id: tapeId }, active: (r) => (r.kind === "run" || r.kind === "cycle") && (r.id === tapeId || r.id === "live") }
+    : NAV[2];
+  // The tape's address is lit by the Current run row above, so Runs must not light for it too.
+  const runsItem: Item = tapeId ? { ...NAV[3], active: (r) => NAV[3].active(r) && !((r.kind === "run" || r.kind === "cycle") && r.id === tapeId) } : NAV[3];
 
   const rail = (compact: boolean) => {
-    const row = (it: Item, dot?: "live" | "idle", label = it.label) => {
+    const row = (it: Item, suffix?: string | null) => {
       const active = it.active(route);
       const Icon = it.icon;
       return (
@@ -149,64 +160,88 @@ export default function Shell({ route, children }: { route: Route; children: (da
           key={it.label}
           {...linkProps(it.route)}
           aria-current={active ? "page" : undefined}
-          title={compact ? label : undefined}
+          title={compact ? it.label : undefined}
           className={cn(
-            "flex h-7 items-center gap-2.5 rounded-md text-[13px] transition-colors",
-            compact ? "justify-center px-0" : "px-2",
+            "flex h-8 items-center gap-2.5 rounded-md text-[13px] transition-colors",
+            compact ? "justify-center px-0" : "px-2.5",
             active ? "bg-[var(--hover)] font-medium text-[var(--fg)]" : "text-[var(--muted)] hover:bg-[var(--hover)] hover:text-[var(--fg)]",
           )}
         >
-          <span className="relative inline-flex h-4 w-4 shrink-0 items-center justify-center">
-            <Icon className="h-[15px] w-[15px]" strokeWidth={1.75} aria-hidden />
-            {dot && (
-              <span
-                aria-hidden
-                className={cn(
-                  "absolute -right-0.5 -top-0.5 h-1.5 w-1.5 rounded-full ring-2 ring-[var(--bg-rail)]",
-                  dot === "live" ? "bg-[var(--live)] motion-safe:animate-pulse" : "bg-[var(--faint)]",
-                )}
-              />
-            )}
-          </span>
-          {!compact && <span className="truncate">{label}</span>}
+          <Icon size={16} weight={active ? "fill" : "regular"} className="shrink-0" aria-hidden />
+          {!compact && (
+            <span className="flex min-w-0 flex-1 items-baseline gap-2">
+              <span className="truncate">{it.label}</span>
+              {suffix && <span className="ml-auto text-[11px] font-normal text-[var(--faint)]">{suffix}</span>}
+            </span>
+          )}
         </a>
       );
     };
     return (
       <>
-        <div className={cn("flex h-7 items-center", compact ? "justify-center" : "justify-between px-2")}>
+        <div className={cn("flex h-8 items-center", compact ? "justify-center" : "justify-between px-2.5")}>
           <a {...linkProps(LANDING)} className="display rounded text-[20px] leading-none text-[var(--fg)]" aria-label="Antibody — home">
             {compact ? "A" : "Antibody"}
           </a>
-        </div>
-        <nav aria-label="Sections" className="mt-6 flex flex-col gap-0.5">
-          {row(HOME_ITEM)}
-          {live && row(currentRun, loop?.running ? "live" : "idle", currentRunLabel)}
-          {!compact ? (
-            <p className="mb-1 mt-5 px-2 text-[10.5px] font-medium uppercase tracking-[0.08em] text-[var(--faint)]">Workspace</p>
-          ) : (
-            <span aria-hidden className="mx-auto my-3 h-px w-4 bg-[var(--border-2)]" />
+          {!compact && (
+            <button
+              type="button"
+              onClick={toggle}
+              aria-label="Collapse sidebar"
+              className="hidden rounded-md p-1 text-[var(--faint)] transition-colors hover:bg-[var(--hover)] hover:text-[var(--fg)] md:inline-flex"
+            >
+              <SidebarSimple size={16} aria-hidden />
+            </button>
           )}
-          {WORKSPACE.map((it) => row(it))}
+        </div>
+
+        <AgentSwitcher
+          agents={agents}
+          selected={selected}
+          onSelect={(id) => onSettingsChange({ ...settings, target: id })}
+          iconOnly={compact}
+          className="mt-5"
+        />
+
+        <nav aria-label="Sections" className="mt-5 flex flex-col gap-0.5">
+          {!compact && <p className="mb-1 px-2.5 text-[10.5px] font-medium uppercase tracking-[0.08em] text-[var(--faint)]">Workspace</p>}
+          {row(NAV[0])}
+          {row(NAV[1])}
+          {row(currentRun, currentRunSuffix)}
+          {row(runsItem)}
         </nav>
-        <div className={cn("mt-auto flex flex-col gap-2 text-[12px] leading-[1.5]", compact ? "items-center" : "px-2")}>
+
+        <div className={cn("mt-auto flex flex-col gap-0.5 border-t border-[var(--border)] pt-3", compact && "items-center")}>
+          {row(SETTINGS_ITEM)}
           {down ? (
             compact ? (
               <button type="button" onClick={refresh} title="api unreachable · retry" aria-label="API unreachable. Retry" className="rounded p-1 text-[var(--faint)] hover:text-[var(--muted)]">
-                <Unplug className="h-[15px] w-[15px]" strokeWidth={1.75} aria-hidden />
+                <Plugs size={16} aria-hidden />
               </button>
             ) : (
-              <ApiDown onRetry={refresh} />
+              <p className="px-2.5 pt-1 text-[12px] leading-[1.5]">
+                <ApiDown onRetry={refresh} />
+              </p>
             )
           ) : noKey ? (
             compact ? (
               <span title={NO_KEY_LINE} className="p-1 text-[var(--faint)]">
-                <KeyRound className="h-[15px] w-[15px]" strokeWidth={1.75} aria-hidden />
+                <Key size={16} aria-hidden />
               </span>
             ) : (
-              <p className="text-[var(--faint)]">{NO_KEY_LINE}</p>
+              <p className="px-2.5 pt-1 text-[12px] leading-[1.5] text-[var(--faint)]">{NO_KEY_LINE}</p>
             )
           ) : null}
+          {compact && (
+            <button
+              type="button"
+              onClick={toggle}
+              aria-label="Expand sidebar"
+              className="mt-2 hidden rounded-md p-1 text-[var(--faint)] transition-colors hover:bg-[var(--hover)] hover:text-[var(--fg)] md:inline-flex"
+            >
+              <SidebarSimple size={16} aria-hidden />
+            </button>
+          )}
         </div>
       </>
     );
@@ -223,15 +258,14 @@ export default function Shell({ route, children }: { route: Route; children: (da
           aria-expanded={menuOpen}
           className="rounded-md p-1 text-[var(--muted)] hover:bg-[var(--hover)] hover:text-[var(--fg)]"
         >
-          <Menu className="h-[18px] w-[18px]" strokeWidth={1.75} aria-hidden />
+          <List size={18} aria-hidden />
         </button>
         <a {...linkProps(LANDING)} className="display rounded text-[20px] leading-none text-[var(--fg)]" aria-label="Antibody — home">
           Antibody
         </a>
-        {live && (
-          <a {...linkProps(currentRun.route)} className="ml-auto inline-flex items-center gap-2 rounded text-[12px] text-[var(--muted)]">
-            <span aria-hidden className={cn("h-1.5 w-1.5 rounded-full", loop?.running ? "bg-[var(--live)] motion-safe:animate-pulse" : "bg-[var(--faint)]")} />
-            {currentRunLabel}
+        {currentRunSuffix && (
+          <a {...linkProps(currentRun.route)} className="ml-auto rounded text-[12px] text-[var(--muted)]">
+            Current run · {currentRunSuffix}
           </a>
         )}
       </header>
@@ -261,36 +295,22 @@ export default function Shell({ route, children }: { route: Route; children: (da
                 aria-label="Close menu"
                 className="absolute right-2 top-3 rounded-md p-1 text-[var(--muted)] hover:text-[var(--fg)]"
               >
-                <X className="h-4 w-4" strokeWidth={1.75} aria-hidden />
+                <X size={16} aria-hidden />
               </button>
             </aside>
           </motion.div>
         )}
       </AnimatePresence>
 
-      {/* Left rail, md and up. */}
+      {/* Left rail, md and up. Sticky makes it a stacking context, so it takes a z-index of its own or the
+          switcher's sideways panel would paint under the page's layered surfaces. */}
       <motion.aside
-        className="hidden shrink-0 border-r border-[var(--border-2)] bg-[var(--bg-rail)] md:sticky md:top-0 md:flex md:h-screen md:flex-col md:py-4"
+        className="hidden shrink-0 border-r border-[var(--border-2)] bg-[var(--bg-rail)] md:sticky md:top-0 md:z-40 md:flex md:h-screen md:flex-col md:py-4"
         initial={false}
-        animate={{ width: collapsed ? RAIL_COLLAPSED_W : RAIL_W, paddingLeft: collapsed ? 6 : 12, paddingRight: collapsed ? 6 : 12 }}
+        animate={{ width: collapsed ? RAIL_COLLAPSED_W : RAIL_W, paddingLeft: collapsed ? 8 : 12, paddingRight: collapsed ? 8 : 12 }}
         transition={{ duration: reduced ? 0 : 0.18, ease: [0.2, 0.65, 0.3, 0.9] }}
       >
         {rail(collapsed)}
-        <button
-          type="button"
-          onClick={toggle}
-          aria-label={collapsed ? "Expand sidebar" : "Collapse sidebar"}
-          aria-pressed={collapsed}
-          title={`${collapsed ? "Expand" : "Collapse"} · [`}
-          className={cn(
-            "mt-3 flex h-7 items-center gap-2.5 rounded-md text-[12px] text-[var(--faint)] transition-colors hover:bg-[var(--hover)] hover:text-[var(--muted)]",
-            collapsed ? "justify-center" : "px-2",
-          )}
-        >
-          <PanelLeft className="h-[15px] w-[15px] shrink-0" strokeWidth={1.75} aria-hidden />
-          {!collapsed && <span>Collapse</span>}
-          {!collapsed && <kbd className="code ml-auto text-[11px] text-[var(--faint)]">[</kbd>}
-        </button>
       </motion.aside>
 
       <AnimatePresence mode="wait" initial={false}>
@@ -302,7 +322,7 @@ export default function Shell({ route, children }: { route: Route; children: (da
           exit={{ opacity: 0 }}
           transition={{ duration: reduced ? 0 : FADE_S, ease: "linear" }}
         >
-          {children({ loop, replay, status, statusError, health, refresh })}
+          {children({ loop, replay, status, statusError, health, agents, agentsError, runs, runsError, refresh })}
         </motion.div>
       </AnimatePresence>
     </div>

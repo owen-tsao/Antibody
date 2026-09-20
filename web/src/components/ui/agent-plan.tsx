@@ -17,13 +17,7 @@
 
 import { useState } from "react";
 import { motion, AnimatePresence, LayoutGroup, type Variants } from "framer-motion";
-import {
-  CheckCircle2,
-  Circle,
-  CircleAlert,
-  CircleDotDashed,
-  CircleX,
-} from "lucide-react";
+import { CheckCircle, Circle, CircleDashed, WarningCircle, XCircle } from "@phosphor-icons/react";
 
 // Type definitions
 export interface Subtask {
@@ -261,13 +255,13 @@ export default function Plan({ tasks = initialTasks }: PlanProps) {
                         whileTap={{ scale: 0.9 }}
                       >
                         {task.status === "completed" ? (
-                          <CheckCircle2 className="h-4.5 w-4.5 text-green-500" />
+                          <CheckCircle className="h-4.5 w-4.5 text-green-500" />
                         ) : task.status === "in-progress" ? (
-                          <CircleDotDashed className="h-4.5 w-4.5 text-blue-500" />
+                          <CircleDashed className="h-4.5 w-4.5 text-blue-500" />
                         ) : task.status === "need-help" ? (
-                          <CircleAlert className="h-4.5 w-4.5 text-yellow-500" />
+                          <WarningCircle className="h-4.5 w-4.5 text-yellow-500" />
                         ) : task.status === "failed" ? (
-                          <CircleX className="h-4.5 w-4.5 text-red-500" />
+                          <XCircle className="h-4.5 w-4.5 text-red-500" />
                         ) : (
                           <Circle className="text-muted-foreground h-4.5 w-4.5" />
                         )}
@@ -376,13 +370,13 @@ export default function Plan({ tasks = initialTasks }: PlanProps) {
                                       layout
                                     >
                                       {subtask.status === "completed" ? (
-                                        <CheckCircle2 className="h-3.5 w-3.5 text-green-500" />
+                                        <CheckCircle className="h-3.5 w-3.5 text-green-500" />
                                       ) : subtask.status === "in-progress" ? (
-                                        <CircleDotDashed className="h-3.5 w-3.5 text-blue-500" />
+                                        <CircleDashed className="h-3.5 w-3.5 text-blue-500" />
                                       ) : subtask.status === "need-help" ? (
-                                        <CircleAlert className="h-3.5 w-3.5 text-yellow-500" />
+                                        <WarningCircle className="h-3.5 w-3.5 text-yellow-500" />
                                       ) : subtask.status === "failed" ? (
-                                        <CircleX className="h-3.5 w-3.5 text-red-500" />
+                                        <XCircle className="h-3.5 w-3.5 text-red-500" />
                                       ) : (
                                         <Circle className="text-muted-foreground h-3.5 w-3.5" />
                                       )}

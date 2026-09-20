@@ -1,111 +1,163 @@
 import { api } from "@/api";
-import type { Health } from "@/api";
+import AgentSwitcher from "@/components/AgentSwitcher";
 import ApiDown from "@/components/ApiDown";
-import RunSettingsFields from "@/components/RunSettingsFields";
+import Panel from "@/components/Panel";
+import Page from "@/components/Page";
+import RunSettingsFields, { Row, Select } from "@/components/RunSettingsFields";
+import type { ShellData } from "@/components/Shell";
 import { usePoll } from "@/hooks/usePoll";
-import { seedCount } from "@/lib/derive";
+import { seedCount, selectedAgent } from "@/lib/derive";
+import { DEFAULT_PREFS, isDefaultPrefs, MOTION_PREFS, REPLAY_SPEEDS, usePrefs, type MotionPref, type ReplaySpeed } from "@/lib/prefs";
+import { linkProps, SETTINGS_SECTIONS, settings as settingsRoute, type SettingsSection } from "@/lib/routes";
 import { DEFAULT_SETTINGS, estimateLabel, isDefaultSettings, type RunSettings } from "@/lib/settings";
 import { textButton } from "@/lib/ui";
 import { cn } from "@/lib/utils";
 
 /**
- * `/app/settings` (docs/plans/00-overview.md Block 4.5), grouped sections: the run defaults every start
- * dialog opens with (the same `RunSettingsFields`, persisted in localStorage by the parent), the model behind
- * each role as this API resolved it (read-only; they come from the API's environment), and what this
- * install can do. Nothing here calls a write route.
+ * `/app/settings/:section` (docs/plans/07-app-rework.md §10): a left sub-nav and one section at a time, each a
+ * panel of setting rows. **Run defaults** are the flags every start opens with (`RunSettingsFields`, shared
+ * with the wizard's First run step) plus the default agent. **Display** is how the app behaves on this
+ * machine (`lib/prefs.ts`; none of it is a loop flag). **Models** and **Environment** are read-only: they
+ * come from the API's process. Nothing here calls a write route.
  */
 
 const STATIC_MS = 60_000;
 
-const section = "text-[10.5px] font-medium uppercase tracking-[0.08em] text-[var(--faint)]";
-const kv = "flex items-baseline justify-between gap-6 py-3 text-[13px]";
+const SECTION_LABEL: Record<SettingsSection, string> = {
+  "run-defaults": "Run defaults",
+  display: "Display",
+  models: "Models",
+  environment: "Environment",
+};
 
-export default function Settings({
-  settings,
-  onSettingsChange,
-  health,
-}: {
-  settings: RunSettings;
-  onSettingsChange: (next: RunSettings) => void;
-  health: Health | null;
-}) {
+const MOTION_LABEL: Record<MotionPref, string> = { system: "follow the system", reduced: "reduced", full: "full" };
+
+export default function Settings({ section, settings, onSettingsChange, shell }: { section: SettingsSection; settings: RunSettings; onSettingsChange: (next: RunSettings) => void; shell: ShellData }) {
+  const { health, agents } = shell;
   const { data: manifest, error: manifestError, refresh: refreshManifest } = usePoll(api.manifest, STATIC_MS);
+  const { prefs, setPrefs } = usePrefs();
   const seeds = seedCount(manifest);
   const models = manifest?.models;
   const weave = typeof health?.weave === "string" ? health.weave : null;
+  const target = selectedAgent(agents, settings.target);
+
+  const reset =
+    section === "run-defaults" && !isDefaultSettings(settings) ? (
+      <button type="button" onClick={() => onSettingsChange({ ...DEFAULT_SETTINGS, target: settings.target })} className={cn(textButton, "text-[12px]")}>
+        reset to defaults
+      </button>
+    ) : section === "display" && !isDefaultPrefs(prefs) ? (
+      <button type="button" onClick={() => setPrefs({ ...DEFAULT_PREFS })} className={cn(textButton, "text-[12px]")}>
+        reset to defaults
+      </button>
+    ) : undefined;
 
   return (
-    <main className="px-6 pb-16 pt-8 md:px-10 md:pt-7">
-      <div className="mx-auto w-full max-w-[640px]">
-        <h1 className="display text-[48px] leading-[1]">Settings</h1>
+    <Page title="Settings" action={reset}>
+      <div className="grid gap-8 md:grid-cols-[180px_minmax(0,1fr)]">
+        <nav aria-label="Settings sections" className="flex flex-col gap-0.5 md:sticky md:top-20 md:self-start">
+          {SETTINGS_SECTIONS.map((s) => (
+            <a
+              key={s}
+              {...linkProps(settingsRoute(s))}
+              aria-current={s === section ? "page" : undefined}
+              className={cn("rounded-md px-2.5 py-1.5 text-[13px] transition-colors", s === section ? "bg-[var(--hover)] text-[var(--fg)]" : "text-[var(--muted)] hover:bg-[var(--hover)] hover:text-[var(--fg)]")}
+            >
+              {SECTION_LABEL[s]}
+            </a>
+          ))}
+        </nav>
 
-        <section className="mt-10">
-          <div className="flex items-baseline justify-between">
-            <h2 className={section}>Run defaults</h2>
-            {!isDefaultSettings(settings) && (
-              <button type="button" onClick={() => onSettingsChange({ ...DEFAULT_SETTINGS, target: settings.target })} className={cn(textButton, "text-[12px]")}>
-                <span className="u-line">reset to defaults</span>
-              </button>
-            )}
-          </div>
-          <div className="mt-2">
-            <RunSettingsFields settings={settings} onChange={onSettingsChange} seedCount={seeds} />
-          </div>
-          <p className="tabular mt-3 text-[12px] text-[var(--faint)]">{estimateLabel(settings, seeds)} · what the start dialog opens with</p>
-        </section>
+        <div className="flex max-w-[720px] flex-col gap-4">
+          {section === "run-defaults" && (
+            <>
+              <Panel title="Default agent">
+                <Row label="Agent to attack" hint="What Heal runs against unless a start picks another.">
+                  <AgentSwitcher agents={agents} selected={target} onSelect={(id) => onSettingsChange({ ...settings, target: id })} size="rail" />
+                </Row>
+              </Panel>
+              <Panel title="Run defaults" aside={<span className="tabular">{estimateLabel(settings, seeds)}</span>}>
+                <RunSettingsFields settings={settings} onChange={onSettingsChange} seedCount={seeds} framed={false} />
+              </Panel>
+              <p className="px-1 text-[12px] text-[var(--faint)]">
+                Every row is a flag of <span className="code">chaos.loop run</span>; Heal on Current run starts with these.
+              </p>
+            </>
+          )}
 
-        <section className="mt-12">
-          <h2 className={section}>Models</h2>
-          <dl className="mt-2 divide-y divide-[var(--border)] border-y border-[var(--border)]">
-            {(
-              [
-                ["Target", models?.target],
-                ["Chaos", models?.chaos],
-                ["Repair", models?.repair],
-                ["Judge", models?.judge],
-                ["Inference", models?.inference_url],
-              ] as const
-            ).map(([label, value]) => (
-              <div key={label} className={kv}>
-                <dt>{label}</dt>
-                <dd className="code truncate text-[12px] text-[var(--muted)]" title={value ?? undefined}>
-                  {value ?? (manifest ? "—" : "…")}
-                </dd>
+          {section === "display" && (
+            <Panel title="Display">
+              <div className="divide-y divide-[var(--border)]">
+                <Row label="Replay speed" hint="How fast “watch it back” plays a recording. Controls on the run page can change it mid-tape.">
+                  <Select value={String(prefs.replaySpeed)} onChange={(v) => setPrefs({ ...prefs, replaySpeed: Number(v) as ReplaySpeed })} options={REPLAY_SPEEDS.map((n) => ({ value: String(n), label: `${n}×` }))} name="Replay speed" />
+                </Row>
+                <Row label="Poll cadence" hint="How often pages ask the API for changes. Slow triples every interval; the live run page still updates, just later.">
+                  <Select value={prefs.pollCadence} onChange={(v) => setPrefs({ ...prefs, pollCadence: v === "slow" ? "slow" : "normal" })} options={[{ value: "normal", label: "normal" }, { value: "slow", label: "slow" }]} name="Poll cadence" />
+                </Row>
+                <Row label="Motion" hint="Transitions, the metal rims, the orbs. “Follow the system” reads the OS reduce-motion setting.">
+                  <Select value={prefs.motion} onChange={(v) => setPrefs({ ...prefs, motion: v as MotionPref })} options={MOTION_PREFS.map((m) => ({ value: m, label: MOTION_LABEL[m] }))} name="Motion" />
+                </Row>
               </div>
-            ))}
-          </dl>
-          {/* The manifest polls once a minute (it is static for the API's lifetime), so a page opened while the
-              API was down would otherwise show "…" for up to 60 s after it comes back; retry polls now. */}
-          <p className="mt-3 text-[12px] text-[var(--faint)]">
-            {!manifest && manifestError ? <ApiDown onRetry={refreshManifest} /> : "Set with ANTIBODY_*_MODEL in the API's environment; read once at start."}
-          </p>
-        </section>
+            </Panel>
+          )}
 
-        <section className="mt-12">
-          <h2 className={section}>Environment</h2>
-          <dl className="mt-2 divide-y divide-[var(--border)] border-y border-[var(--border)]">
-            <div className={kv}>
-              <dt>WANDB_API_KEY</dt>
-              <dd className="flex items-center gap-2 text-[var(--muted)]">
-                {health && (
-                  <span aria-hidden className={cn("h-1.5 w-1.5 rounded-full", health.has_api_key ? "bg-[var(--live)]" : "bg-[var(--danger)]")} />
+          {section === "models" && (
+            <>
+              <Panel title="Models" aside={!manifest && manifestError ? <ApiDown onRetry={refreshManifest} /> : undefined}>
+                <dl className="divide-y divide-[var(--border)]">
+                  {(
+                    [
+                      ["Target", "The agent under attack, when it is the built-in one.", models?.target],
+                      ["Chaos", "Invents attacks after the seeds.", models?.chaos],
+                      ["Repair", "Proposes patches when an attack lands.", models?.repair],
+                      ["Judge", "Decides whether an episode failed.", models?.judge],
+                      ["Inference", "Where every model call goes.", models?.inference_url],
+                    ] as const
+                  ).map(([label, hint, value]) => (
+                    <div key={label} className="flex items-center justify-between gap-6 px-4 py-3">
+                      <div className="min-w-0">
+                        <dt className="text-[13px] text-[var(--fg)]">{label}</dt>
+                        <dd className="mt-0.5 text-[12px] text-[var(--faint)]">{hint}</dd>
+                      </div>
+                      <dd className="code max-w-[55%] truncate text-right text-[12px] text-[var(--muted)]" title={value ?? undefined}>
+                        {value ?? (manifest ? "—" : "…")}
+                      </dd>
+                    </div>
+                  ))}
+                </dl>
+              </Panel>
+              <p className="px-1 text-[12px] text-[var(--faint)]">Set with ANTIBODY_*_MODEL in the API's environment; read once at start.</p>
+            </>
+          )}
+
+          {section === "environment" && (
+            <Panel title="Environment">
+              <dl className="divide-y divide-[var(--border)]">
+                <div className="flex items-center justify-between gap-6 px-4 py-3">
+                  <div>
+                    <dt className="code text-[13px] text-[var(--fg)]">WANDB_API_KEY</dt>
+                    <dd className="mt-0.5 text-[12px] text-[var(--faint)]">Needed to run live; replays play without it.</dd>
+                  </div>
+                  <dd className={cn("text-[13px]", health ? (health.has_api_key ? "text-[var(--muted)]" : "text-[var(--danger)]") : "text-[var(--faint)]")}>{health ? (health.has_api_key ? "set" : "missing") : "…"}</dd>
+                </div>
+                <div className="flex items-center justify-between gap-6 px-4 py-3">
+                  <div>
+                    <dt className="text-[13px] text-[var(--fg)]">Weave tracing</dt>
+                    <dd className="mt-0.5 text-[12px] text-[var(--faint)]">Every episode, verdict and gate as a trace.</dd>
+                  </div>
+                  <dd className="text-[13px] text-[var(--muted)]">{weave ? weave.replace("_", " ") : "…"}</dd>
+                </div>
+                {health?.version && (
+                  <div className="flex items-center justify-between gap-6 px-4 py-3">
+                    <dt className="text-[13px] text-[var(--fg)]">API</dt>
+                    <dd className="code text-[12px] text-[var(--muted)]">{health.version}</dd>
+                  </div>
                 )}
-                {health ? (health.has_api_key ? "set" : "not set · replays still play") : "…"}
-              </dd>
-            </div>
-            <div className={kv}>
-              <dt>Weave tracing</dt>
-              <dd className="text-[var(--muted)]">{weave ? weave.replace("_", " ") : "…"}</dd>
-            </div>
-            {health?.version && (
-              <div className={kv}>
-                <dt>API</dt>
-                <dd className="code text-[12px] text-[var(--muted)]">{health.version}</dd>
-              </div>
-            )}
-          </dl>
-        </section>
+              </dl>
+            </Panel>
+          )}
+        </div>
       </div>
-    </main>
+    </Page>
   );
 }
