@@ -1,0 +1,48 @@
+---
+description: Code organization — extend Antibody's existing systems instead of adding parallel ones; production quality, startup-grade
+alwaysApply: true
+---
+
+# Build on what exists
+
+Antibody is meant to grow into a production system and a company. Every change should leave the
+codebase with **fewer** concepts, not more. Before writing anything new, find where this already
+lives and extend it.
+
+## Reuse map — check here first
+
+| Need | Use this, don't rebuild it |
+| --- | --- |
+| Fetching from the API | `web/src/api.ts` — one typed fetcher per route, no caching, `ApiError` for non-2xx |
+| Polling / live data | `hooks/usePoll.ts` (`{data, error, refresh}`); `hooks/useDwell.ts` for phase smoothing |
+| Deriving display text or numbers from records | `lib/derive.ts` — pure functions, tested by reading; pages stay thin |
+| "API unreachable · retry" | `components/ApiDown.tsx` |
+| Quiet text button / link | `<span className="u-line">` inside a `.group` button — see `ReplayControls.tsx` |
+| Colours, spacing, type | tokens in `index.css` (`--fg/--muted/--faint`, `--live/--danger` as signals only) |
+| Framed surface | `components/ui/liquid-metal-border.tsx` (`MetalFrame`) |
+| Reading run files (cycles, configs, status) | `api/store.py` |
+| Spawning / stopping the loop | `api/loop_ctl.py` |
+| Replaying a recording | `api/replay.py` |
+| Run data schemas | `chaos/schemas.py` (Pydantic) mirrored by the types at the top of `api.ts` |
+
+## Rules
+
+- **No new component for a one-off.** A new file under `components/` needs at least two call sites
+  or a genuinely separate object (a dialog, a player). Otherwise it is JSX in the page.
+- **Logic goes in `lib/derive.ts`, not in JSX.** If a page computes a label, a count, or a state
+  from records, it is a named pure function there with a one-line docstring.
+- **Extend types, don't fork them.** Add an optional field to `LoopState` / `Manifest` / `State`
+  rather than a second interface for "the new shape".
+- **One way to do each thing.** If you find yourself writing a second poll hook, a second fetch
+  wrapper, a second underline style, or a second status line, stop and use the first.
+- **Backend: routes are thin.** `api/main.py` validates and dispatches; behaviour lives in
+  `store` / `loop_ctl` / `replay` / `attack` so it is testable without HTTP.
+- **Delete what you replace.** Dead fields, unused exports, and stale comments go in the same change.
+- **Comments explain why, never what.** Code that needs a narrating comment needs a better name.
+- **No new dependency without asking.** Check `package.json` / `pyproject.toml` first; the answer
+  is usually already there.
+
+❌ `components/StopRunButton.tsx`, `components/CrashBanner.tsx`, `hooks/useLoopState.ts` — three
+files, one page, each a thin wrapper over something that already existed.
+✅ `usePoll(api.loop, …)` in the page, the button as six lines of JSX using `.u-line`, and the
+exit-code rule as a named boolean with a comment on *why* negative codes are excluded.

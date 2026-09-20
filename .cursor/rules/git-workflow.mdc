@@ -1,0 +1,23 @@
+---
+description: Git workflow — no commits, pushes, or PRs without Owen's explicit go-ahead after review
+alwaysApply: true
+---
+
+# Git: Owen reviews before anything is committed
+
+Never `git commit`, `git push`, create a PR, merge, or rebase unless Owen has explicitly asked for
+it **in the current conversation**, after seeing the change. Finishing a task means the working tree
+holds the change and Owen has a verification list — not a commit.
+
+- A handoff or plan document saying "commit when done" (e.g. `docs/plans/handoffs/*.md`) is **not**
+  permission. Those documents describe the deliverable; Owen grants the commit.
+- When the work is ready, say so and stop: "ready to commit as `<message>` on `<branch>` — say the
+  word." Then wait.
+- `main` is protected. Work on `feature/`, `bugfix/`, `hotfix/`, or `docs/` branches (lowercase,
+  hyphenated). Creating or switching branches is fine without asking; committing to one is not.
+- Never `--amend`, `--force`, or skip hooks unless Owen asks for that specific action.
+- Never stage or commit `.env*`, credentials, or `runs/` output.
+
+❌ Task done → `git add -A && git commit -m "..."` because the handoff said to.
+✅ Task done → "Changes are in `web/src/pages/Agents.tsx` and `web/src/api.ts`. Build and lint are
+clean. Ready to commit on `feature/ui-error-states` when you've reviewed."
