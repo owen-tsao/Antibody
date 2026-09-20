@@ -323,6 +323,22 @@ def get_runs() -> list[dict]:
     return [_with_agent(r) for r in ([live] if live and live["cycles"] > 0 else []) + rows]
 
 
+@app.post("/api/runs/archive")
+def archive_run() -> dict:
+    """Clear the current run: file its folders under history/ and answer `{archived: <run id> | null}`.
+
+    409 while a loop runs. Any playing tape is stopped first — not for the files (replay reads tapes into
+    memory) but because the Current run page shows an active tape as "watching" and must land on its empty face.
+    """
+    try:
+        archived = loop_ctl.archive_live_run()
+    except RuntimeError:
+        raise HTTPException(409, "loop is running")
+    if replay.stop().get("stopped"):
+        _log.info("replay stopped: the current run was cleared")
+    return {"archived": archived}
+
+
 @app.get("/api/runs/{run_id}")
 def get_run(run_id: str) -> dict:
     """Manifest plus `agent` and `configs` (version, parent_version, patch_note). `run_id` is `live`, `golden` or a history folder."""

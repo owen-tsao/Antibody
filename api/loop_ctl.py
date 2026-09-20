@@ -79,6 +79,7 @@ from typing import Literal
 from pydantic import BaseModel, Field, ValidationError, model_validator
 
 from api import agents
+from chaos import state as chaos_state
 from chaos.state import LOOP_SETTINGS_PATH, ROOT, RUN_MANIFEST_PATH, RUNS_DIR
 from chaos.target import resolve_target
 
@@ -392,6 +393,22 @@ def _killpg(pid: int, sig: int) -> None:
         os.killpg(os.getpgid(pid), sig)
     except ProcessLookupError:
         pass
+
+
+def archive_live_run() -> str | None:
+    """Move the finished live run's files into history/ so Current run is empty again ("Clear").
+
+    The same hand-over the loop performs before a fresh run (`chaos.state.archive_previous_run`), under
+    `runs_lock` like every other hand-over of `runs/`: two Clears in one second would otherwise both pass
+    the "anything to move?" check and the second `mkdir` would fail. Returns the new history folder's name
+    (the run id the Runs list uses) or None when there was nothing to move. Raises RuntimeError("running")
+    while a loop is alive — its files are not ours to move.
+    """
+    with runs_lock:
+        if is_running():
+            raise RuntimeError("running")
+        dest = chaos_state.archive_previous_run()
+        return dest.name if dest is not None else None
 
 
 def stop() -> dict:
