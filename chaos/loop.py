@@ -21,22 +21,26 @@ from __future__ import annotations
 
 import json
 import os
+import random
 import signal
 import sys
+import time
+from datetime import datetime, timezone
 
 import weave
 
 from chaos import zendesk
 from chaos.chaos_agent import family_stats, generate_scenario
-from chaos.config import ENTITY_PROJECT
-from chaos.evals import TargetAgent, publish_dataset, run_evaluation, scenario_rows
+from chaos.config import ENTITY_PROJECT, METER, PRICE_PER_MILLION_USD, Usage
+from chaos.domains import active_domain, covered_legit
+from chaos.evals import JUDGE_PROMPT_NAME, SYSTEM_PROMPT_NAME, TargetAgent, legit_evaluation, publish_dataset, publish_leaderboard, publish_prompt, run_evaluation, scenario_rows
 from chaos.gate import rerun_flaky, run_gate
-from chaos.judge import judge_episode
-from chaos.repair_agent import EXHAUSTED_RATIONALE, apply_patch, build_memory, propose_patch
-from chaos.scenarios import LEGIT_SCENARIOS, SEED_SCENARIOS
-from chaos.schemas import AgentConfig, CycleRecord, GateResult, Scenario
+from chaos.judge import JUDGE_SYSTEM, judge_episode
+from chaos.repair_agent import EXHAUSTED_RATIONALE, apply_patch, build_memory, propose_patch, rule_detail
+from chaos.schemas import AgentConfig, CycleRecord, GateResult, Scenario, TokenCount
 from chaos.state import (
     CYCLES_PATH,
+    amend_run_manifest,
     archive_previous_run,
     load_config,
     load_regression,
@@ -47,24 +51,49 @@ from chaos.state import (
     write_run_manifest,
 )
 from chaos.status import set_phase, start_run
-from chaos.target_agent import V0_CONFIG, run_target_agent
+from chaos.target import resolve_target
+from chaos.target_agent import run_target_agent, v0_config
 
 MAX_REPAIR_ATTEMPTS = 3
 # Episodes per (version, scenario) pair when measuring vulnerability; an attack lands if it lands in the majority.
 VULNERABILITY_SAMPLES = 3
+SEED_ENV = "ANTIBODY_SEED"
+
+
+def run_seed() -> int:
+    """The seed behind every choice the harness makes this run: `ANTIBODY_SEED`, else the clock (recorded in run.json)."""
+    raw = os.environ.get(SEED_ENV, "").strip()
+    if raw:
+        try:
+            return int(raw)
+        except ValueError:
+            raise SystemExit(f"{SEED_ENV} must be an integer, got {raw!r}") from None
+    return int(time.time())
 
 
 class LoopState:
-    def __init__(self, cfg: AgentConfig | None = None, regression_suite: list[Scenario] | None = None):
-        self.cfg = cfg or V0_CONFIG
+    def __init__(self, cfg: AgentConfig | None = None, regression_suite: list[Scenario] | None = None, seed: int | None = None):
+        self.domain = active_domain()
+        self.cfg = cfg or v0_config(self.domain)
         self.regression_suite: list[Scenario] = list(regression_suite or [])
         self.cycle = _last_cycle_number()
+        # One generator per run, seeded: the bandit, the customer pick and the db sample replay the same way from the
+        # same seed. The models' own sampling (temperature) is not ours to fix.
+        self.seed = run_seed() if seed is None else seed
+        self.rng = random.Random(self.seed)
         # Full cycle history: the Chaos Agent's bandit and the Repair Agent's memory both learn from it.
         self.records: list[CycleRecord] = _load_records()
         self.config_history: list[AgentConfig] = [self.cfg]
         self.baseline: dict[str, bool] = {}
-        # Legit traffic lives in real tickets too, filed once per run and reused by every evaluation.
-        self.legit_suite: list[Scenario] = [zendesk.file_scenario(s) for s in LEGIT_SCENARIOS]
+        # Only the legit tasks this target can perform are judged (`covered_legit`): a task that needs a tool the
+        # agent does not list is skipped, so the guard measures behaviour, not the pack's vocabulary. Legit traffic
+        # lives in real tickets too, filed once per run and reused by every evaluation.
+        listed = resolve_target().tools()
+        covered = covered_legit(self.domain, self.domain.legit, [t["name"] for t in listed] if listed is not None else None)
+        self.legit_suite: list[Scenario] = [zendesk.file_scenario(s) for s in covered]
+        if len(covered) < len(self.domain.legit):
+            skipped = [s.id for s in self.domain.legit if s not in covered]
+            print(f"  legit guard covers {len(covered)}/{len(self.domain.legit)} tasks; the target lists no tool for {skipped}")
         if zendesk.enabled() and not any(s.ticket_id for s in self.legit_suite):
             # Zendesk answered but refused every ticket (expired trial, revoked token). Mid-run failures fail
             # closed per episode; a world that is dead before the run starts is a different case, and the
@@ -72,10 +101,18 @@ class LoopState:
             os.environ["ANTIBODY_NO_ZENDESK"] = "1"
             print("World: Zendesk refused to create tickets; this run uses the mock world instead")
         self.legit_dataset = publish_dataset("legit-users", self.legit_suite)
+        # One Evaluation object for every legit leg this run (baseline and gates), so the leaderboard can line the
+        # versions up over it (plan 11 §4.3). `legit_evaluation_ref` is None without a client.
+        self.legit_evaluation, self.legit_evaluation_ref = legit_evaluation(self.legit_dataset)
         self.regression_dataset: weave.Dataset | None = (
             publish_dataset("regression-suite", self.regression_suite) if self.regression_suite else None
         )
         save_config(self.cfg)
+        # Prompts as versioned objects (plan 11 §4.5): the judge's once, the target's with every config the run saves,
+        # so each Model version in Weave points at the prompt version it was evaluated with. `save_config` itself
+        # stays Weave-free: the API process saves configs too and must never open a client.
+        publish_prompt(JUDGE_PROMPT_NAME, JUDGE_SYSTEM)
+        publish_prompt(SYSTEM_PROMPT_NAME, self.cfg.system_prompt)
 
     def capture_regression(self, scenario: Scenario) -> None:
         """A new failure joins the permanent regression suite; re-publish it as a Weave Dataset version.
@@ -97,6 +134,11 @@ class LoopState:
         self.config_history.append(candidate)
         save_config(candidate)
 
+    @property
+    def legit_covered(self) -> dict[str, int]:
+        """What the gate records: legit tasks in the target's reach, of the pack's total."""
+        return {"covered": len(self.legit_suite), "total": len(self.domain.legit)}
+
     def refresh_baseline(self, just_fixed: str | None = None) -> list[str]:
         """Measure what production actually passes today: the bar a patch must not lower.
 
@@ -110,7 +152,7 @@ class LoopState:
         """
         previous = dict(self.baseline)
         model = TargetAgent(config=self.cfg)
-        run = run_evaluation(model, self.legit_dataset, "baseline-legit", f"baseline v{self.cfg.version} legit")
+        run = run_evaluation(model, self.legit_evaluation, "baseline-legit", f"baseline v{self.cfg.version} legit")
         self.baseline = {sid: v.passed for sid, v in run.verdicts.items()}
         if self.regression_dataset is not None:
             reg = run_evaluation(model, self.regression_dataset, "baseline-regression", f"baseline v{self.cfg.version} regression")
@@ -119,8 +161,10 @@ class LoopState:
             self.baseline[just_fixed] = True
         ok = sum(v.passed for v in run.verdicts.values())
         protected = sum(1 for s in self.regression_suite if self.baseline.get(s.id))
+        cov = self.legit_covered
         print(
             f"  baseline: config v{self.cfg.version} passes {ok}/{len(run.verdicts)} legit-user scenarios"
+            + (f" (legit guard covers {cov['covered']}/{cov['total']} tasks)" if cov["covered"] < cov["total"] else "")
             + (f", holds {protected}/{len(self.regression_suite)} captured regressions" if self.regression_suite else "")
         )
         also_fixed = [
@@ -151,6 +195,15 @@ class LoopState:
 def _regressed(gate: GateResult, state: LoopState) -> bool:
     """True if the gate found a scenario that production passes but the candidate fails."""
     return any(state.baseline.get(sid, False) for sid in gate.failed_scenario_ids)
+
+
+def gate_status_line(gate: GateResult) -> str:
+    """`ACCEPTED (fixes=2/2, regression=100%, legit=90%) — reason`; a legit guard that did not run reads `n/a`, never 0%."""
+    legit = f"{gate.legit_pass_rate:.0%}" if gate.legit_pass_rate is not None else "n/a: guard empty"
+    return (
+        f"{'ACCEPTED' if gate.accepted else 'REJECTED'} "
+        f"(fixes={gate.fix_passes}/{gate.fix_samples}, regression={gate.regression_pass_rate:.0%}, legit={legit}) — {gate.reason}"
+    )
 
 
 def _keep_as_base(gate: GateResult, state: LoopState, evaluated: bool) -> bool:
@@ -196,10 +249,31 @@ def _current_trace_url() -> str | None:
         return None
 
 
-@weave.op
 def run_cycle(state: LoopState, scenario: Scenario, retry_of: int | None = None) -> CycleRecord:
+    """One cycle, traced as `run_cycle` in Weave, then priced and written.
+
+    The traced body (`_cycle`) cannot read its own bill: Weave computes cost on the finished call. So the record comes
+    back first, its `cost_usd` is replaced by Weave's number when the call can be read back (`_weave_cost`), and only
+    then is it logged. Without a client (tests, `ANTIBODY_NO_WEAVE`) the in-process estimate stands, labelled so.
+    """
+    record, call = _cycle.call(state, scenario, retry_of=retry_of, __should_raise=True)
+    weave_cost = _weave_cost(call)
+    if weave_cost is not None:
+        record = record.model_copy(update={"cost_usd": weave_cost, "cost_source": "weave"})
+    elif record.cost_usd is not None:
+        record = record.model_copy(update={"cost_source": "estimated"})
+    _log_cycle(record)
+    state.records.append(record)
+    set_phase(state.cycle, "idle", record.attack_succeeded, retry_of=retry_of)
+    return record
+
+
+@weave.op(name="run_cycle")
+def _cycle(state: LoopState, scenario: Scenario, retry_of: int | None = None) -> CycleRecord:
     state.cycle += 1
     before = state.cfg.version
+    started = time.monotonic()
+    usage_before = METER.snapshot()
     scenario = zendesk.file_scenario(scenario)
     label = f" | second pass on cycle {retry_of}" if retry_of else ""
     print(f"\n{'=' * 70}\nCYCLE {state.cycle} | config v{before} | {scenario.title}{label}")
@@ -243,6 +317,8 @@ def run_cycle(state: LoopState, scenario: Scenario, retry_of: int | None = None)
             # so it is given the rest of the suite as plain rows rather than the published dataset.
             set_phase(state.cycle, "gate", True, attempt=attempt, retry_of=retry_of)
             evaluated = True
+            # Before the gate builds its Model, so the Model version references this prompt version (plan 11 §4.5).
+            publish_prompt(SYSTEM_PROMPT_NAME, candidate.system_prompt)
             try:
                 gate = run_gate(
                     candidate,
@@ -253,6 +329,8 @@ def run_cycle(state: LoopState, scenario: Scenario, retry_of: int | None = None)
                     cycle=state.cycle,
                     from_version=state.cfg.version,
                     legit_dataset=state.legit_dataset,
+                    legit_evaluation=state.legit_evaluation,
+                    legit_covered=state.legit_covered,
                 )
             except Exception as e:  # noqa: BLE001 - a Weave/W&B outage mid-gate rejects the patch; it must not end the run
                 print(f"  gate crashed ({type(e).__name__}); treating the candidate as rejected")
@@ -261,10 +339,7 @@ def run_cycle(state: LoopState, scenario: Scenario, retry_of: int | None = None)
                     accepted=False, fixes_new_failure=False, regression_pass_rate=0.0, legit_pass_rate=0.0,
                     failed_scenario_ids=[scenario.id], reason=f"gate crashed: {type(e).__name__}: {e}"[:300],
                 )
-            print(
-                f"  gate: {'ACCEPTED' if gate.accepted else 'REJECTED'} "
-                f"(fixes={gate.fix_passes}/{gate.fix_samples}, regression={gate.regression_pass_rate:.0%}, legit={gate.legit_pass_rate:.0%}) — {gate.reason}"
-            )
+            print(f"  gate: {gate_status_line(gate)}")
             if gate.accepted:
                 state.promote(candidate)
                 set_phase(state.cycle, "baseline", False, retry_of=retry_of)
@@ -275,7 +350,7 @@ def run_cycle(state: LoopState, scenario: Scenario, retry_of: int | None = None)
                 base = candidate
                 print("  keeping partial fix as base for next attempt")
 
-    record = CycleRecord(
+    return CycleRecord(
         cycle=state.cycle,
         scenario=scenario,
         attack_succeeded=not verdict.passed,
@@ -290,11 +365,82 @@ def run_cycle(state: LoopState, scenario: Scenario, retry_of: int | None = None)
         weave_call_url=_current_trace_url(),
         retry_of=retry_of,
         also_fixed=also_fixed,
+        **_cycle_cost(started, usage_before),
     )
-    _log_cycle(record)
-    state.records.append(record)
-    set_phase(state.cycle, "idle", not verdict.passed, retry_of=retry_of)
-    return record
+
+
+def _cycle_cost(started: float, usage_before: Usage) -> dict:
+    """Wall clock and every model call since the cycle began, as `CycleRecord` fields. Cost is None when no call was priced."""
+    used = METER.since(usage_before)
+    return {
+        "latency_ms": int((time.monotonic() - started) * 1000),
+        "tokens": TokenCount(input=used.input, output=used.output),
+        "cost_usd": round(used.cost_usd, 6) if used.input + used.output > used.unpriced else None,
+    }
+
+
+# Cost keys Weave computes per model on a call read back with `include_costs=True` (plan 11 §4.1, review W3).
+_WEAVE_COST_KEYS = ("prompt_tokens_total_cost", "completion_tokens_total_cost", "cache_read_input_tokens_total_cost", "cache_creation_input_tokens_total_cost")
+
+
+def weave_costs_total(summary: dict | None) -> float | None:
+    """Sum of every model's cost in a call summary's `weave.costs`, or None when there is none to sum.
+
+    A summary aggregates the call's whole subtree, so on the `run_cycle` call this is the cycle's bill: target
+    episodes, judge, chaos, repair and every gate evaluation, priced by the table `register_costs` handed Weave.
+    """
+    costs = ((summary or {}).get("weave") or {}).get("costs")
+    if not isinstance(costs, dict):
+        return None
+    total, priced = 0.0, False
+    for row in costs.values():
+        if not isinstance(row, dict):
+            continue
+        for key in _WEAVE_COST_KEYS:
+            value = row.get(key)
+            if isinstance(value, (int, float)) and not isinstance(value, bool):
+                total += value
+                priced = True
+    return round(total, 6) if priced else None
+
+
+def _weave_cost(call) -> float | None:
+    """The finished cycle call's bill as Weave computed it, or None when it cannot be read (no client, the call has
+    not landed, a server error). Costs exist only on a call fetched from the server, so the local `Call` is re-read
+    after a flush; the flush is what makes the just-finished trace visible to `get_call`."""
+    client = weave.get_client()
+    call_id = getattr(call, "id", None)
+    if client is None or not call_id:
+        return None
+    try:
+        client.flush()
+        fetched = client.get_call(call_id, include_costs=True)
+        return weave_costs_total(getattr(fetched, "summary", None))
+    except Exception as e:  # noqa: BLE001 - the estimate is a fine fallback; a Weave hiccup must not end the cycle
+        print(f"  weave: could not read the cycle's cost ({type(e).__name__}); keeping the local estimate")
+        return None
+
+
+def register_costs() -> None:
+    """Hand Weave the price table (plan 11 §4.1) so its cost column and our estimate are the same numbers.
+
+    `add_cost` takes USD per token; the table is per million. Registered once per process, only for models whose
+    current row is missing or priced differently, so restarts do not pile up identical rows. Any failure is one
+    printed line: a pricing hiccup must not stop a run.
+    """
+    client = weave.get_client()
+    if client is None:
+        return
+    try:
+        current = {c.llm_id: (c.prompt_token_cost, c.completion_token_cost) for c in client.query_costs(llm_ids=list(PRICE_PER_MILLION_USD))}
+        for model, (prompt, completion) in PRICE_PER_MILLION_USD.items():
+            wanted = (prompt / 1e6, completion / 1e6)
+            have = current.get(model)
+            if have is not None and all(abs(a - b) < 1e-12 for a, b in zip(have, wanted)):
+                continue
+            client.add_cost(llm_id=model, prompt_token_cost=wanted[0], completion_token_cost=wanted[1])
+    except Exception as e:  # noqa: BLE001 - costs are a display feature; the run does not depend on them
+        print(f"weave: could not register model prices ({type(e).__name__}); cycle costs fall back to the local estimate")
 
 
 def main() -> None:
@@ -359,6 +505,7 @@ def main() -> None:
         ),
     )
     check_p.add_argument("--version", type=int, default=None, metavar="N", help="saved config to check (default: the latest; 0 is always available)")
+    check_p.add_argument("--approved", action="store_true", help="check the certified version instead: the highest one approved in the dashboard (0 when none)")
     check_p.add_argument("--json", action="store_true", help="print one JSON document instead of the per-test lines")
 
     args = parser.parse_args()
@@ -388,12 +535,21 @@ def main() -> None:
     for name in ("weave", "weave.evaluation.eval"):
         logging.getLogger(name).setLevel(logging.WARNING)
     weave.init(ENTITY_PROJECT)
-
+    register_costs()
     if args.command == "vulnerability":
-        vulnerability_by_version()
+        # The dashboard's Measure button spawns this (plan 11 §7) and shows progress from `status.json`, so the
+        # baseline orb is lit the same way the in-run measurement lights it. No `start_run`: that would wipe the
+        # run's phase log, and the rows written here carry no `t_rel`, so replay ignores them.
+        records = _load_records()
+        cycle = records[-1].cycle if records else 0
+        set_phase(cycle, "baseline", measuring="vulnerability")
+        try:
+            vulnerability_by_version()
+        finally:
+            set_phase(cycle, "idle")
         return
     if args.command == "check":
-        raise SystemExit(check(args.version, as_json=args.json))
+        raise SystemExit(check(args.version, as_json=args.json, approved=args.approved))
 
     print(f"World: {'Zendesk ' + zendesk.subdomain() + ' (real tickets; refunds and email mocked)' if zendesk.enabled() else 'mock (no Zendesk)'}")
 
@@ -430,6 +586,8 @@ def main() -> None:
             world="zendesk" if zendesk.enabled() else "mock",
             target=os.environ.get("ANTIBODY_TARGET") or "builtin",
             flags=_run_flags(sys.argv[1:]),
+            domain=state.domain.name,
+            seed=state.seed,
         )
     try:
         _run_loop(state, args)
@@ -452,7 +610,7 @@ def _run_loop(state: LoopState, args) -> None:
     outcomes: list[str] = []
 
     if not args.no_seeds:
-        for sc in SEED_SCENARIOS[: args.seeds]:
+        for sc in state.domain.seeds[: args.seeds]:
             set_phase(state.cycle + 1, "chaos")
             rec = run_cycle(state, sc)
             history.append(sc)
@@ -464,9 +622,9 @@ def _run_loop(state: LoopState, args) -> None:
     for done in range(1, args.chaos_cycles + 1):
         print("\n  chaos agent is studying the current defenses...")
         set_phase(state.cycle + 1, "chaos")
-        stats = family_stats(state.records)
+        stats = family_stats(state.records, state.domain)
         print("  attack record: " + ", ".join(f"{k} {v['successes']}/{v['attempts']}" for k, v in stats.items() if v["attempts"]))
-        sc = generate_scenario(state.cfg, history, outcomes[-4:], records=state.records)
+        sc = generate_scenario(state.cfg, history, outcomes[-4:], records=state.records, domain_name=state.domain.name, seed=state.rng.randrange(2**31))
         print(f"  chaos agent proposes [{sc.kind}]: {sc.title}")
         rec = run_cycle(state, sc)
         history.append(sc)
@@ -482,19 +640,39 @@ def _run_loop(state: LoopState, args) -> None:
     if not args.no_second_pass:
         _second_pass(state)
 
-    if not args.no_seeds and args.seeds != 0:
+    if not args.no_seeds and args.seeds != 0 and state.domain.seeds:
         print("\n--- REPLAYING the first attack against the hardened config ---")
         set_phase(state.cycle + 1, "chaos")
         # Same attack, same ticket: the captured copy carries the ticket id from cycle 1.
-        first = next((s for s in state.regression_suite if s.id == SEED_SCENARIOS[0].id), SEED_SCENARIOS[0])
+        first_seed = state.domain.seeds[0]
+        first = next((s for s in state.regression_suite if s.id == first_seed.id), first_seed)
         run_cycle(state, first)
 
     print(f"\nFinal config v{state.cfg.version}: {state.cfg.patch_note}")
     print(f"Regression suite size: {len(state.regression_suite)}")
     print(f"Cycle log: {CYCLES_PATH}")
 
+    _publish_leaderboard(state)
+
     if args.vulnerability:
         _measure_vulnerability(state)
+
+
+def _publish_leaderboard(state: LoopState) -> None:
+    """The run's one leaderboard (plan 11 §4.3): legit pass rate per config version, over the shared legit
+    evaluation. Its URL goes into `run.json` so the run page can link it; without a client nothing is published."""
+    if state.legit_evaluation_ref is None:
+        return
+    # Named per run (end time) rather than once per project: a history run's link must keep showing that run's board.
+    stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
+    url = publish_leaderboard(
+        name=f"antibody-{state.domain.name}-legit-{stamp}",
+        evaluation_ref=state.legit_evaluation_ref,
+        description=f"Legit-user pass rate per config version, {state.domain.name} pack, target {resolve_target().name}. Rows are the TargetAgent versions this run gated.",
+    )
+    if url:
+        amend_run_manifest(weave_leaderboard_url=url)
+        print(f"Leaderboard: {url}")
 
 
 def _measure_vulnerability(state: LoopState) -> None:
@@ -617,14 +795,20 @@ def _saved_or_v0(version: int) -> AgentConfig:
         return load_config(version)
     except FileNotFoundError:
         if version == 0:
-            return V0_CONFIG
+            return v0_config(active_domain())
         raise
 
 
-def check_config(version: int | None) -> AgentConfig:
-    """The config `check` verifies: the saved `v{version}`, the latest saved one, or the fresh v0 when there is none."""
-    from chaos.state import latest_version
+def check_config(version: int | None, *, approved: bool = False) -> AgentConfig:
+    """The config `check` verifies: the saved `v{version}`, the latest saved one, or the fresh v0 when there is none.
 
+    `approved` picks the certified version instead (`chaos.state.approved_version`: the highest a person approved,
+    0 when nobody has approved anything) — what the gateway enforces, and what a customer's CI should verify.
+    """
+    from chaos.state import approved_version, latest_version
+
+    if approved:
+        return _saved_or_v0(approved_version())
     if version is None:
         version = latest_version()
     return _saved_or_v0(version or 0)
@@ -638,22 +822,25 @@ def run_check(cfg: AgentConfig, regression: list[Scenario], legit: list[Scenario
     `check` and the gate cannot disagree about what counts as flaky. Legit rows run in the mock world here
     (no tickets are filed); regression rows run wherever their captured `ticket_id` says.
 
-    Returns `{ok, version, target, world, regression: {passed, total}, legit: {...}, rows: [...]}` where each
-    row is `{id, suite, title, passed, flaky, failure_kind, reason}`; `flaky` marks a row that failed once and
-    passed on re-run.
+    Returns `{ok, version, target, world, regression: {passed, total}, legit: {...}, legit_covered: {covered, total},
+    rows: [...]}` where each row is `{id, suite, title, passed, flaky, failure_kind, reason}`; `flaky` marks a row
+    that failed once and passed on re-run. Legit tasks the target cannot perform (`covered_legit`: a tool it does not
+    list, by name or alias) are left out of `rows`, the same way the gate leaves them out.
     """
     model = TargetAgent(config=cfg)
     tag = f"check v{cfg.version}"
+    listed = resolve_target(model.target_name).tools()
+    covered = covered_legit(active_domain(), legit, [t["name"] for t in listed] if listed is not None else None)
     reg_run = run_evaluation(model, scenario_rows(regression), "check-regression", f"{tag} regression") if regression else None
-    legit_run = run_evaluation(model, scenario_rows(legit), "check-legit", f"{tag} legit") if legit else None
+    legit_run = run_evaluation(model, scenario_rows(covered), "check-legit", f"{tag} legit") if covered else None
 
     verdicts = {**(reg_run.verdicts if reg_run else {}), **(legit_run.verdicts if legit_run else {})}
     failed = [sid for sid, v in verdicts.items() if not v.passed]
-    by_id = {s.id: s for s in list(regression) + list(legit)}
+    by_id = {s.id: s for s in list(regression) + list(covered)}
     recovered = rerun_flaky(model, failed, by_id, display=f"{tag} rerun") if failed else set()
 
     rows = []
-    for suite, scenarios in (("regression", regression), ("legit", legit)):
+    for suite, scenarios in (("regression", regression), ("legit", covered)):
         for s in scenarios:
             v = verdicts[s.id]
             passed = v.passed or s.id in recovered
@@ -679,6 +866,7 @@ def run_check(cfg: AgentConfig, regression: list[Scenario], legit: list[Scenario
         "world": "zendesk" if zendesk.enabled() else "mock",
         "regression": tally("regression"),
         "legit": tally("legit"),
+        "legit_covered": {"covered": len(covered), "total": len(legit)},
         "rows": rows,
     }
 
@@ -698,32 +886,35 @@ def format_check(result: dict) -> str:
             line += f"\n{'':<17} {r['failure_kind'] or 'failed'}: {r['reason']}"
         lines.append(line)
     reg, legit = result["regression"], result["legit"]
+    cov = result.get("legit_covered") or {"covered": legit["total"], "total": legit["total"]}
     lines.append(
-        f"\nregression {reg['passed']}/{reg['total']} · legit {legit['passed']}/{legit['total']} · "
-        f"config v{result['version']} · target {result['target']} · world {result['world']}"
+        f"\nregression {reg['passed']}/{reg['total']} · legit {legit['passed']}/{legit['total']}"
+        + (f" (legit guard covers {cov['covered']}/{cov['total']} tasks)" if cov["covered"] < cov["total"] else "")
+        + f" · config v{result['version']} · target {result['target']} · world {result['world']}"
     )
     return "\n".join(lines)
 
 
-def check(version: int | None, *, as_json: bool = False) -> int:
+def check(version: int | None, *, as_json: bool = False, approved: bool = False) -> int:
     """`chaos.loop check`: exit 0 when every row passes, 1 otherwise, 2 when there was nothing to check.
 
     "Nothing to check" is its own status so a CI job with a mistyped ANTIBODY_RUNS_DIR cannot pass forever
     on an empty directory: with no `--version`, no saved config and no captured suite, it says so and stops.
-    `check --version 0` is the explicit way to run the legit suite alone on a fresh clone.
+    `check --version 0` is the explicit way to run the legit suite alone on a fresh clone; `--approved`
+    verifies the certified version (the one the gateway enforces).
     """
     from chaos.state import RUNS_DIR, latest_version
 
     regression = load_regression()
-    if version is None and latest_version() is None and not regression:
+    if version is None and not approved and latest_version() is None and not regression:
         print(f"nothing captured under {RUNS_DIR}: no saved config and no regression suite (use --version 0 for the legit suite alone)", file=sys.stderr)
         return 2
     try:
-        cfg = check_config(version)
+        cfg = check_config(version, approved=approved)
     except FileNotFoundError as e:
         print(str(e), file=sys.stderr)
         return 2
-    result = run_check(cfg, regression, LEGIT_SCENARIOS)
+    result = run_check(cfg, regression, active_domain().legit)
     if as_json:
         print(json.dumps(result, indent=2))
     else:
@@ -740,7 +931,8 @@ def _describe(rec: CycleRecord) -> str:
 
 def _patch_detail(patch) -> str:
     if patch.kind == "tighten_tool_policy" and patch.tool_policy:
-        on = [k for k, v in patch.tool_policy.model_dump().items() if v not in (None, False)]
+        on = [k for k, v in patch.tool_policy.model_dump().items() if k != "tool_rules" and v not in (None, False)]
+        on += [f"{name}({rule_detail(rule)})" for name, rule in patch.tool_policy.tool_rules.items()]
         return "policy " + ", ".join(on) if on else "policy (no fields set)"
     if patch.kind == "add_tool_validator":
         return f"validator {patch.validator_name}"

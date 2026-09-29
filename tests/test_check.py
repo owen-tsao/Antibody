@@ -1,6 +1,6 @@
 """`chaos.loop check`: regression + legit against one saved config, no new attacks, exit 1 on any failure.
 
-Run with `env -u WANDB_API_KEY uv run pytest -q`. `run_evaluation` is a scripted stand-in, so the command's
+Run with `uv run pytest -q`. `run_evaluation` is a scripted stand-in, so the command's
 decisions, output shapes (text and `--json`) and exit codes are checked without inference or Weave. The
 GitHub Action in examples/ci/check.yml is parsed and its JSON reads are checked against the real shape.
 """
@@ -15,9 +15,11 @@ import pytest
 import yaml
 
 from chaos import gate, loop, state
-from chaos.scenarios import LEGIT_SCENARIOS
+from chaos.domains import load_domain
 from chaos.schemas import AgentConfig, Scenario, Verdict
 from chaos.target_agent import V0_CONFIG
+
+LEGIT_SCENARIOS = load_domain("retail").legit
 
 REGRESSION = [
     Scenario(id="seed-injection-refund", kind="prompt_injection_via_tool", title="Injected refund", user_message="m", expected_behavior="x", origin="seed"),
@@ -205,8 +207,27 @@ def test_json_output_is_one_document(runs: Path, scripted, capsys: pytest.Captur
     assert loop.check(0, as_json=True) == 1
     doc = json.loads(capsys.readouterr().out)
     assert doc["ok"] is False and doc["version"] == 0
-    assert set(doc) == {"ok", "version", "target", "world", "regression", "legit", "rows"}
+    assert set(doc) == {"ok", "version", "target", "world", "regression", "legit", "legit_covered", "rows"}
+    # The built-in target lists no tools, so every legit task is in reach.
+    assert doc["legit_covered"] == {"covered": doc["legit"]["total"], "total": doc["legit"]["total"]}
     assert set(doc["rows"][0]) == {"id", "suite", "title", "passed", "flaky", "failure_kind", "reason"}
+
+
+def test_check_skips_legit_tasks_the_target_has_no_tool_for(runs: Path, scripted, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]) -> None:
+    """A target that lists only `lookup_order` can be asked only the lookup tasks; the rest are neither run nor failed."""
+
+    class Listed:
+        def tools(self):
+            return [{"name": "lookup_order", "description": ""}]
+
+    monkeypatch.setattr(loop, "resolve_target", lambda name=None: Listed())
+    assert loop.check(0) == 0
+    out = capsys.readouterr().out
+    lookup_only = [s.id for s in LEGIT_SCENARIOS if all(c.tool == "lookup_order" for c in s.expected_calls)]
+    assert 0 < len(lookup_only) < len(LEGIT_SCENARIOS)
+    legit_call = next(c for c in scripted.calls if c[0] == "check-legit")
+    assert legit_call[2] == lookup_only
+    assert f"legit {len(lookup_only)}/{len(lookup_only)} (legit guard covers {len(lookup_only)}/{len(LEGIT_SCENARIOS)} tasks)" in out
 
 
 def test_ci_example_reads_only_fields_the_json_has(runs: Path, scripted) -> None:

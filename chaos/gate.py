@@ -44,6 +44,8 @@ def _int_env(name: str, default: int, minimum: int = 1) -> int:
 
 # How many independent episodes the new failure must survive before a patch counts as fixing it.
 GATE_FIX_SAMPLES = _int_env("ANTIBODY_GATE_FIX_SAMPLES", 2)
+# What the reason says instead of "legit users unaffected" when there was no legit row to run (`legit_pass_rate` None).
+LEGIT_GUARD_EMPTY = "legit guard empty — no legit task is runnable against this target"
 
 
 def rerun_flaky(model: TargetAgent, failed_ids: list[str], by_id: dict[str, Scenario], *, display: str = "rerun") -> set[str]:
@@ -72,9 +74,19 @@ def run_gate(
     from_version: int,
     regression_dataset: weave.Dataset | None = None,
     legit_dataset: weave.Dataset | None = None,
+    legit_evaluation: weave.Evaluation | None = None,
     fix_samples: int = GATE_FIX_SAMPLES,
+    legit_covered: dict[str, int] | None = None,
 ) -> GateResult:
-    """baseline maps scenario id -> whether the CURRENT production config passes it."""
+    """`baseline` maps scenario id -> whether the CURRENT production config passes it, as measured.
+
+    A row missing from it was never measured, so nothing says production passes it and it cannot be "newly
+    broken" here; the loop measures every legit and regression row before its first gate (`refresh_baseline`) and
+    records a fresh failure as False the moment it is captured, so in the loop the map is complete. `legit_covered`
+    is `{covered, total}` from the loop (how many of the pack's legit tasks the target can perform) and is recorded
+    as given. `legit_evaluation` is the run's shared legit Evaluation object (`chaos.evals.legit_evaluation`): when
+    given, the legit leg runs it so every version's leg is comparable on the run's leaderboard.
+    """
     model = TargetAgent(config=candidate)
     tag = f"cycle-{cycle:02d} v{from_version}->v{candidate.version}"
 
@@ -90,10 +102,15 @@ def run_gate(
     reg_run = run_evaluation(
         model, regression_dataset or scenario_rows(regression_suite), "gate-regression", f"{tag} regression"
     ) if regression_suite else None
-    legit_run = run_evaluation(model, legit_dataset or scenario_rows(legit_suite), "gate-legit", f"{tag} legit")
+    # An empty legit suite (the target lists none of the pack's tools, `legit_covered.covered == 0`) means the guard
+    # cannot run at all. That is recorded as None, never as a 0% that reads like "ran and failed everything", and the
+    # reason names it so nobody reads "legit users unaffected" off a leg that was never there.
+    legit_ran = bool(legit_suite)
+    legit_run = run_evaluation(model, legit_evaluation or legit_dataset or scenario_rows(legit_suite), "gate-legit", f"{tag} legit") if legit_ran else None
 
-    reg_failures = [sid for sid in (reg_run.failed_ids if reg_run else []) if baseline.get(sid, True)]
-    newly_broken_legit = [sid for sid in legit_run.failed_ids if baseline.get(sid, True)]
+    # Only a row production was measured passing is protected: one it already fails is not this patch's doing.
+    reg_failures = [sid for sid in (reg_run.failed_ids if reg_run else []) if baseline.get(sid) is True]
+    newly_broken_legit = [sid for sid in (legit_run.failed_ids if legit_run else []) if baseline.get(sid) is True]
 
     recovered: set[str] = set()
     retry_ids = reg_failures + newly_broken_legit
@@ -106,28 +123,31 @@ def run_gate(
             print(f"  gate: {len(recovered)} flaky row(s) passed on re-run: {sorted(recovered)}")
 
     # Reported rates reflect the re-run too, so a forgiven flaky row does not show up as a regression
-    # downstream (loop.py keeps a partial fix only when legit_pass_rate is 1.0).
+    # downstream (loop.py's `_regressed` reads `failed_scenario_ids` against the baseline).
     reg_rate = _rate_after_rerun(reg_run, recovered) if reg_run else 1.0
-    legit_rate = _rate_after_rerun(legit_run, recovered)
+    legit_rate = _rate_after_rerun(legit_run, recovered) if legit_run else None
 
     failed = list(reg_failures) + list(newly_broken_legit)
     if not fixes:
         failed.insert(0, new_failure.id)
 
     accepted = fixes and not reg_failures and not newly_broken_legit
+    legit_note = "legit users unaffected" if legit_ran else LEGIT_GUARD_EMPTY
     if accepted:
-        reason = f"fixes the new failure ({fix_passes}/{fix_samples} samples), no regressions, legit users unaffected"
+        reason = f"fixes the new failure ({fix_passes}/{fix_samples} samples), no regressions, {legit_note}"
     elif not fixes:
         # The sample that failed is the evidence; a passing sample's verdict would describe a success.
         failing = next(r for r in new_runs if r.pass_rate < 1.0)
         v = failing.verdicts.get(new_failure.id)
         reason = f"does not fix the new failure ({fix_passes}/{fix_samples} samples passed): {v.reason if v else 'unknown'}"
     elif newly_broken_legit:
-        v = legit_run.verdicts[newly_broken_legit[0]]
+        v = legit_run.verdicts[newly_broken_legit[0]]  # type: ignore[union-attr]
         reason = f"breaks a legit user flow that worked before ({v.scenario_id}: {v.reason})"
     else:
         v = reg_run.verdicts[reg_failures[0]]  # type: ignore[union-attr]
         reason = f"reintroduces old failure ({v.scenario_id}: {v.reason})"
+    if not accepted and not legit_ran:
+        reason += f" ({LEGIT_GUARD_EMPTY})"
 
     runs: list[tuple[EvalRun | None, str]] = [(r, f"new {i + 1}/{fix_samples}") for i, r in enumerate(new_runs)]
     runs += [(reg_run, "regression"), (legit_run, "legit")]
@@ -144,8 +164,10 @@ def run_gate(
         failed_scenario_ids=failed,
         reason=reason,
         weave_eval_urls=[r.url for r, _ in runs if r is not None and r.url],
+        weave_eval_call_ids=[r.call_id for r, _ in runs if r is not None and r.call_id],
         fix_samples=fix_samples,
         fix_passes=fix_passes,
+        legit_covered=legit_covered,
     )
 
 

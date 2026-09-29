@@ -1,6 +1,6 @@
 """The two-of-two gate: a fix must hold on every sample, protected rows are forgiven one flake.
 
-Run with `env -u WANDB_API_KEY uv run pytest -q`. `run_evaluation` is replaced by a scripted stand-in that
+Run with `uv run pytest -q`. `run_evaluation` is replaced by a scripted stand-in that
 answers each evaluation from a queue, so the gate's decisions can be checked without inference or Weave.
 """
 
@@ -23,6 +23,7 @@ class FakeRun:
     def __init__(self, verdicts: dict[str, Verdict]):
         self.verdicts = verdicts
         self.url = f"https://weave/{id(self)}"
+        self.call_id = f"call-{id(self)}"
         self.renamed: str | None = None
 
     @property
@@ -88,6 +89,7 @@ def test_two_passing_samples_accept_and_record_two_of_two(script) -> None:
     new_calls = [c for c in script.calls if c[0] == "gate-new"]
     assert [c[1] for c in new_calls] == ["cycle-01 v0->v1 new 1/2", "cycle-01 v0->v1 new 2/2"]
     assert len(g.weave_eval_urls) == 4
+    assert len(g.weave_eval_call_ids) == 4 and all(i.startswith("call-") for i in g.weave_eval_call_ids), "ids travel with the urls, gate-new first"
 
 
 def test_one_of_two_is_rejected_with_the_failing_samples_reason(script) -> None:
@@ -195,9 +197,11 @@ def test_golden_tape_still_parses_and_old_records_read_one_sample() -> None:
 def test_a_cycle_the_loop_writes_carries_the_legit_suite_size(tmp_path, monkeypatch: pytest.MonkeyPatch) -> None:
     """`legit_pass_rate` is a fraction; the record must say what it is a fraction of, or the UI hard-codes it."""
     from chaos import loop
-    from chaos.scenarios import LEGIT_SCENARIOS
+    from chaos.domains import load_domain
     from chaos.schemas import Episode
     from chaos.target_agent import V0_CONFIG
+
+    LEGIT_SCENARIOS = load_domain("retail").legit
 
     monkeypatch.setenv("ANTIBODY_NO_ZENDESK", "1")
     monkeypatch.setattr(loop, "CYCLES_PATH", tmp_path / "cycles.jsonl")
