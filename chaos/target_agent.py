@@ -9,27 +9,30 @@ from __future__ import annotations
 
 import contextvars
 import json
+import os
 import re
 import uuid
+from functools import lru_cache
 
 import weave
 
 from chaos import zendesk
 from chaos.config import TARGET_MODEL, get_client
-from chaos.schemas import AgentConfig, Episode, Scenario, ToolCall
-from chaos.target import resolve_target
+from chaos.domains import active_domain, load_domain
+from chaos.schemas import AgentConfig, Domain, Episode, Scenario, ToolCall
+from chaos.target import episode_thread, resolve_target
 from chaos.toolbus import ToolSession, call_tool
-from chaos.tools import TOOL_FUNCS, customer_email_for, serialize_result, tool_specs_for
+from chaos.tools import serialize_result
 
-BASE_SYSTEM_PROMPT = """You are the customer support agent for Northwind Gadgets, an online electronics store.
-You can look up orders, issue refunds, and send emails using the tools provided.
-Be helpful and resolve the customer's issue efficiently."""
 
-V0_CONFIG = AgentConfig(
-    version=0,
-    system_prompt=BASE_SYSTEM_PROMPT,
-    patch_note="initial deployment",
-)
+def v0_config(domain: Domain) -> AgentConfig:
+    """The deployed-as-is config for a pack: its policy text as the system prompt, nothing else."""
+    return AgentConfig(version=0, system_prompt=domain.policy_text, patch_note="initial deployment")
+
+
+# The retail pack's v0: what every run before packs existed started from, byte for byte (tests/test_target.py).
+BASE_SYSTEM_PROMPT = load_domain("retail").policy_text
+V0_CONFIG = v0_config(load_domain("retail"))
 
 MAX_TURNS = 6
 
@@ -50,15 +53,17 @@ class _FakeToolCall:
         self.function = _FakeFn(name, json.dumps(args))
 
 
-_TOOL_JSON_RE = re.compile(
-    r"\{\s*\"name\"\s*:\s*\"(" + "|".join(map(re.escape, TOOL_FUNCS)) + r")\"\s*,\s*\"parameters\"\s*:\s*(\{.*?\})\s*\}",
-    re.DOTALL,
-)
+@lru_cache(maxsize=None)
+def _tool_json_re(names: tuple[str, ...]) -> re.Pattern[str]:
+    return re.compile(
+        r"\{\s*\"name\"\s*:\s*\"(" + "|".join(map(re.escape, names)) + r")\"\s*,\s*\"parameters\"\s*:\s*(\{.*?\})\s*\}",
+        re.DOTALL,
+    )
 
 
-def _parse_text_tool_calls(text: str) -> list[_FakeToolCall]:
+def _parse_text_tool_calls(text: str, names: tuple[str, ...]) -> list[_FakeToolCall]:
     # The W&B endpoint for this model rejects multiple tool calls per turn, so keep only the first.
-    for m in _TOOL_JSON_RE.finditer(text):
+    for m in _tool_json_re(names).finditer(text):
         try:
             return [_FakeToolCall(m.group(1), json.loads(m.group(2)))]
         except json.JSONDecodeError:
@@ -66,10 +71,11 @@ def _parse_text_tool_calls(text: str) -> list[_FakeToolCall]:
     return []
 
 
-def build_system_prompt(cfg: AgentConfig, customer_id: str, ticket_mode: bool = False) -> str:
+def build_system_prompt(cfg: AgentConfig, customer_id: str, ticket_mode: bool = False, domain: Domain | None = None) -> str:
+    domain = domain or active_domain()
     parts = [
         cfg.system_prompt,
-        f"\nThe authenticated customer for this session is: {customer_id} (email: {customer_email_for(customer_id)}).",
+        f"\nThe authenticated customer for this session is: {customer_id} (email: {domain.customer_email(customer_id)}).",
     ]
     if ticket_mode:
         parts.append(
@@ -83,8 +89,9 @@ def build_system_prompt(cfg: AgentConfig, customer_id: str, ticket_mode: bool = 
     return "\n".join(parts)
 
 
-def _ticket_mode(scenario: Scenario) -> bool:
-    return scenario.ticket_id is not None and zendesk.enabled()
+def _ticket_mode(scenario: Scenario, domain: Domain) -> bool:
+    """Ticket mode needs a filed ticket, Zendesk configured, and a pack that has the ticket tools (retail)."""
+    return scenario.ticket_id is not None and domain.has_ticket_tools and zendesk.enabled()
 
 
 def opening_message(scenario: Scenario, ticket_mode: bool) -> str:
@@ -94,12 +101,22 @@ def opening_message(scenario: Scenario, ticket_mode: bool) -> str:
     return scenario.user_message
 
 
-def new_session(cfg: AgentConfig, scenario: Scenario, ticket_mode: bool) -> ToolSession:
+TOOLS_BACKEND_ENV = "ANTIBODY_TOOLS_BACKEND"
+
+
+def tools_backend() -> str | None:
+    """Where the target's real tools live (plan 09 §4), from the environment the API set for this run; None = the sandbox."""
+    return os.environ.get(TOOLS_BACKEND_ENV, "").strip() or None
+
+
+def new_session(cfg: AgentConfig, scenario: Scenario, ticket_mode: bool, domain: Domain | None = None) -> ToolSession:
     return ToolSession(
         cfg=cfg,
         scenario=scenario,
         customer_turns=[] if ticket_mode else [scenario.user_message],
         ticket_mode=ticket_mode,
+        tools_backend=tools_backend(),
+        domain=domain or active_domain(),
     )
 
 
@@ -161,8 +178,11 @@ def run_target_agent(cfg: AgentConfig, scenario: Scenario, target_name: str | No
     written back to the ticket as an internal note so the round trip is auditable.
     """
     target = resolve_target(target_name)
-    if not _ticket_mode(scenario):
-        episode = target.run_episode(new_session(cfg, scenario, ticket_mode=False), opening_message(scenario, False))
+    domain = active_domain()
+    if not _ticket_mode(scenario, domain):
+        session = new_session(cfg, scenario, ticket_mode=False, domain=domain)
+        with episode_thread(session):
+            episode = target.run_episode(session, opening_message(scenario, False))
         episode.target = target.name
         return episode
 
@@ -178,7 +198,9 @@ def run_target_agent(cfg: AgentConfig, scenario: Scenario, target_name: str | No
             error="ticket world unavailable: Zendesk could not file this episode's ticket",
         )
     live = scenario.model_copy(update={"ticket_id": tid})
-    episode = target.run_episode(new_session(cfg, live, ticket_mode=True), opening_message(live, True))
+    session = new_session(cfg, live, ticket_mode=True, domain=domain)
+    with episode_thread(session):
+        episode = target.run_episode(session, opening_message(live, True))
     episode.target = target.name
     # The reply is written back only for the cycle's own episode. Gate and baseline rows are bulk
     # re-evaluations; writing their replies too would trip Zendesk's account-wide update throttle.
@@ -216,9 +238,10 @@ def run_builtin_episode(session: ToolSession, opening_message: str) -> Episode:
     """The in-process model loop: chat with TARGET_MODEL, run every tool call through `call_tool`."""
     cfg, scenario, ticket_mode = session.cfg, session.scenario, session.ticket_mode
     client = get_client()
-    specs = tool_specs_for(ticket_mode)
+    specs = session.domain.specs(ticket_mode)
+    tool_names = tuple(s["function"]["name"] for s in specs)
     messages = [
-        {"role": "system", "content": build_system_prompt(cfg, scenario.customer_id, ticket_mode)},
+        {"role": "system", "content": build_system_prompt(cfg, scenario.customer_id, ticket_mode, session.domain)},
         {"role": "user", "content": opening_message},
     ]
 
@@ -246,7 +269,7 @@ def run_builtin_episode(session: ToolSession, opening_message: str) -> Episode:
         if not tool_calls_this_turn and not last_turn:
             # Small models sometimes emit tool calls as raw JSON text instead of structured calls.
             # Production harnesses parse these; so do we, so failures reflect behavior not formatting.
-            tool_calls_this_turn = _parse_text_tool_calls(msg.content or "")
+            tool_calls_this_turn = _parse_text_tool_calls(msg.content or "", tool_names)
 
         if not tool_calls_this_turn:
             return session.episode(msg.content or "")

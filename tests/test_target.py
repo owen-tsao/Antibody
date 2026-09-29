@@ -16,8 +16,8 @@ import pytest
 from chaos import repair_agent, target_agent
 from chaos import target as target_mod
 from chaos.repair_agent import EXHAUSTED_RATIONALE, _escalate, apply_patch, propose_patch
-from chaos.scenarios import SEED_SCENARIOS
-from chaos.schemas import AgentConfig, Episode, Patch, Scenario, ToolCall, Verdict
+from chaos.domains import load_domain
+from chaos.schemas import AgentConfig, Episode, Patch, Scenario, ToolCall, ToolRule, Verdict
 from chaos.target import (
     ALL_PATCH_KINDS,
     CODE_LEVEL_PATCH_KINDS,
@@ -28,10 +28,10 @@ from chaos.target import (
     target_name,
 )
 from chaos.target_agent import build_system_prompt, new_session, opening_message
-from chaos.tools import VALIDATORS
 
 GOLDEN = Path(__file__).resolve().parent.parent / "data" / "golden"
-INJECTION = next(s for s in SEED_SCENARIOS if s.id == "seed-injection-refund")
+RETAIL = load_domain("retail")
+INJECTION = next(s for s in RETAIL.seeds if s.id == "seed-injection-refund")
 
 
 def _config(version: int) -> AgentConfig:
@@ -181,7 +181,82 @@ def test_external_target_menu_omits_prompt_level_kinds_and_escalates_within_supp
     system = model.calls[0]["messages"][0]["content"]
     assert '1. "tighten_tool_policy"' in system and '2. "add_tool_validator"' in system
     assert "add_guardrail_rule" not in system and "rewrite_system_prompt" not in system
-    assert patch.kind == "add_tool_validator" and patch.validator_name in VALIDATORS
+    assert patch.kind == "add_tool_validator" and patch.validator_name in RETAIL.validators
+
+
+# --- Repair knows tool_rules, and a pass-through session is offered only what can run there --------------
+
+
+def test_the_menu_names_tool_rules_and_the_payload_lists_the_tools(monkeypatch: pytest.MonkeyPatch) -> None:
+    model = _FakeModel("{}")
+    monkeypatch.setattr(repair_agent, "get_client", lambda: model)
+    monkeypatch.delenv(target_agent.TOOLS_BACKEND_ENV, raising=False)
+    episode, verdict = _failed_episode()
+
+    propose_patch(_config(0), INJECTION, episode, verdict, [], target_name="builtin")
+
+    system = model.calls[0]["messages"][0]["content"]
+    assert "tool_rules" in system and "requires_verified_lookup" in system and "max_calls" in system
+    payload = json.loads(model.calls[0]["messages"][1]["content"])
+    assert "issue_refund" in payload["tools_available"] and "lookup_order" in payload["tools_available"]
+    assert payload["recommended_policy_fields"] == {"actions_require_verified_lookup": True}, "storefront session: the flag, as before"
+
+
+def test_a_passthrough_session_is_offered_rules_not_flags_or_validators(monkeypatch: pytest.MonkeyPatch) -> None:
+    model = _FakeModel("{}")
+    monkeypatch.setattr(repair_agent, "get_client", lambda: model)
+    monkeypatch.setenv(target_agent.TOOLS_BACKEND_ENV, "http://127.0.0.1:9")
+    episode, verdict = _failed_episode()
+
+    patch = propose_patch(_config(0), INJECTION, episode, verdict, [], target_name="http:localhost:8790")
+
+    system = model.calls[0]["messages"][0]["content"]
+    assert "refund_requires_order_match" not in system and "add_tool_validator" not in system, "storefront flags and validators cannot run on a customer's tools"
+    payload = json.loads(model.calls[0]["messages"][1]["content"])
+    assert payload["tools_available"] == ["issue_refund"], "only what the agent called: the loop has no other list for pass-through"
+    assert payload["patch_kinds_unavailable_for_this_target"] == ["add_guardrail_rule", "add_tool_validator", "rewrite_system_prompt"]
+    assert payload["recommended_policy_fields"] == {"tool_rules": {"issue_refund": {"requires_verified_lookup": True}}}
+    # An empty answer falls back to the harness's patch: a rule on the offending tool, not the seven flags.
+    assert patch.kind == "tighten_tool_policy" and patch.tool_policy is not None
+    assert patch.tool_policy.refund_requires_order_match is False
+    rule = patch.tool_policy.tool_rules["issue_refund"]
+    assert rule.requires_user_intent and rule.requires_verified_lookup and rule.max_calls == 1
+
+
+def test_passthrough_with_everything_rejected_still_names_the_offending_tool(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(repair_agent, "get_client", lambda: pytest.fail("the model must not be asked when nothing is left"))
+    monkeypatch.setenv(target_agent.TOOLS_BACKEND_ENV, "http://127.0.0.1:9")
+    episode = Episode(
+        scenario_id=INJECTION.id, config_version=0, final_reply="done",
+        tool_calls=[ToolCall(tool="frobnicate_widget", args={"id": "w1"}, result={"ok": True})],
+    )
+    verdict = Verdict(scenario_id=INJECTION.id, config_version=0, passed=False, failure_kind="unauthorized_action", reason="acted", method="deterministic")
+
+    patch = propose_patch(_config(0), INJECTION, episode, verdict, ["tighten_tool_policy: does not fix"], target_name="http:localhost:8790")
+
+    assert patch.rationale == EXHAUSTED_RATIONALE and patch.tool_policy is not None
+    assert patch.tool_policy.tool_rules["frobnicate_widget"] == ToolRule(requires_verified_lookup=True), "an unknown tool gets the safe default"
+
+
+def test_evidence_hints_go_by_tool_class_not_northwind_names() -> None:
+    from chaos.repair_agent import _acted_without_verified_lookup, offending_tools, suggest_patch_kind
+
+    def ep(*calls: tuple[str, dict, object]) -> Episode:
+        return Episode(scenario_id="s", config_version=0, final_reply="", tool_calls=[ToolCall(tool=t, args=a, result=r) for t, a, r in calls])
+
+    verdict = Verdict(scenario_id="s", config_version=0, passed=False, failure_kind="unauthorized_action", reason="", method="deterministic")
+    # A customer's own money tool, never seen by Antibody before, is still "an unblocked action".
+    unblocked = ep(("charge_card", {"customer_id": "c1", "cents": 500}, {"ok": True}))
+    assert suggest_patch_kind(verdict, unblocked, None) == "tighten_tool_policy"
+    assert offending_tools(unblocked) == ["charge_card"] and _acted_without_verified_lookup(unblocked)
+    # A read that returned a record first: the action was verified.
+    verified = ep(("get_booking", {"booking_id": "b1"}, {"booking_id": "b1", "status": "ok"}), ("cancel_booking", {"booking_id": "b1"}, {"ok": True}))
+    assert not _acted_without_verified_lookup(verified)
+    # A read that returned an error does not verify anything.
+    unverified = ep(("get_booking", {"booking_id": "b1"}, {"error": "down"}), ("cancel_booking", {"booking_id": "b1"}, {"ok": True}))
+    assert _acted_without_verified_lookup(unverified)
+    # Reads alone are never offending.
+    assert offending_tools(ep(("lookup_order", {"order_id": "A-1001"}, {"order_id": "A-1001"}))) == []
 
 
 # --- the built-in agent is unchanged ----------------------------------------------

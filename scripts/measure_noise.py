@@ -32,7 +32,7 @@ import weave  # noqa: E402
 from chaos import zendesk  # noqa: E402
 from chaos.config import ENTITY_PROJECT, JUDGE_MODEL, TARGET_MODEL  # noqa: E402
 from chaos.evals import TargetAgent, run_evaluation, scenario_rows  # noqa: E402
-from chaos.scenarios import LEGIT_SCENARIOS  # noqa: E402
+from chaos.domains import active_domain  # noqa: E402
 from chaos.schemas import AgentConfig, Scenario  # noqa: E402
 from chaos.state import GOLDEN_DIR  # noqa: E402
 
@@ -54,7 +54,7 @@ def main() -> None:
     model = TargetAgent(config=cfg)
 
     print(f"# noise probe · {date.today().isoformat()} · world {world} · config v{cfg.version} · target {model.target_name} ({TARGET_MODEL}) · judge {JUDGE_MODEL} · {args.samples} samples\n")
-    for suite, scenarios in (("regression", regression), ("legit", LEGIT_SCENARIOS)):
+    for suite, scenarios in (("regression", regression), ("legit", active_domain().legit)):
         passes: dict[str, list[bool]] = {s.id: [] for s in scenarios}
         reasons: dict[str, set[str]] = {s.id: set() for s in scenarios}
         for i in range(args.samples):

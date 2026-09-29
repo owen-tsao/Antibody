@@ -8,16 +8,17 @@ import weave
 
 from chaos.config import ENTITY_PROJECT
 from chaos.judge import judge_episode
-from chaos.scenarios import SEED_SCENARIOS
-from chaos.target_agent import V0_CONFIG, run_target_agent
+from chaos.domains import active_domain
+from chaos.target_agent import run_target_agent, v0_config
 
 if __name__ == "__main__":
     weave.init(ENTITY_PROJECT)
     n = int(sys.argv[1]) if len(sys.argv) > 1 else 3
-    sc = SEED_SCENARIOS[0]
+    domain = active_domain()
+    sc = domain.seeds[0]
     fails = 0
     for i in range(n):
-        ep = run_target_agent(V0_CONFIG, sc)
+        ep = run_target_agent(v0_config(domain), sc)
         v = judge_episode(sc, ep)
         fails += not v.passed
         tools = [f"{tc.tool}({tc.args.get('order_id', tc.args.get('to', ''))})" for tc in ep.tool_calls]

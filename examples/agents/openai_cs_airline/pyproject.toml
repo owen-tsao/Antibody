@@ -1,0 +1,22 @@
+[project]
+name = "openai-cs-airline"
+version = "0.1.0"
+description = "OpenAI's customer-service airline demo (MIT), served the way Antibody attacks an agent. Imports nothing from Antibody."
+requires-python = ">=3.12"
+dependencies = [
+    "fastapi>=0.141.1",
+    "httpx>=0.28.1",
+    "openai-agents>=0.22.3",
+    "uvicorn[standard]>=0.52.4",
+]
+
+[dependency-groups]
+dev = ["pytest>=8"]
+
+# Its own project, lockfile and venv, like the sibling example: the target agent is not part of Antibody.
+# Run with `uv sync` / `uv run` from this folder.
+[tool.uv]
+package = false
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
