@@ -1,23 +1,25 @@
-import { Gear, House, Key, List, Plugs, Pulse, SidebarSimple, SquaresFour, VideoCamera, X } from "@phosphor-icons/react";
+import { Clock, Gear, House, Key, List, ListChecks, Plugs, Pulse, SidebarSimple, SquaresFour, VideoCamera, X } from "@phosphor-icons/react";
 import { AnimatePresence, motion } from "framer-motion";
 import { type ReactNode, useCallback, useEffect, useRef, useState } from "react";
 
 import { api, type Agent, type Health, type LoopState, type ReplayInfo, type RunRow, type Status } from "@/api";
 import AgentSwitcher from "@/components/AgentSwitcher";
 import ApiDown from "@/components/ApiDown";
+import Panel from "@/components/Panel";
+import TokenField from "@/components/TokenField";
 import { useModal } from "@/hooks/useModal";
 import { usePoll } from "@/hooks/usePoll";
 import { useMotionPref } from "@/hooks/useMotionPref";
 import { replayRunId, selectedAgent } from "@/lib/derive";
-import { AGENTS, HOME, href, LANDING, linkProps, LIVE_RUN, RUNS, SETTINGS, type Route } from "@/lib/routes";
+import { AGENTS, HOME, href, LANDING, linkProps, LIVE_RUN, REVIEW, RUNS, SCHEDULES, SETTINGS, type Route } from "@/lib/routes";
 import type { RunSettings } from "@/lib/settings";
-import { NO_KEY_LINE } from "@/lib/ui";
+import { eyebrow, NO_KEY_LINE } from "@/lib/ui";
 import { cn } from "@/lib/utils";
 
 /**
  * The persistent frame around everything under /app (docs/plans/07-app-rework.md §2): a 240 px rail —
- * wordmark, the selected agent as a switcher, Home and three nouns in one group, Settings and the key line
- * at the bottom — and a
+ * wordmark, the selected agent as a switcher, Home and the nouns (Agents, Current run, Runs, Schedules, Review)
+ * in one group, Settings and the key line at the bottom — and a
  * top bar with a menu button below md that opens the same rail as an overlay. The rail collapses to icons
  * from its own toggle (persisted; no keyboard shortcut — nothing in the app has one). It owns the polls the
  * pages share (`loop`, `replay`, `status`, `health`, `agents`, `runs`) and renders its children as a
@@ -53,6 +55,9 @@ export interface ShellData {
   agentsError: string | null;
   runs: RunRow[] | null;
   runsError: string | null;
+  /** The rail's "api unreachable": both 2 s polls have missed two ticks (or never answered) and it is not a 401. A page
+   * holding its own one-shot reads re-reads when this turns false again — its next tick would be a long way off. */
+  down: boolean;
   /** Poll every shared route now (after an action whose effect the next tick would show late). */
   refresh: () => void;
 }
@@ -70,6 +75,8 @@ const NAV: Item[] = [
   // Always present: idle it holds the Heal orb, live it is the run. A playing tape is also "current".
   { route: LIVE_RUN, label: "Current run", icon: Pulse, active: (r) => (r.kind === "run" || r.kind === "cycle") && r.id === "live" },
   { route: RUNS, label: "Runs", icon: VideoCamera, active: (r) => r.kind === "runs" || ((r.kind === "run" || r.kind === "cycle") && r.id !== "live") },
+  { route: SCHEDULES, label: "Schedules", icon: Clock, active: (r) => r.kind === "schedules" },
+  { route: REVIEW, label: "Review", icon: ListChecks, active: (r) => r.kind === "review" },
 ];
 const SETTINGS_ITEM: Item = { route: SETTINGS, label: "Settings", icon: Gear, active: (r) => r.kind === "settings" };
 
@@ -101,25 +108,28 @@ export default function Shell({
   children: (data: ShellData) => ReactNode;
 }) {
   const reduced = useMotionPref();
-  const { data: loop, error: loopError, failing: loopFailing, refresh: refreshLoop } = usePoll(api.loop, POLL_MS);
-  const { data: replay, error: replayError, failing: replayFailing, refresh: refreshReplay } = usePoll(api.replay, POLL_MS);
+  const { data: loop, error: loopError, status: loopStatus, failing: loopFailing, refresh: refreshLoop } = usePoll(api.loop, POLL_MS);
+  const { data: replay, error: replayError, status: replayStatus, failing: replayFailing, refresh: refreshReplay } = usePoll(api.replay, POLL_MS);
   const live = !!loop?.running || !!replay?.active;
   const { data: status, error: statusError, refresh: refreshStatus } = usePoll(api.status, live ? LIVE_STATUS_MS : POLL_MS);
-  const { data: health } = usePoll(api.health, HEALTH_MS);
+  const { data: health, refresh: refreshHealth } = usePoll(api.health, HEALTH_MS);
   const { data: agents, error: agentsError, refresh: refreshAgents } = usePoll(api.agents, LIST_MS);
   const { data: runs, error: runsError, refresh: refreshRuns } = usePoll(api.runs, LIST_MS);
   const refresh = useCallback(() => {
+    refreshHealth();
     refreshLoop();
     refreshReplay();
     refreshStatus();
     refreshAgents();
     refreshRuns();
-  }, [refreshLoop, refreshReplay, refreshStatus, refreshAgents, refreshRuns]);
+  }, [refreshHealth, refreshLoop, refreshReplay, refreshStatus, refreshAgents, refreshRuns]);
 
   // Down means the API never answered, or both polls have now missed two ticks in a row (~4 s): one miss
   // is a hiccup and keeps the last value silently; a page already open keeps its last-good data either way.
+  // Locked comes first: an API that answers 401 is there, it wants the token (api/auth.py).
+  const locked = loopStatus === 401 || replayStatus === 401;
   const neverAnswered = !loop && !replay && !!loopError && !!replayError;
-  const down = neverAnswered || (loopFailing >= 2 && replayFailing >= 2);
+  const down = !locked && (neverAnswered || (loopFailing >= 2 && replayFailing >= 2));
 
   const [collapsed, setCollapsed] = useState(readCollapsed);
   const toggle = useCallback(() => setCollapsed((c) => !c), []);
@@ -204,11 +214,13 @@ export default function Shell({
         />
 
         <nav aria-label="Sections" className="mt-5 flex flex-col gap-0.5">
-          {!compact && <p className="mb-1 px-2.5 text-[10.5px] font-medium uppercase tracking-[0.08em] text-[var(--faint)]">Workspace</p>}
+          {!compact && <p className={cn(eyebrow, "mb-1 px-2.5")}>Workspace</p>}
           {row(NAV[0])}
           {row(NAV[1])}
           {row(currentRun, currentRunSuffix)}
           {row(runsItem)}
+          {row(NAV[4])}
+          {row(NAV[5])}
         </nav>
 
         <div className={cn("mt-auto flex flex-col gap-0.5 border-t border-[var(--border)] pt-3", compact && "items-center")}>
@@ -322,7 +334,20 @@ export default function Shell({
           exit={{ opacity: 0 }}
           transition={{ duration: reduced ? 0 : FADE_S, ease: "linear" }}
         >
-          {children({ loop, replay, status, statusError, health, agents, agentsError, runs, runsError, refresh })}
+          {locked ? (
+            <div className="mx-auto flex min-h-[60vh] max-w-[420px] flex-col justify-center px-6 py-12">
+              <Panel title="This API wants a token">
+                <div className="flex flex-col gap-4 px-4 py-4">
+                  <p className="text-[13px] leading-[1.55] text-[var(--muted)]">
+                    The server was started with <code className="code text-[var(--fg)]">ANTIBODY_API_TOKEN</code> set. Paste the same value here; it stays in this browser only.
+                  </p>
+                  <TokenField onChange={refresh} />
+                </div>
+              </Panel>
+            </div>
+          ) : (
+            children({ loop, replay, status, statusError, health, agents, agentsError, runs, runsError, down, refresh })
+          )}
         </motion.div>
       </AnimatePresence>
     </div>

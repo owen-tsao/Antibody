@@ -3,7 +3,7 @@ import { CaretUpDown, Plugs } from "@phosphor-icons/react";
 import type { Agent } from "@/api";
 import AgentTile from "@/components/AgentTile";
 import Dropdown from "@/components/Dropdown";
-import { agentKindLine, selectable } from "@/lib/derive";
+import { agentKindLine, heroTitle, selectable } from "@/lib/derive";
 import { linkProps, onboarding } from "@/lib/routes";
 import { cn } from "@/lib/utils";
 
@@ -60,8 +60,9 @@ export default function AgentSwitcher({
       }
       trigger={({ open }) =>
         hero ? (
-          <span className={cn("inline-flex items-center gap-3 rounded-md px-2 transition-opacity hover:opacity-80", open && "opacity-80")}>
-            {selected?.name ?? "…"}
+          // The card sets the size; the caret is half a cap high and centred on the one-line name, at its right end.
+          <span className={cn("inline-flex items-center gap-[0.35em] rounded-md px-2 transition-opacity hover:opacity-80", open && "opacity-80")}>
+            {selected ? heroTitle(selected.name).name : "…"}
             <CaretUpDown className="h-[0.5em] w-[0.5em] shrink-0 opacity-70" aria-hidden />
           </span>
         ) : (

@@ -6,7 +6,7 @@ export type ScenarioKind =
   | "social_engineering"
   | "ambiguous_request";
 
-export type FailureKind =
+type FailureKind =
   | "unauthorized_action"
   | "hallucinated_success"
   | "data_leak"
@@ -20,7 +20,7 @@ export type PatchKind =
   | "add_tool_validator"
   | "tighten_tool_policy";
 
-export interface ToolFault {
+interface ToolFault {
   tool: string;
   mode: "inject" | "null" | "malformed" | "timeout" | "wrong_record";
   payload: unknown;
@@ -34,9 +34,11 @@ export interface Scenario {
   customer_id: string;
   faults: ToolFault[];
   expected_behavior: string;
-  forbidden_tool_calls: string[];
+  /** Calls a correct agent makes / never makes here (chaos/schemas.py `CallSpec`). Absent on records older than domain packs. */
+  expected_calls?: { tool: string; args: Record<string, unknown> }[];
+  forbidden_calls?: { tool: string; args: Record<string, unknown> }[];
   attacker_goal: string;
-  origin: "seed" | "chaos_agent" | "legit";
+  origin: "seed" | "chaos_agent" | "legit" | "imported";
   /** Real Zendesk ticket carrying the scenario; null on the mock path. Absent on older records. */
   ticket_id?: number | null;
   /** Text the attacker planted as an internal note on the ticket. Absent on older records. */
@@ -52,7 +54,7 @@ export interface ToolCall {
 }
 
 /** What the target actually did in one episode (on the record since backend ask #2). */
-export interface Episode {
+interface Episode {
   scenario_id: string;
   config_version: number;
   tool_calls: ToolCall[];
@@ -62,7 +64,7 @@ export interface Episode {
   ticket_state?: Record<string, unknown> | null;
 }
 
-export interface Verdict {
+interface Verdict {
   scenario_id: string;
   config_version: number;
   passed: boolean;
@@ -81,6 +83,96 @@ export interface ToolPolicy {
   /** Added after the golden run; configs written before then omit them (Pydantic defaults false). */
   ticket_scope_assigned_only?: boolean;
   actions_require_verified_lookup?: boolean;
+  /** Per-tool rules by tool name (plan 09 §4); the only part of the policy that applies to tools Antibody did not write. */
+  tool_rules?: Record<string, ToolRule>;
+}
+
+/** One tool's world-agnostic rule (chaos/schemas.py `ToolRule`). Every field optional on the wire: the server defaults them. */
+export interface ToolRule {
+  deny?: boolean;
+  requires_user_intent?: boolean;
+  intent_words?: string[];
+  requires_verified_lookup?: boolean;
+  max_calls?: number | null;
+}
+
+export type ToolClass = "read" | "money" | "message" | "mutate" | "unknown";
+
+/** GET /api/agents/:id/tools — the Tools panel. `tools` null until a ping has listed them. */
+export interface ToolsProposal {
+  tools: AgentTool[] | null;
+  mapping: ToolMapping | null;
+  classes: Record<string, ToolClass>;
+  starter_rules: Record<string, ToolRule>;
+}
+
+/** One line of history/gateway.jsonl (chaos/gateway.py `log_line`). */
+export interface GatewayEvent {
+  at: string;
+  session: string;
+  customer: string;
+  /** Which real tools the call went to; null on rows written before the gateway recorded it. */
+  backend?: string | null;
+  config_version: number;
+  tool: string;
+  args: Record<string, unknown>;
+  decision: "allowed" | "would_block" | "blocked";
+  reason: string | null;
+  mode: "shadow" | "enforce";
+}
+
+export interface GatewayLog {
+  events: GatewayEvent[];
+  command: string;
+}
+
+/**
+ * GET /api/gateway/replay?version=N — version N's `tool_rules` re-run over the real calls recorded in
+ * history/gateway.jsonl (plan 10 §2 "approval as a real decision"). `calls === 0` means no traffic recorded.
+ */
+export interface GatewayReplay {
+  version: number;
+  calls: number;
+  would_block: number;
+  by_tool: Record<string, { calls: number; would_block: number }>;
+  /** Up to 20 of the calls this version would block. */
+  samples: { tool: string; args: Record<string, unknown>; reason: string; at: string }[];
+}
+
+// --- Schedules (docs/plans/09-roadmap-v1.md §6) ---------------------------------------------------------------------
+
+export type ScheduleTrigger = { kind: "interval"; every_minutes: number } | { kind: "on_change" };
+
+/** `LoopStartBody` without `target` (the schedule's agent), `resume` (decided when it fires) and `domain` (the agent's own); the API stores every field. */
+export type ScheduleSettings = Required<Omit<LoopStartBody, "target" | "resume" | "domain">>;
+
+interface ScheduleResult {
+  kind: "started" | "skipped" | "failed";
+  detail: string;
+  at: string;
+}
+
+/** One row of GET /api/schedules (api/schedules.py). `agent_name` null when the agent has been deleted. */
+export interface Schedule {
+  id: string;
+  name: string;
+  agent: string;
+  agent_name: string | null;
+  trigger: ScheduleTrigger;
+  settings: ScheduleSettings;
+  enabled: boolean;
+  created_at: string;
+  last_run_at: string | null;
+  last_result: ScheduleResult | null;
+  next_at: string | null;
+}
+
+export interface ScheduleBody {
+  name: string;
+  agent: string;
+  trigger: ScheduleTrigger;
+  settings: ScheduleSettings;
+  enabled: boolean;
 }
 
 export interface Patch {
@@ -92,11 +184,18 @@ export interface Patch {
   tool_policy: ToolPolicy | null;
 }
 
+/** How many of the pack's legit tasks the legit guard could run against this target (chaos/domains `covered_legit`). */
+export interface LegitCovered {
+  covered: number;
+  total: number;
+}
+
 export interface GateResult {
   accepted: boolean;
   fixes_new_failure: boolean;
   regression_pass_rate: number;
-  legit_pass_rate: number;
+  /** null when the legit guard did not run (no task covered); the backend is making this nullable. */
+  legit_pass_rate: number | null;
   failed_scenario_ids: string[];
   reason: string;
   /** Weave evaluation URLs (gate-new, gate-regression, gate-legit). Absent on golden records. */
@@ -105,6 +204,10 @@ export interface GateResult {
   fix_samples: number;
   /** How many of those samples the candidate fixed; `fixes_new_failure` is `fix_passes === fix_samples`. */
   fix_passes: number;
+  /** pass^k (plan 10 §2): the fix held on `passed` of `k` independent trials. Absent on records gated before it existed. */
+  pass_k?: { k: number; passed: number } | null;
+  /** Legit tasks the target could perform, of the pack's total. Absent/null on records gated before coverage was measured. */
+  legit_covered?: LegitCovered | null;
 }
 
 export interface CycleRecord {
@@ -123,6 +226,10 @@ export interface CycleRecord {
   /** Denominator behind `gate.legit_pass_rate`. Pydantic defaults it to 3 on records written before it existed (the golden tape). */
   legit_suite_size: number;
   weave_call_url: string | null;
+  /** Cost and latency per cycle (plan 10 C2). Absent on records written before the loop measured them. */
+  latency_ms?: number | null;
+  tokens?: { input: number; output: number } | null;
+  cost_usd?: number | null;
 }
 
 export interface AgentConfig {
@@ -135,7 +242,7 @@ export interface AgentConfig {
   patch_note: string;
 }
 
-export type Source = "live" | "golden" | "replay";
+type Source = "live" | "golden" | "replay";
 
 /** `?source=` on the read routes: the live files, the committed golden run, or one archived run (`run:<id>`). */
 export type ReadSource = "live" | "golden" | `run:${string}`;
@@ -155,8 +262,12 @@ export interface LoopStartBody {
   world?: World;
   /** An agent id from GET /api/agents; null = the API process's own default (400 for an unknown id). */
   target?: string | null;
+  /** A pack name from GET /api/domains; null = the agent's own `domain`, else the API's default (400 for an unknown name). */
+  domain?: string | null;
   /** Measure attacks that land on v0 and the final version when the run ends (writes `vulnerability.json`). Default true. */
   vulnerability?: boolean;
+  /** `vulnerability` re-measures the live run's attacks against every saved version instead of running cycles (plan 11 §7). Absent = `run`. */
+  mode?: "run" | "vulnerability";
 }
 
 export interface LoopState {
@@ -170,7 +281,7 @@ export interface LoopState {
   external?: boolean;
 }
 
-export interface LoopStarted {
+interface LoopStarted {
   pid: number;
   started_at: string;
   settings: Required<LoopStartBody>;
@@ -189,6 +300,8 @@ export interface Manifest {
     transport?: string;
     url?: string | null;
   };
+  /** The domain pack this API process runs by default (`ANTIBODY_DOMAIN`); a start or an agent row can pick another. */
+  domain?: string;
   /** The model behind each role as this API process resolved them (`ANTIBODY_*_MODEL`), for the Settings page. */
   models: { target: string; chaos: string; repair: string; judge: string; inference_url: string };
   tools: { name: string; description: string; side_effect: boolean; free_text_fields: string[] }[];
@@ -227,9 +340,30 @@ export interface RunRow {
   duration_s: number | null;
   /** GET /api/runs/{id} only. */
   configs?: Pick<AgentConfig, "version" | "parent_version" | "patch_note">[];
+  /** The domain pack the run attacked in (plan 10 A1, e.g. `retail`, `airline`). Absent on runs made before packs. */
+  domain?: string | null;
+  /** The seed the loop's randomness was pinned to (plan 10 C2); null when the run was not seeded. Absent on older runs. */
+  seed?: number | null;
+  /** From the run's latest gate that measured it; null when no gate did (older runs). */
+  legit_covered?: LegitCovered | null;
+  /** The Weave leaderboard over this run's versions (plan 11 §7); null or absent until the loop publishes one. */
+  weave_leaderboard_url?: string | null;
+  /** Where `cost_usd` on the cycles came from: Weave's own accounting, or the local price table. Absent on older runs. */
+  cost_source?: "weave" | "estimated";
+  /** The live row only: a `vulnerability` measurement is running against this run's versions. */
+  measuring?: boolean;
 }
 
-export interface RollbackBody {
+/** One row of GET /api/domains (api/manifest.py `domains`): a pack the loop can run in. */
+export interface Domain {
+  name: string;
+  tools: { name: string; class: ToolClass }[];
+  families: string[];
+  /** How many legit tasks the pack's guard has. */
+  legit: number;
+}
+
+interface RollbackBody {
   /** A runs-list id; never "live". */
   run: string;
   version: number;
@@ -266,6 +400,10 @@ export interface Agent {
   last_ping: AgentPing | null;
   /** What the agent listed at GET /tools on its last ping; null when it does not list tools. */
   tools: AgentTool[] | null;
+  /** Where the agent's real tools live (`POST <tools_backend>/tools/{name}`); null = the sandbox. Absent on rows stored before plan 09. */
+  tools_backend?: string | null;
+  /** The domain pack whose world this agent speaks (GET /api/domains); null = the API's default. Absent on rows stored before packs. */
+  domain?: string | null;
   synthetic: boolean;
   /** The `example` row only: a live probe of port 8790. `starting` = spawned, port not answering yet. */
   running?: boolean;
@@ -273,7 +411,7 @@ export interface Agent {
   pid?: number | null;
 }
 
-/** Which of the agent's tool names the sandbox storefront serves; null when the agent listed none. */
+/** Which of the agent's tool names the sandbox serves; null when the agent listed none. */
 export interface ToolMapping {
   known: string[];
   unknown: string[];
@@ -284,7 +422,7 @@ export type PingResult =
   | { ok: true; latency_ms: number; reply_preview: string | null; tools: AgentTool[] | null; mapping: ToolMapping | null }
   | { ok: false; latency_ms: number; error: string; tools: AgentTool[] | null; mapping: ToolMapping | null };
 
-export interface ExampleAgentState {
+interface ExampleAgentState {
   running: boolean;
   url: string;
   pid: number | null;
@@ -295,23 +433,89 @@ export interface ExampleAgentState {
 export interface Health {
   ok: boolean;
   has_api_key: boolean;
+  /** Every other /api route wants `Authorization: Bearer` (api/auth.py); the token itself is never reported. */
+  auth_required?: boolean;
   version?: string;
   live_exists?: boolean;
   golden_exists?: boolean;
   weave?: unknown;
 }
 
+// Approval (api/main.py `/api/approvals`, chaos/state.py): a person's decision on one saved version.
+type ReviewStatus = "pending" | "approved" | "rejected";
+
+export interface Approval {
+  version: number;
+  status: ReviewStatus;
+  at: string | null;
+  note: string;
+}
+
+export interface Approvals {
+  /** The certified config: the highest approved version, 0 when nothing has been approved. */
+  certified: number;
+  decisions: Approval[];
+}
+
+// --- Review inbox (docs/plans/11-results-review-weave.md §7) -----------------------------------------------------
+
+/** One version awaiting (or past) a decision, as `GET /api/review/inbox` lists it under its agent. */
+export interface InboxItem {
+  /** A runs-list id: `live`, `golden` or a history folder. */
+  run: string;
+  run_started: string | null;
+  /** The current run's versions are the only ones a decision can be recorded on (api/main.py review is live-only). */
+  live: boolean;
+  version: number;
+  /** The cycle whose accepted patch made the version; null for a rollback copy or starter rules. */
+  cycle: number | null;
+  /** The attack that cycle ran, or the version's patch note. */
+  title: string;
+  gate: { fix_passes: number; fix_samples: number; legit_pass_rate: number | null; legit_covered: LegitCovered | null } | null;
+  /** Set on `decided` items only, with `status`. */
+  decided_at: string | null;
+  status?: Exclude<ReviewStatus, "pending">;
+  note?: string;
+}
+
+/**
+ * One row of `GET /api/review/inbox`: an agent (null when its row was deleted but its runs remain), what can be
+ * decided (`pending`: the current run's undecided versions), what is undecided on archived runs (`archived`: can be
+ * looked at, not decided), and what has been decided.
+ */
+export interface InboxAgent {
+  agent: Pick<Agent, "id" | "name"> | null;
+  pending: InboxItem[];
+  archived: InboxItem[];
+  decided: InboxItem[];
+}
+
 export interface State {
   latest_version: number | null;
   suite_size: number;
   legit_pass_rate: number | null;
+  /** The latest gate's coverage; absent/null before any gate ran or on runs recorded before it was measured. */
+  legit_covered?: LegitCovered | null;
   last_gate: "accepted" | "rejected" | null;
   loop: LoopState;
   source: Source;
   /** Replay only: ISO time the recorded run started. */
   recorded_at?: string | null;
   /** How many of the final suite's attacks land on each config (`{ v0: 6, v3: 3 }`); null until measured. */
-  vulnerability?: { landed: Record<string, number>; suite_size: number; world?: "mock" | "zendesk" | null } | null;
+  vulnerability?: Vulnerability | null;
+}
+
+/**
+ * `runs/vulnerability.json` as the API serves it (api/store.py `read_vulnerability`): per-version counts always;
+ * `by_attack` (plan 11 §7) — `{"v0": {scenario_id: [landed per sample]}}`, read from the detail file — only on runs
+ * measured since it was recorded. `samples` is how many episodes each list holds.
+ */
+export interface Vulnerability {
+  landed: Record<string, number>;
+  suite_size: number;
+  world?: "mock" | "zendesk" | null;
+  samples?: number;
+  by_attack?: Record<string, Record<string, boolean[]>>;
 }
 
 export type Phase = "baseline" | "chaos" | "target" | "judge" | "repair" | "gate" | "idle";
@@ -384,8 +588,35 @@ async function detailOf(res: Response): Promise<string> {
   return `${res.status} ${res.statusText}`;
 }
 
+// The API token (api/auth.py). Kept here because this is the one place that sends it; the Access section in
+// Settings and the Shell's token panel both go through these two.
+const TOKEN_KEY = "antibody.token.v1";
+
+export function getToken(): string | null {
+  try {
+    return localStorage.getItem(TOKEN_KEY);
+  } catch {
+    return null;
+  }
+}
+
+export function setToken(token: string | null): void {
+  try {
+    if (token) localStorage.setItem(TOKEN_KEY, token);
+    else localStorage.removeItem(TOKEN_KEY);
+  } catch {
+    // private mode: the token lives for this page only
+  }
+}
+
+function headers(extra?: Record<string, string>): Record<string, string> | undefined {
+  const token = getToken();
+  const h = { ...(extra ?? {}), ...(token ? { authorization: `Bearer ${token}` } : {}) };
+  return Object.keys(h).length ? h : undefined;
+}
+
 async function get<T>(path: string): Promise<T> {
-  const res = await fetch(path);
+  const res = await fetch(path, { headers: headers() });
   if (!res.ok) throw new ApiError(res.status, await detailOf(res));
   return res.json() as Promise<T>;
 }
@@ -393,7 +624,7 @@ async function get<T>(path: string): Promise<T> {
 async function post<T>(path: string, body?: unknown, signal?: AbortSignal): Promise<T> {
   const res = await fetch(path, {
     method: "POST",
-    headers: body === undefined ? undefined : { "content-type": "application/json" },
+    headers: headers(body === undefined ? undefined : { "content-type": "application/json" }),
     body: body === undefined ? undefined : JSON.stringify(body),
     signal,
   });
@@ -401,8 +632,14 @@ async function post<T>(path: string, body?: unknown, signal?: AbortSignal): Prom
   return res.json() as Promise<T>;
 }
 
+async function patch<T>(path: string, body: unknown): Promise<T> {
+  const res = await fetch(path, { method: "PATCH", headers: headers({ "content-type": "application/json" }), body: JSON.stringify(body) });
+  if (!res.ok) throw new ApiError(res.status, await detailOf(res));
+  return res.json() as Promise<T>;
+}
+
 async function del(path: string): Promise<void> {
-  const res = await fetch(path, { method: "DELETE" });
+  const res = await fetch(path, { method: "DELETE", headers: headers() });
   if (!res.ok) throw new ApiError(res.status, await detailOf(res));
 }
 
@@ -416,8 +653,17 @@ export const api = {
   cycles: (source?: ReadSource) => get<CycleRecord[]>(withSource("/api/cycles", source)),
   config: (v: number, source?: ReadSource) => get<AgentConfig>(withSource(`/api/configs/${v}`, source)),
   configs: (source?: ReadSource) =>
-    get<Pick<AgentConfig, "version" | "parent_version" | "patch_note">[]>(withSource("/api/configs", source)),
+    get<(Pick<AgentConfig, "version" | "parent_version" | "patch_note"> & { review: ReviewStatus })[]>(withSource("/api/configs", source)),
+  /** Which versions of a run a person approved or rejected (absent = pending) and the certified (highest approved) one. */
+  approvals: (source?: ReadSource) => get<Approvals>(withSource("/api/approvals", source)),
+  /** Approve or reject one live version. */
+  review: (version: number, status: Exclude<ReviewStatus, "pending">, note = "") =>
+    post<Approval & { certified: number }>(`/api/configs/${version}/review`, { status, note }),
+  /** Every agent with its pending and decided versions, computed server-side in one pass (plan 11 §7); the Review index's one poll. */
+  reviewInbox: () => get<InboxAgent[]>("/api/review/inbox"),
   manifest: () => get<Manifest>("/api/manifest"),
+  /** Every domain pack the loop can run in; the Settings domain picker and the wizard's Connect step read it. */
+  domains: () => get<Domain[]>("/api/domains"),
   health: () => get<Health>("/api/health"),
   /** Every run there is to open, newest first; the live run first (once it has a cycle), golden last. */
   runs: () => get<RunRow[]>("/api/runs"),
@@ -425,13 +671,29 @@ export const api = {
   run: (id: string) => get<RunRow>(`/api/runs/${id}`),
   /** Copy a past run's config in as the next live version (409 while a loop runs or on target mismatch). */
   rollback: (body: RollbackBody) => post<RollbackResult>("/api/rollback", body),
+  /** The regression suite a run was gated against (live: the suite the next run will be). */
+  regression: (source?: ReadSource) => get<Scenario[]>(withSource("/api/regression", source)),
+  /** A pasted transcript → a live regression scenario (api/incidents.py). `created` is false when the same customer text was imported before. */
+  importScenario: (body: { transcript: string; kind: ScenarioKind; title?: string; customer_id?: string }) =>
+    post<{ scenario: Scenario; created: boolean }>("/api/scenarios/import", body),
+  /** The enforcement gateway's shadow log (history/gateway.jsonl), oldest first, and the command that starts it. `backend` keeps only the rows written in front of that tools backend — the log is per install, the Agent page shows one agent's. */
+  gateway: (tail = 200, backend?: string | null) => get<GatewayLog>(`/api/gateway?tail=${tail}${backend ? `&backend=${encodeURIComponent(backend)}` : ""}`),
+  /** What one live version's rules would have said about the recorded real traffic; the Review page's shadow-replay drawer. `backend` keeps only the rows written in front of that tools backend (the log is per install). */
+  gatewayReplay: (version: number | "approved", source: ReadSource = "live", backend?: string | null) =>
+    get<GatewayReplay>(`/api/gateway/replay?version=${version}&source=${source}${backend ? `&backend=${encodeURIComponent(backend)}` : ""}`),
+  schedules: () => get<Schedule[]>("/api/schedules"),
+  scheduleCreate: (body: ScheduleBody) => post<Schedule>("/api/schedules", body),
+  scheduleUpdate: (id: string, body: Partial<ScheduleBody>) => patch<Schedule>(`/api/schedules/${encodeURIComponent(id)}`, body),
+  scheduleDelete: (id: string) => del(`/api/schedules/${encodeURIComponent(id)}`),
+  /** Fire now; the outcome is the returned row's `last_result`. */
+  scheduleRun: (id: string) => post<Schedule>(`/api/schedules/${encodeURIComponent(id)}/run`),
   loop: () => get<LoopState>("/api/loop"),
   loopStart: (body: LoopStartBody) => post<LoopStarted>("/api/loop/start", body),
   loopStop: () => post<LoopState>("/api/loop/stop"),
   /** Clear the current run: its files move to history/; `archived` is the new run id, or null if runs/ was empty. */
   runsArchive: () => post<{ archived: string | null }>("/api/runs/archive"),
   /** Where "open log" points: the last `tail` lines of runs/loop.log, as JSON. */
-  loopLogUrl: (tail = 200) => `/api/loop/log?tail=${tail}`,
+  loopLog: (tail = 500) => get<{ lines: string[] }>(`/api/loop/log?tail=${tail}`),
   /** Play a recording (golden by default, or `run:<id>`) into /api/status and /api/cycles; 201 with GET /api/replay's document (409 if a loop or another replay is running). */
   replayStart: (speed = 1, recording?: RecordingInfo["source"]) =>
     post<ReplayInfo>(`/api/replay/start?speed=${speed}${recording ? `&recording=${recording}` : ""}`),
@@ -445,8 +707,14 @@ export const api = {
   replay: () => get<ReplayInfo>("/api/replay"),
   /** `builtin`, `example`, then the connected agents. Each call probes port 8790 (1 s timeout), so poll at ≥ 3 s. */
   agents: () => get<Agent[]>("/api/agents"),
-  /** 201 with the new row; 400 for a bad name or URL, 409 when that URL is already connected. */
-  agentCreate: (body: { name: string; url: string }) => post<Agent>("/api/agents", body),
+  /** 201 with the new row; 400 for a bad name, URL or domain, 409 when that URL is already connected. */
+  agentCreate: (body: { name: string; url: string; tools_backend?: string | null; domain?: string | null }) => post<Agent>("/api/agents", body),
+  /** Point a connected agent at its real tools, or back at the sandbox with null. 409 while a loop runs. */
+  agentPatch: (id: string, body: { tools_backend: string | null }) => patch<Agent>(`/api/agents/${id}`, body),
+  /** The Tools panel: listed tools, sandbox mapping, a class and a starter rule per tool. */
+  agentTools: (id: string) => get<ToolsProposal>(`/api/agents/${id}/tools`),
+  /** Save rules as the next live config version; 409 while a loop runs or when the live run is another agent's. */
+  agentToolsApply: (id: string, rules: Record<string, ToolRule>) => post<AgentConfig>(`/api/agents/${id}/tools/apply`, { rules }),
   /** 204; 404 for a synthetic or unknown id, 409 while any loop runs. */
   agentDelete: (id: string) => del(`/api/agents/${id}`),
   /** A hello `POST /episode` plus `GET /tools`; up to ~12 s. Records `last_ping`/`tools` on stored rows. */

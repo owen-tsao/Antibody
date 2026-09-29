@@ -7,7 +7,7 @@
 // use the page's web font: an <img> SVG is a separate document and cannot see Inter.
 
 import type { CycleRecord } from "@/api";
-import { legitPct, regressionPct, rowStatus } from "@/lib/derive";
+import { chartFooter, rowStatus, rowStatusLabel } from "@/lib/derive";
 
 export const CHART_W = 300;
 export const CHART_H = 260;
@@ -124,11 +124,8 @@ export function cycleChartSvg(
     })
     .join("");
 
-  const status = rowStatus(cycle);
-  const title = `cycle ${cycle.cycle} · ${versionsOf(cycle)} · ${status}`;
-  const footer = cycle.gate
-    ? `regression ${regressionPct(cycle)} · legit ${legitPct(cycle)} · suite ${cycle.regression_suite_size}`
-    : `attack blocked · no patch, no gate · suite ${cycle.regression_suite_size}`;
+  const title = `cycle ${cycle.cycle} · ${versionsOf(cycle)} · ${rowStatusLabel(rowStatus(cycle))}`;
+  const footer = chartFooter(cycle);
 
   const legendY = H - 12;
   const legend =
@@ -137,9 +134,9 @@ export function cycleChartSvg(
     `<rect x="${PAD.l + 68}" y="${legendY - 6.5}" width="7" height="7" rx="1.5" fill="none" stroke="${DANGER}"/>` +
     `<text x="${PAD.l + 80}" y="${legendY}" ${FONT} font-size="10" fill="${MUTED}">rejected</text>` +
     `<line x1="${PAD.l + 134}" y1="${legendY - 3.5}" x2="${PAD.l + 148}" y2="${legendY - 3.5}" stroke="${MUTED}" stroke-width="1.25" stroke-dasharray="3 3"/>` +
-    `<text x="${PAD.l + 153}" y="${legendY}" ${FONT} font-size="10" fill="${MUTED}">legit</text>` +
-    `<line x1="${PAD.l + 184}" y1="${legendY - 3.5}" x2="${PAD.l + 198}" y2="${legendY - 3.5}" stroke="${FAINT}" stroke-width="1"/>` +
-    `<text x="${PAD.l + 203}" y="${legendY}" ${FONT} font-size="10" fill="${MUTED}">suite size</text>`;
+    `<text x="${PAD.l + 153}" y="${legendY}" ${FONT} font-size="10" fill="${MUTED}">customers</text>` +
+    `<line x1="${PAD.l + 206}" y1="${legendY - 3.5}" x2="${PAD.l + 220}" y2="${legendY - 3.5}" stroke="${FAINT}" stroke-width="1"/>` +
+    `<text x="${PAD.l + 225}" y="${legendY}" ${FONT} font-size="10" fill="${MUTED}">suite size</text>`;
 
   return `<svg xmlns="http://www.w3.org/2000/svg" width="${W}" height="${H}" viewBox="0 0 ${W} ${H}" role="img" aria-label="${esc(title)}">
   <text x="${PAD.l}" y="22" ${NUM} font-size="12.5" font-weight="500" fill="${FG}">${esc(title)}</text>

@@ -11,12 +11,13 @@ import { NO_KEY_LINE } from "@/lib/ui";
 import { cn } from "@/lib/utils";
 
 /**
- * The one loud element of Current run's empty face: the Heal orb with the estimate under it. Press → `POST
- * /api/loop/start` for `target` with the saved defaults → Current run; a 409 (a loop already runs) goes there
- * too. Without a key it is disabled and says why. While a loop runs or a tape plays the orb yields to a line
- * pointing at what is on screen — one run at a time is the product's rule, not the button's.
+ * The one loud element of Current run's empty face: the Heal button — a chrome-rimmed rectangle — with the
+ * estimate under it. Press → `POST /api/loop/start` for `target` with the saved defaults → Current run; a 409
+ * (a loop already runs) goes there too. Without a key it is disabled and says why. While a loop runs or a tape
+ * plays the button yields to a line pointing at what is on screen — one run at a time is the product's rule,
+ * not the button's.
  */
-export default function HealOrb({ shell, settings, target, size = 128, className }: { shell: ShellData; settings: RunSettings; target: Agent | null; size?: number; className?: string }) {
+export default function HealOrb({ shell, settings, target, className }: { shell: ShellData; settings: RunSettings; target: Agent | null; className?: string }) {
   const { loop, replay, health, refresh } = shell;
   const { data: manifest } = usePoll(api.manifest, 60_000);
   const noKey = health !== null && !health.has_api_key;
@@ -59,11 +60,9 @@ export default function HealOrb({ shell, settings, target, size = 128, className
   }
   const disabled = busy || noKey || !target;
   return (
-    <div className={cn("flex flex-col items-center gap-5", className)}>
-      <OrbButton onClick={heal} disabled={disabled} aria-label="Heal" title={noKey ? NO_KEY_LINE : undefined} className={cn(disabled && "cursor-default opacity-60")} style={{ width: size, height: size }}>
-        <span className="display leading-none" style={{ fontSize: Math.round(size * 0.2) }}>
-          {busy ? "…" : "Heal"}
-        </span>
+    <div className={cn("flex flex-col items-center gap-4", className)}>
+      <OrbButton onClick={heal} disabled={disabled} aria-label="Heal" title={noKey ? NO_KEY_LINE : undefined} radius={14} lift={{ x: 0, y: -1 }} className={cn("h-[52px] w-[200px]", disabled && "cursor-default opacity-60")}>
+        <span className="text-[15px] font-medium tracking-[-0.01em]">{busy ? "Starting…" : "Heal"}</span>
       </OrbButton>
       <p className="text-center text-[12px] leading-[1.6] text-[var(--muted)]">
         {noKey ? (

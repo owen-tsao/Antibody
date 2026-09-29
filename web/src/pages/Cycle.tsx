@@ -2,14 +2,15 @@ import { motion } from "framer-motion";
 import { ArrowUpRight } from "@phosphor-icons/react";
 import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
 
-import { api, type CycleRecord, type ReadSource } from "@/api";
+import { api, type AgentConfig, type CycleRecord, type ReadSource } from "@/api";
 import ApiDown from "@/components/ApiDown";
 import Page from "@/components/Page";
-import ConfigDiff from "@/components/ConfigDiff";
+import ConfigDiff, { Label } from "@/components/ConfigDiff";
 import { usePoll } from "@/hooks/usePoll";
 import { useMotionPref } from "@/hooks/useMotionPref";
 import { cycleSteps, fmtTime, humanizeKind, readSource, runTitle, ticketLink } from "@/lib/derive";
 import { CHART_H, CHART_W, cycleChartSvg } from "@/lib/previewSvg";
+import { displayHead } from "@/lib/ui";
 import { cn } from "@/lib/utils";
 
 // One cycle, full page. Left: the five steps as short rows, each a plain-language headline and one
@@ -98,7 +99,7 @@ function Header({ r }: { r: CycleRecord }) {
   return (
     <header className="grid gap-x-12 gap-y-4 border-b border-[var(--border)] pb-4 lg:grid-cols-[minmax(0,1fr)_auto] lg:items-end">
       <div className="min-w-0 max-w-[60ch]">
-        <h1 className="text-[28px] font-medium leading-[1.2] tracking-[-0.02em]">{r.scenario.title}</h1>
+        <h1 className={displayHead}>{r.scenario.title}</h1>
         <p className="mt-2 text-[14px] leading-[1.6] text-[var(--muted)]">“{r.scenario.user_message}”</p>
       </div>
       <div className="flex flex-col gap-1.5 lg:items-end lg:text-right">
@@ -117,7 +118,7 @@ function Header({ r }: { r: CycleRecord }) {
             )}
             {r.weave_call_url && (
               <a href={r.weave_call_url} target="_blank" rel="noreferrer" className={link}>
-                <span className="u-line">Trace in Weave</span> <ArrowUpRight className={arrow} />
+                <span>Trace in Weave</span> <ArrowUpRight className={arrow} />
               </a>
             )}
             {evalUrl && (
@@ -126,7 +127,7 @@ function Header({ r }: { r: CycleRecord }) {
                 target="_blank"
                 rel="noreferrer"
                 className={link}
-                title={`${evalUrls.length} gate ${evalUrls.length === 1 ? "evaluation" : "evaluations"} (new, regression, legit); opens the last`}
+                title={`${evalUrls.length} gate ${evalUrls.length === 1 ? "evaluation" : "evaluations"} (this attack, old attacks, normal customers); opens the last`}
               >
                 Gate evaluation <ArrowUpRight className={arrow} />
               </a>
@@ -160,6 +161,14 @@ function Body({ r, all, source }: { r: CycleRecord; all: CycleRecord[]; source: 
   const changed = r.config_before !== r.config_after;
   const reduced = useMotionPref();
 
+  // The two configs behind the diff, read once per cycle from the run's own tree (a history run's cycle must diff
+  // that run's files, not live's). Nothing to read when the config did not change.
+  const configsFn = useCallback(
+    (): Promise<[AgentConfig, AgentConfig] | null> => (changed ? Promise.all([api.config(r.config_before, source), api.config(r.config_after, source)]) : Promise.resolve(null)),
+    [changed, r.config_before, r.config_after, source],
+  );
+  const { data: configs, error: configsError } = usePoll(configsFn, 0);
+
   // The chart is as tall as the left column (steps + diff) so the two share top and bottom edges,
   // but never taller than the viewport: past that it caps and sticks, riding beside a long diff
   // instead of stretching into a skyscraper or scrolling away. Height comes from measuring the
@@ -172,13 +181,13 @@ function Body({ r, all, source }: { r: CycleRecord; all: CycleRecord[]; source: 
   const panelRef = useRef<HTMLDivElement | null>(null);
   const sizeRef = useRef({ w: CHART_W, h: CHART_H });
   const [size, setSize] = useState({ w: CHART_W, h: CHART_H });
-  const [ready, setReady] = useState(!changed);
+  const [waited, setWaited] = useState(false);
   const [revealing, setRevealing] = useState(false);
-  const settle = useCallback(() => setReady(true), []);
+  const ready = !changed || configs !== null || configsError !== null || waited;
 
   useEffect(() => {
     if (ready) return;
-    const id = setTimeout(() => setReady(true), 800);
+    const id = setTimeout(() => setWaited(true), 800);
     return () => clearTimeout(id);
   }, [ready]);
 
@@ -252,6 +261,11 @@ function Body({ r, all, source }: { r: CycleRecord; all: CycleRecord[]; source: 
                   </span>
                 </div>
                 {s.line && <p className="mt-1.5 max-w-[56ch] text-[13px] leading-[1.6] text-[var(--muted)]">{s.line}</p>}
+                {s.warning && (
+                  <p role="alert" className="mt-1.5 max-w-[56ch] text-[13px] leading-[1.6] text-[var(--danger)]">
+                    {s.warning}
+                  </p>
+                )}
               </div>
             </li>
           ))}
@@ -259,7 +273,16 @@ function Body({ r, all, source }: { r: CycleRecord; all: CycleRecord[]; source: 
 
         {changed && (
           <div className="mt-10 border-t border-[var(--border)] pt-5">
-            <ConfigDiff cycle={r} source={source} collapseAt={6} onSettled={settle} />
+            <Label>
+              config diff v{r.config_before} → v{r.config_after}
+            </Label>
+            {configsError ? (
+              <p className="text-[13px] text-[var(--faint)]">config unavailable</p>
+            ) : !configs ? (
+              <p className="text-[13px] text-[var(--faint)]">loading…</p>
+            ) : (
+              <ConfigDiff before={configs[0]} after={configs[1]} collapseAt={6} />
+            )}
           </div>
         )}
       </div>

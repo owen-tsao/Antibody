@@ -1,29 +1,38 @@
 import { CaretDown } from "@phosphor-icons/react";
 import type { ReactNode } from "react";
 
+import type { Domain } from "@/api";
 import Dropdown from "@/components/Dropdown";
 
+import { type DomainFallback, domainHint, domainOptions } from "@/lib/derive";
 import { CHAOS_CYCLES, REPAIR_ATTEMPTS, SEEDS, UNTIL_QUIET, type RunSettings } from "@/lib/settings";
 import { cn } from "@/lib/utils";
 
 /**
- * The run-settings rows — Seeds · Chaos cycles · Repair attempts · Second pass · Until quiet · Vulnerability —
+ * The run-settings rows — Domain · Seeds · Chaos cycles · Repair attempts · Second pass · Until quiet · Vulnerability —
  * shared by the Settings page's run defaults and the onboarding wizard's First run step.
  * The parent owns the values; this only edits them. Every field is a flag `chaos.loop run` already has
  * (lib/settings.ts). Numbers are a `Select` (the app's `Dropdown`) over the allowed values; booleans a switch. `world` left
- * the fields: the API default `auto` resolves to the mock storefront without Zendesk credentials.
+ * the fields: the API default `auto` resolves to the sandbox without Zendesk credentials.
  */
 
 export default function RunSettingsFields({
   settings,
   onChange,
   seedCount,
+  domain,
   framed = true,
 }: {
   settings: RunSettings;
   onChange: (next: RunSettings) => void;
   /** How many seed scenarios exist (from the manifest); null while unknown, which falls back to the API's cap. */
   seedCount: number | null;
+  /**
+   * The Domain row: the packs `GET /api/domains` lists (null while unknown, the select then offers only the
+   * fallback) and what a run with no domain of its own runs in (`domainFallback`). Left out where a domain is
+   * not a setting — a schedule always runs in its agent's own pack (api/schedules.py `ScheduleSettings`).
+   */
+  domain?: { domains: Domain[] | null; fallback: DomainFallback };
   /** Draw the hairline frame around the rows (off when a panel already frames them). */
   framed?: boolean;
 }) {
@@ -39,6 +48,11 @@ export default function RunSettingsFields({
 
   return (
     <div className={cn("divide-y divide-[var(--border)]", framed && "rounded-xl border border-[var(--border)]")}>
+      {domain && (
+        <Row label="Domain" hint={domainHint(domain.domains, settings.domain ?? domain.fallback.name) ?? "The world the sandbox stands in for: its tools, attack families and normal-customer tasks."}>
+          <Select value={settings.domain ?? ""} onChange={(v) => set({ domain: v || null })} options={domainOptions(domain.domains, settings.domain, domain.fallback.label)} name="Domain" panelWidth={220} />
+        </Row>
+      )}
       <Row label="Seeds" hint="Scripted attacks the run starts with; the chaos agent invents the rest.">
         <Select
           value={settings.seeds === null ? "all" : String(settings.seeds)}
@@ -50,10 +64,10 @@ export default function RunSettingsFields({
       <Row label="Chaos cycles" hint="Attacks the chaos agent invents after the seeds.">
         <Select value={String(settings.chaosCycles)} onChange={(v) => setChaos(Number(v))} options={numbers(CHAOS_CYCLES.min, CHAOS_CYCLES.max)} name="Chaos cycles" />
       </Row>
-      <Row label="Repair attempts" hint="How many patches the repair agent may try per landed attack before giving up.">
+      <Row label="Repair attempts" hint="How many fixes the repair agent may try per attack that gets through before giving up.">
         <Select value={String(settings.repairAttempts)} onChange={(v) => set({ repairAttempts: Number(v) })} options={numbers(REPAIR_ATTEMPTS.min, REPAIR_ATTEMPTS.max)} name="Repair attempts" />
       </Row>
-      <Row label="Second pass" hint="Re-run every attack that landed against the final config.">
+      <Row label="Second pass" hint="Re-run every attack that got through against the final config.">
         <Switch checked={settings.secondPass} onChange={(on) => set({ secondPass: on })} name="Second pass" />
       </Row>
       <Row label="Until quiet" hint="Stop early once this many chaos attacks in a row are blocked.">
@@ -70,7 +84,7 @@ export default function RunSettingsFields({
           />
         </div>
       </Row>
-      <Row label="Vulnerability measurement" hint="After the run, measure which known attacks still land on v0 and on the final config.">
+      <Row label="Vulnerability measurement" hint="After the run, re-run every attack that got through against v0 and the final config, to measure what each version blocks.">
         <Switch checked={settings.vulnerability} onChange={(on) => set({ vulnerability: on })} name="Vulnerability measurement" />
       </Row>
     </div>

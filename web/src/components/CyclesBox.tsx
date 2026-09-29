@@ -4,7 +4,7 @@ import { useState } from "react";
 import CycleTimeline from "@/components/CycleTimeline";
 import { MetalFrame } from "@/components/ui/liquid-metal-border";
 import { useMotionPref } from "@/hooks/useMotionPref";
-import { fmtTime, type CycleResult, type CycleView } from "@/lib/derive";
+import { type CycleResult, type CycleView, fmtTime, rowStatusLabel } from "@/lib/derive";
 import { cn } from "@/lib/utils";
 
 // One cycle at a time. Tabs along the top pick a cycle; while the loop runs the box follows the
@@ -110,7 +110,7 @@ export default function CyclesBox({ views }: { views: CycleView[] }) {
                 <div className="tabular flex shrink-0 items-center gap-3 pt-0.5 text-[13px]">
                   <span className="flex items-center gap-2 text-[var(--muted)]">
                     <span className="h-1.5 w-1.5 rounded-full" style={{ background: RESULT_DOT[current.result] }} />
-                    {current.result}
+                    {rowStatusLabel(current.result)}
                   </span>
                   <span className="text-[var(--faint)]">·</span>
                   <span className="text-[var(--fg)]">{current.versions}</span>

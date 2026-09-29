@@ -8,9 +8,10 @@ import Page from "@/components/Page";
 import Panel, { PanelEmpty, PanelRow } from "@/components/Panel";
 import type { ShellData } from "@/components/Shell";
 import { usePoll } from "@/hooks/usePoll";
-import { agentSubline, fmtDate, homeStats, needsAttention, readSource, runLine, runsForAgent, selectedAgent, versionSpan } from "@/lib/derive";
+import { fmtDate, homeStats, needsAttention, readSource, runLine, runsForAgent, selectedAgent, versionSpan } from "@/lib/derive";
 import { agent as agentRoute, linkProps } from "@/lib/routes";
 import type { RunSettings } from "@/lib/settings";
+import { eyebrow, pill, surface } from "@/lib/ui";
 import { cn } from "@/lib/utils";
 
 /**
@@ -49,30 +50,27 @@ export default function Home({ shell, settings, onSettingsChange }: { shell: She
   const attention = current?.cycles ? needsAttention(current.cycles) : null;
 
   return (
-    <Page title="Home" className="flex max-w-none flex-col">
+    // At xl the page is exactly one viewport tall, so the row below has a height to fill: the card's is fixed by the
+    // viewport (not by the side column's content — eleven attention rows once stretched the card to twice the screen
+    // and pushed the title off centre), and the panels scroll inside. Below xl the side column drops under the hero
+    // and the page scrolls: with the 240 px rail open, two columns at 1024 left the hero 300 px wide.
+    <Page title="Home" className="flex max-w-none flex-col xl:h-[calc(100dvh-3.5rem)] xl:flex-none">
       {down ? (
         <p className="text-[13px]">
           <ApiDown onRetry={refresh} />
         </p>
       ) : (
-        // One row that takes the page: the card grows, the panels split the side column and scroll inside.
-        <div className="grid min-h-0 flex-1 gap-5 lg:grid-cols-[minmax(0,1fr)_400px] lg:grid-rows-[minmax(0,1fr)]">
+        <div className="grid min-h-0 flex-1 gap-5 xl:grid-cols-[minmax(0,1fr)_400px] xl:grid-rows-[minmax(0,1fr)]">
           <div className="flex min-h-0 flex-col gap-5">
             {agent ? (
-              <AgentCard
-                agent={agent}
-                ratio="free"
-                className="min-h-[320px] flex-1"
-                subline={agentSubline(agent, false)}
-                name={<AgentSwitcher agents={agents} selected={agent} onSelect={(id) => onSettingsChange({ ...settings, target: id })} size="hero" />}
-              />
+              <AgentCard agent={agent} ratio="free" className="min-h-[320px] flex-1 xl:min-h-0" name={<AgentSwitcher agents={agents} selected={agent} onSelect={(id) => onSettingsChange({ ...settings, target: id })} size="hero" />} />
             ) : (
-              <div className={cn(CARD_FRAME, "min-h-[320px] flex-1")} aria-hidden />
+              <div className={cn(CARD_FRAME, "min-h-[320px] flex-1 xl:min-h-0")} aria-hidden />
             )}
-            <dl className={cn("grid shrink-0 rounded-xl border border-[var(--frame)] bg-[var(--bg)] px-6 py-5", stats.length === 1 ? "grid-cols-1" : "grid-cols-2 gap-x-6 gap-y-4 sm:grid-cols-4")}>
+            <dl className={cn(surface, "grid shrink-0 px-6 py-5", stats.length === 1 ? "grid-cols-1" : "grid-cols-2 gap-x-6 gap-y-4 sm:grid-cols-4")}>
               {stats.map((s) => (
                 <div key={s.label} className="min-w-0 text-center">
-                  <dt className="text-[11px] uppercase tracking-[0.08em] text-[var(--faint)]">{s.label}</dt>
+                  <dt className={eyebrow}>{s.label}</dt>
                   <dd className="tabular mt-1.5 truncate text-[15px] text-[var(--fg)]">{s.value}</dd>
                 </div>
               ))}
@@ -86,12 +84,12 @@ export default function Home({ shell, settings, onSettingsChange }: { shell: She
               ) : attention === null ? (
                 <PanelEmpty>{current && current.cycles === null ? "Could not read the last run." : "…"}</PanelEmpty>
               ) : attention.length === 0 ? (
-                <PanelEmpty>Nothing outstanding — every attack that landed was patched.</PanelEmpty>
+                <PanelEmpty>Nothing outstanding — every attack that got through was fixed.</PanelEmpty>
               ) : (
                 <div className="divide-y divide-[var(--border)]">
                   {attention.map((row) => {
                     const route = { kind: "cycle" as const, id: lastRun.id, n: row.cycle };
-                    return <PanelRow key={row.cycle} {...linkProps(route)} title={row.title} line={`cycle ${row.cycle} · ${row.why === "rejected" ? "patch rejected by the gate" : "never patched"}`} />;
+                    return <PanelRow key={row.cycle} {...linkProps(route)} title={row.title} line={`#${row.cycle} · ${row.why === "rejected" ? "fix rejected" : "no fix tried"}`} />;
                   })}
                 </div>
               )}
@@ -117,15 +115,7 @@ export default function Home({ shell, settings, onSettingsChange }: { shell: She
                 <div className="divide-y divide-[var(--border)]">
                   {agentRuns.slice(0, 3).map((r) => {
                     const route = { kind: "run" as const, id: r.id };
-                    return (
-                      <PanelRow
-                        key={r.id}
-                        {...linkProps(route)}
-                        title={r.started_at ? fmtDate(r.started_at) : r.id}
-                        line={runLine(r, !!loop?.running)}
-                        trailing={versionSpan(r)}
-                      />
-                    );
+                    return <PanelRow key={r.id} {...linkProps(route)} title={r.started_at ? fmtDate(r.started_at) : r.id} line={runLine(r, !!loop?.running)} trailing={<span className={pill}>{versionSpan(r)}</span>} />;
                   })}
                 </div>
               )}

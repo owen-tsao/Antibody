@@ -6,9 +6,9 @@
 
 import { type MouseEvent, useSyncExternalStore } from "react";
 
-export type OnboardingStep = 1 | 2 | 3 | 4;
+export type OnboardingStep = 1 | 2 | 3 | 4 | 5;
 
-export const SETTINGS_SECTIONS = ["run-defaults", "display", "models", "environment"] as const;
+export const SETTINGS_SECTIONS = ["run-defaults", "display", "models", "environment", "access"] as const;
 export type SettingsSection = (typeof SETTINGS_SECTIONS)[number];
 
 export type Route =
@@ -18,6 +18,12 @@ export type Route =
   | { kind: "agents" }
   | { kind: "agent"; id: string }
   | { kind: "runs" }
+  | { kind: "schedules" }
+  /**
+   * The review inbox (plan 11 §2), or its editor for one version of one run (`/app/review/:run/:version`).
+   * The old `?run=<id>&v=<n>` query still parses to the editor and is rewritten by `redirectLegacy`.
+   */
+  | { kind: "review"; run?: string; v?: number }
   /**
    * `id: "live"` is the current run (`/app/run`): running, or finished and not yet archived (Block 4's
    * identity rule). `replay` = arrive watching: `/app/runs/:id/replay` starts the run's tape.
@@ -29,13 +35,17 @@ export type Route =
 export const LANDING: Route = { kind: "landing" };
 export const HOME: Route = { kind: "home" };
 export const RUNS: Route = { kind: "runs" };
+export const SCHEDULES: Route = { kind: "schedules" };
 export const AGENTS: Route = { kind: "agents" };
+export const REVIEW: Route = { kind: "review" };
 export const SETTINGS: Route = { kind: "settings", section: "run-defaults" };
 export const LIVE_RUN: Route = { kind: "run", id: "live" };
 
 export const onboarding = (step: OnboardingStep): Route => ({ kind: "onboarding", step });
 export const agent = (id: string): Route => ({ kind: "agent", id });
 export const settings = (section: SettingsSection): Route => ({ kind: "settings", section });
+/** The Review editor for version `v` of `run`. */
+export const reviewVersion = (run: string, v: number): Route => ({ kind: "review", run, v });
 
 // "Skip for now" must land in the app and stay there, or the first-run rule would send the person straight
 // back. Remembered for the tab's session only: a fresh visit with still nothing connected gets the wizard again.
@@ -49,7 +59,7 @@ const ID = /^[A-Za-z0-9T_-]+$/;
 
 function onboardingStep(raw: string | undefined): OnboardingStep {
   const n = Number(raw);
-  return n === 2 || n === 3 || n === 4 ? n : 1;
+  return n === 2 || n === 3 || n === 4 || n === 5 ? n : 1;
 }
 
 function isSection(raw: string | undefined): raw is SettingsSection {
@@ -67,11 +77,27 @@ function runRoute(id: string, sub: string | undefined, n: string | undefined): R
 }
 
 /**
+ * The Review address: `/app/review/:run/:version` is the editor; the retired `?run=<id>&v=<n>` query still means
+ * it (and `?run=` alone means the inbox — there is no per-run page any more). Anything malformed is the inbox.
+ */
+function reviewRoute(id: string | undefined, sub: string | undefined, search: string): Route {
+  if (id !== undefined) {
+    const v = Number(sub);
+    return ID.test(id) && sub !== undefined && Number.isInteger(v) && v >= 0 ? reviewVersion(id, v) : REVIEW;
+  }
+  const q = new URLSearchParams(search);
+  const run = q.get("run");
+  const v = Number(q.get("v"));
+  if (!run || !ID.test(run) || !q.has("v") || !Number.isInteger(v) || v < 0) return REVIEW;
+  return reviewVersion(run, v);
+}
+
+/**
  * `/app` → home; anything unknown under it → runs; anything unknown elsewhere → landing. Retired
  * addresses still resolve (`/app/replays`, `/app/runs/live…`, `/app/agents/new`) so old links and bookmarks
- * work; `redirectLegacy` then rewrites the bar.
+ * work; `redirectLegacy` then rewrites the bar. Only the Review page's retired query is read.
  */
-export function parse(pathname: string): Route {
+export function parse(pathname: string, search = ""): Route {
   const parts = pathname.split("/").filter(Boolean);
   if (parts[0] !== "app") return LANDING;
   const [, section, id, sub, n] = parts;
@@ -85,11 +111,14 @@ export function parse(pathname: string): Route {
   }
   if (section === "run") return runRoute("live", id, sub);
   if (section === "replays") return RUNS;
+  if (section === "schedules") return SCHEDULES;
+  if (section === "review") return reviewRoute(id, sub, search);
   if (section === "settings") return isSection(id) ? settings(id) : SETTINGS;
   if (section === "runs" && id && ID.test(id)) return runRoute(id, sub, n);
   return RUNS;
 }
 
+/** The address as `pathname`; no canonical address carries a query string any more. */
 export function href(route: Route): string {
   switch (route.kind) {
     case "landing":
@@ -104,6 +133,10 @@ export function href(route: Route): string {
       return `/app/agents/${route.id}`;
     case "runs":
       return "/app/runs";
+    case "schedules":
+      return "/app/schedules";
+    case "review":
+      return route.run !== undefined && route.v !== undefined ? `/app/review/${route.run}/${route.v}` : "/app/review";
     case "run": {
       const base = route.id === "live" ? "/app/run" : `/app/runs/${route.id}`;
       return route.replay ? `${base}/replay` : base;
@@ -139,14 +172,17 @@ function legacyRoute(search: string): Route | null {
   }
 }
 
+/** The bar's address as `parse`/`href` see it: pathname plus query. */
+const address = () => window.location.pathname + window.location.search;
+
 /**
  * Called once before the first render: rewrites a legacy `?page=` URL, or any retired path `parse` still
  * accepts, to its canonical address in place, leaving no history entry behind.
  */
 export function redirectLegacy(): void {
-  const target = legacyRoute(window.location.search) ?? parse(window.location.pathname);
+  const target = legacyRoute(window.location.search) ?? parse(window.location.pathname, window.location.search);
   const to = href(target);
-  if (window.location.search || to !== window.location.pathname) window.history.replaceState(null, "", to);
+  if (to !== address()) window.history.replaceState(null, "", to);
 }
 
 const listeners = new Set<() => void>();
@@ -154,7 +190,7 @@ const notify = () => listeners.forEach((fn) => fn());
 
 export function navigate(route: Route): void {
   const to = href(route);
-  if (to !== window.location.pathname) {
+  if (to !== address()) {
     window.history.pushState(null, "", to);
     // A new screen starts at its top; Back/Forward keep the browser's own scroll restoration.
     window.scrollTo(0, 0);
@@ -165,7 +201,7 @@ export function navigate(route: Route): void {
 /** Like `navigate`, but the current entry is rewritten: Back never returns to the address being left (redirects). */
 export function replace(route: Route): void {
   const to = href(route);
-  if (to !== window.location.pathname) window.history.replaceState(null, "", to);
+  if (to !== address()) window.history.replaceState(null, "", to);
   notify();
 }
 
@@ -178,11 +214,10 @@ function subscribe(fn: () => void): () => void {
   };
 }
 
-const pathname = () => window.location.pathname;
-
 /** The current route; re-renders on `navigate` and on the browser's Back/Forward. */
 export function useRoute(): Route {
-  return parse(useSyncExternalStore(subscribe, pathname, pathname));
+  useSyncExternalStore(subscribe, address, address);
+  return parse(window.location.pathname, window.location.search);
 }
 
 /**

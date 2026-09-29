@@ -1,5 +1,6 @@
+import { CaretRight } from "@phosphor-icons/react";
 import { AnimatePresence, motion } from "framer-motion";
-import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import { Fragment, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 
 import { api, ApiError, type CycleRecord, type Manifest, type ReadSource, type RollbackResult, type State, type Status } from "@/api";
 import AgentCard, { CARD_FRAME } from "@/components/AgentCard";
@@ -18,10 +19,10 @@ import { useDwell } from "@/hooks/useDwell";
 import { usePoll } from "@/hooks/usePoll";
 import { useMotionPref } from "@/hooks/useMotionPref";
 import {
+  aboutFacts,
   type Agent,
   AGENT_LABEL,
   AGENTS,
-  agentSubline,
   cycleViews,
   emptyLiveFace,
   fmtTime,
@@ -29,9 +30,12 @@ import {
   isActiveWord,
   isRunning,
   lastRunFace,
+  legitCoverageWarning,
+  normalCustomersStat,
   ORB_GREY,
   orbStates,
   orbWord,
+  orbWordLabel,
   phaseVerb,
   readSource,
   recordingFor,
@@ -42,11 +46,13 @@ import {
   runSummary,
   runTitle,
   selectedAgent,
-  summaryLine,
+  settingsLine,
+  versionShort,
 } from "@/lib/derive";
 import { agent as agentRoute, linkProps, replace } from "@/lib/routes";
 import { usePrefs } from "@/lib/prefs";
 import type { RunSettings } from "@/lib/settings";
+import { surface } from "@/lib/ui";
 import { cn } from "@/lib/utils";
 
 // Fixed per orb so the blobs do not reshuffle on every re-render (orb.tsx seeds its PRNG from this).
@@ -78,6 +84,24 @@ function targetLine(t: Manifest["target"] | undefined): string | null {
 }
 
 const quietLink = "group rounded text-[var(--muted)] transition-colors hover:text-[var(--fg)] disabled:cursor-default disabled:text-[var(--faint)]";
+
+/**
+ * The loop's log in a new tab. Fetched, not linked: a plain `<a>` cannot carry the API token (api/auth.py). The tab is
+ * opened synchronously in the click — after an `await`, Safari and strict Firefox treat `window.open` as a popup and
+ * drop it — and filled once the log arrives; a failed fetch is shown in that tab rather than swallowed.
+ */
+async function openLoopLog(): Promise<void> {
+  const tab = window.open("", "_blank", "noreferrer");
+  if (!tab) return;
+  try {
+    const { lines } = await api.loopLog();
+    const url = URL.createObjectURL(new Blob([lines.join("\n")], { type: "text/plain" }));
+    tab.location.href = url;
+    setTimeout(() => URL.revokeObjectURL(url), 60_000);
+  } catch (e) {
+    tab.document.body.textContent = `could not load the log: ${e instanceof Error ? e.message : String(e)}`;
+  }
+}
 
 /**
  * Start this run's tape at `speed` (the Display preference; at 1× the recording's 47 s gates look frozen, 3×
@@ -147,6 +171,10 @@ export default function Run({
   const stateFn = useCallback(() => api.state(source).then((s) => ({ source, s })), [source]);
   const { data: cyclesTagged, error: cyclesError, refresh: refreshCycles, reset: resetCycles } = usePoll(cyclesFn, playing ? 2_000 : 10_000);
   const { data: stateTagged, error: stateError, refresh: refreshState, reset: resetState } = usePoll(stateFn, watching ? 2_000 : 10_000);
+  // The run's review decisions, for its results view: a history run's are a record (read once); the current run's
+  // change when someone decides on the Review page, so they are polled at the same slow beat as its state.
+  const approvalsFn = useCallback(() => api.approvals(readSource(id)), [id]);
+  const { data: approvals } = usePoll(approvalsFn, id === "live" ? 10_000 : 0);
   const [bySource, setBySource] = useState<Partial<Record<ReadSource, { cycles?: CycleRecord[]; state?: State }>>>({});
   // Stored during render, guarded (the way CyclesBox tracks its shown cycle): usePoll keeps the same reference
   // while the JSON is unchanged, so this settles after one pass and never loops.
@@ -177,6 +205,18 @@ export default function Run({
 
   const { data: manifest } = usePoll(api.manifest, 60_000);
 
+  // A loop that just exited (a run, or a measurement started from the matrix) rewrote the live files: re-read them now
+  // rather than on the 10 s tick, so the matrix fills in as the loop finishes.
+  const wasRunning = useRef(false);
+  useEffect(() => {
+    const running = !!loop?.running;
+    if (id === "live" && wasRunning.current && !running) {
+      refreshCycles();
+      refreshState();
+    }
+    wasRunning.current = running;
+  }, [id, loop?.running, refreshCycles, refreshState]);
+
   // The dwell only delays *when* a phase that really arrived is shown (min 1.2 s each), so `chaos` is not
   // skipped. A replay transport action bumps `epoch` so the jump shows at once. A finished run has no phase
   // signal of its own: the shell's status belongs to whatever is live, so it is not shown here.
@@ -203,11 +243,26 @@ export default function Run({
   };
 
   // Clear: file the finished run under history/ and land on the empty face — through `dropLive`, so the page
-  // passes through "loading…" and never shows the tape's cycles under the old run's header for a tick.
+  // passes through "loading…" and never shows the tape's cycles under the old run's header for a tick. Second
+  // click confirms, Escape cancels, the same way Restore does below.
   const [clearing, setClearing] = useState(false);
+  const [clearConfirm, setClearConfirm] = useState(false);
   const [clearError, setClearError] = useState<string | null>(null);
+  useEffect(() => {
+    if (!clearConfirm) return;
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape") setClearConfirm(false);
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [clearConfirm]);
   const clearRun = () => {
     if (clearing) return;
+    if (!clearConfirm) {
+      setClearConfirm(true);
+      return;
+    }
+    setClearConfirm(false);
     setClearing(true);
     setClearError(null);
     api
@@ -330,6 +385,7 @@ export default function Run({
   }, [orbs.chaos, orbs.target, orbs.judge, orbs.repair]);
 
   const sum = runSummary(cycles ?? []);
+  const customers = normalCustomersStat(sum);
   const verb = phaseVerb(status);
   const views = useMemo(() => cycleViews(cycles ?? [], status), [cycles, status]);
 
@@ -365,9 +421,9 @@ export default function Run({
       return (
         <>
           {`the loop stopped (exit ${loop.exit_code}) — `}
-          <a href={api.loopLogUrl()} target="_blank" rel="noreferrer" className={quietLink}>
+          <button type="button" onClick={() => void openLoopLog()} className={quietLink}>
             open log
-          </a>
+          </button>
         </>
       );
     }
@@ -377,23 +433,27 @@ export default function Run({
 
   const selected = selectedAgent(agents, settings.target);
   const finishedActions = mode === "finished" && !loading && !unreachable && (recordingFor(id) !== null || versions.length > 0);
-  // The orbs show while something plays and, at rest, over the last run's results.
-  const orbGrid = (playing || lastRun) && !loading && !unreachable;
+  // The orbs show while something plays; a finished run has no "who is working now", so its verdict takes their place.
+  const orbGrid = playing && !loading && !unreachable;
+  // A finished run with its cycles in — a history row, or the current run at rest under its orbs — shows the results
+  // view (plan 11 §1); the history page's one-line header stands down for it, the current run's stays (it carries
+  // the crash line and the at-rest settings).
+  const results = mode === "finished" && (id !== "live" || lastRun) && !!cycles && !loading && !unreachable;
 
   const actions = (
     <>
       {finishedActions && (
-        <div className="tabular flex flex-wrap items-baseline gap-x-5 gap-y-1 text-[13px]">
+        <div className="flex flex-wrap items-center gap-x-6 gap-y-2 text-[13px]">
           {recordingFor(id) !== null && (
             <button type="button" onClick={() => void watch()} disabled={startingReplay} className={cn(quietLink, "text-[var(--fg)]")}>
-              <span className="u-line">{startingReplay ? "starting replay…" : "watch it back"}</span>
+              <span className="u-line">{startingReplay ? "Starting replay…" : "Watch it back"}</span>
             </button>
           )}
           {versions.length > 0 &&
             (confirm !== null ? (
               <span className="text-[var(--muted)]">
                 <button type="button" onClick={() => rollBack(confirm)} className="group rounded text-[var(--fg)]">
-                  confirm roll back to v{confirm}
+                  Yes, make v{confirm} the live config
                 </button>
                 {" · "}
                 <button type="button" onClick={() => setConfirm(null)} className={cn(quietLink, "text-[var(--faint)]")}>
@@ -401,16 +461,17 @@ export default function Run({
                 </button>
               </span>
             ) : (
-              <span className="text-[var(--faint)]">
-                {rolling ? "rolling back… " : "roll back to "}
-                {versions.map((v, i) => (
-                  <span key={v}>
-                    {i > 0 && " · "}
-                    <button type="button" onClick={() => rollBack(v)} disabled={rolling} className={quietLink}>
-                      v{v}
-                    </button>
+              <span className="inline-flex items-center gap-2 text-[var(--faint)]">
+                {rolling ? "Restoring…" : "Restore a version"}
+                {!rolling && (
+                  <span className="inline-flex gap-1">
+                    {versions.map((v) => (
+                      <button key={v} type="button" onClick={() => rollBack(v)} disabled={rolling} className={cn(quietLink, "tabular rounded-full border border-[var(--border)] px-2 py-0.5 text-[11.5px] hover:border-[var(--border-2)]")}>
+                        {versionShort(v)}
+                      </button>
+                    ))}
                   </span>
-                ))}
+                )}
               </span>
             ))}
           {replayNote && <span className="text-[var(--faint)]">{replayNote}</span>}
@@ -419,10 +480,42 @@ export default function Run({
       {mode === "finished" && (rolled || rollbackError) && (
         <p className={cn("tabular text-[13px]", rollbackError ? "text-[var(--danger)]" : "text-[var(--fg)]")}>
           {rollbackError ??
-            `${rolled!.config.patch_note} → live is now v${rolled!.config.version} · ${rolled!.newer_tests} ${rolled!.newer_tests === 1 ? "test is" : "tests are"} newer than this config`}
+            `${rolled!.config.patch_note} → live is now ${versionShort(rolled!.config.version)} · ${rolled!.newer_tests} ${rolled!.newer_tests === 1 ? "test is" : "tests are"} newer than this config`}
         </p>
       )}
     </>
+  );
+
+  // About this run: one quiet key/value list under a disclosure, closed until asked — where it ran and what it
+  // found belong on the page, not on its first screen (plan 12 §4). Per run, so opening one run's does not open the next.
+  const [aboutOpen, setAboutOpen] = useState<string | null>(null);
+  const about = row && (
+    <section className={surface}>
+      <button type="button" aria-expanded={aboutOpen === id} onClick={() => setAboutOpen(aboutOpen === id ? null : id)} className="group inline-flex items-center gap-1.5 px-4 py-3 text-[13px] font-medium text-[var(--fg)]">
+        <CaretRight size={11} weight="bold" aria-hidden className={cn("text-[var(--faint)] transition-transform", aboutOpen === id && "rotate-90")} />
+        <span>About this run</span>
+      </button>
+      {aboutOpen === id && (
+        <div className="border-t border-[var(--border)]">
+          <dl className="tabular grid grid-cols-[max-content_1fr] gap-x-8 gap-y-1.5 px-4 py-3 text-[12.5px]">
+            {aboutFacts(row, sum).map((f) => (
+              <Fragment key={f.label}>
+                <dt className="text-[var(--muted)]">{f.label}</dt>
+                <dd className="text-[var(--fg)]">{f.value}</dd>
+              </Fragment>
+            ))}
+          </dl>
+          {settingsLine(row.flags) && <p className="border-t border-[var(--border)] px-4 py-2.5 text-[12px] text-[var(--faint)]">Ran with {settingsLine(row.flags)}.</p>}
+          {legitCoverageWarning(sum.legitCovered) && (
+            <p role="alert" className="border-t border-[var(--border)] px-4 py-2.5 text-[12.5px] text-[var(--danger)]">
+              {legitCoverageWarning(sum.legitCovered)}
+            </p>
+          )}
+        </div>
+      )}
+      {/* What you can do with the run stays in view; only the facts fold away. */}
+      {(finishedActions || rolled || rollbackError) && <div className="flex flex-col gap-2 border-t border-[var(--border)] px-4 py-3">{actions}</div>}
+    </section>
   );
 
   const cyclesSection = (
@@ -442,7 +535,7 @@ export default function Run({
 
   return (
     <Page
-      title={runTitle(id)}
+      title={runTitle(id, row)}
       action={
         owned && !loading ? (
           <button type="button" onClick={stopRun} disabled={stopping} className={cn(quietLink, "text-[13px]")}>
@@ -459,12 +552,24 @@ export default function Run({
                 {clearError}
               </span>
             )}
-            <button type="button" onClick={clearRun} disabled={clearing || !!loop?.running} className={quietLink}>
-              {clearing ? "clearing…" : "clear"}
-            </button>
+            {clearConfirm ? (
+              <span className="text-[var(--muted)]">
+                <button type="button" onClick={clearRun} className="group rounded text-[var(--fg)]">
+                  <span>Yes, clear it</span>
+                </button>
+                {" · "}
+                <button type="button" onClick={() => setClearConfirm(false)} className={cn(quietLink, "text-[var(--faint)]")}>
+                  cancel
+                </button>
+              </span>
+            ) : (
+              <button type="button" onClick={clearRun} disabled={clearing || !!loop?.running} className={quietLink}>
+                {clearing ? "Clearing…" : "Clear this run"}
+              </button>
+            )}
             {row?.agent && (
               <a {...linkProps(agentRoute(row.agent.id))} className={cn(quietLink, "text-[var(--fg)]")}>
-                <span className="u-line">See results</span>
+                <span>Open agent page</span>
               </a>
             )}
           </span>
@@ -479,7 +584,6 @@ export default function Run({
               ratio="free"
               title="upper"
               className="min-h-[440px] w-full"
-              subline={agentSubline(selected, false)}
               name={<AgentSwitcher agents={agents} selected={selected} onSelect={(agentId) => onSettingsChange({ ...settings, target: agentId })} size="hero" />}
             >
               <div className="absolute inset-x-0 bottom-0 z-30 flex flex-col items-center rounded-b-[26px] pb-8 pt-4" style={{ background: "linear-gradient(to top, rgba(0,0,0,.55), rgba(0,0,0,0))" }}>
@@ -498,15 +602,16 @@ export default function Run({
         </section>
       ) : (
         <>
-          <header>
-            <p className="tabular text-[13px] text-[var(--muted)]">
-              {headerLine()}
-              {watching && !transport && !loading && recordedAt && <span className="text-[var(--faint)]">{` · recorded ${fmtTime(recordedAt)}`}</span>}
-            </p>
-            {mode === "finished" && !loading && !unreachable && sum.cycles > 0 && <p className="tabular mt-1 text-[13px] text-[var(--muted)]">{summaryLine(sum)}</p>}
-            {transport && tape && <ReplayControls status={tape} recordedAt={recordedAt} onChanged={onReplayChanged} onStop={stopReplay} />}
-            {(finishedActions || rolled || rollbackError) && <div className="mt-3 flex flex-col gap-2">{actions}</div>}
-          </header>
+          {/* The one-line header stands down for the verdict card, except to carry the crash line. */}
+          {(!results || crashed) && (
+            <header>
+              <p className="tabular text-[13px] text-[var(--muted)]">
+                {headerLine()}
+                {watching && !transport && !loading && recordedAt && <span className="text-[var(--faint)]">{` · recorded ${fmtTime(recordedAt)}`}</span>}
+              </p>
+              {transport && tape && <ReplayControls status={tape} recordedAt={recordedAt} onChanged={onReplayChanged} onStop={stopReplay} />}
+            </header>
+          )}
 
           {/* While something plays: the run's numbers over the four agents doing the work. A finished run has no
               "who is working now" to show, so its numbers sit in the header instead. */}
@@ -519,7 +624,7 @@ export default function Run({
                     running || mode === "starting" ? `${verb ?? "measuring baseline"}…` : "no cycles yet"
                   ) : (
                     <>
-                      <Stat n={sum.accepted} label="patches accepted" />
+                      <Stat n={sum.accepted} label={sum.accepted === 1 ? "fix accepted" : "fixes accepted"} />
                       <Sep />
                       <Stat n={sum.rejected} label="rejected" />
                       <Sep />
@@ -528,7 +633,7 @@ export default function Run({
                       <Stat n={sum.suiteSize} label={sum.suiteSize === 1 ? "test in suite" : "tests in suite"} />
                       <Sep />
                       <span>
-                        legit users <span className="font-medium">{sum.legit}</span>
+                        {customers.label} <span className="font-medium">{customers.value}</span>
                       </span>
                     </>
                   )}
@@ -549,7 +654,7 @@ export default function Run({
                       </div>
                       <figcaption className="mt-3 text-center">
                         <div className="text-[13px] font-medium">{AGENT_LABEL[agent]}</div>
-                        <div className={cn("text-[12px]", isActiveWord(word) ? "text-[var(--muted)]" : "text-[var(--faint)]")}>{word}</div>
+                        <div className={cn("text-[12px]", isActiveWord(word) ? "text-[var(--muted)]" : "text-[var(--faint)]")}>{orbWordLabel(word)}</div>
                       </figcaption>
                     </figure>
                   );
@@ -559,9 +664,13 @@ export default function Run({
             </section>
           )}
 
-          {/* A history run reads by version; anything playing shows the cycles as they happen. */}
-          <div className="mt-10">
-            {mode === "finished" && id !== "live" && cycles ? <RunResults runId={id} row={row} cycles={cycles} state={state} /> : cyclesSection}
+          {/* A finished run reads as a story (verdict, cycles, compare, about); anything playing shows the cycles as they happen. */}
+          <div className={results ? undefined : "mt-10"}>
+            {results && cycles ? (
+              <RunResults runId={id} row={row} cycles={cycles} state={state} approvals={approvals} shell={shell} manifest={manifest} onMeasured={refresh} after={about} />
+            ) : (
+              cyclesSection
+            )}
           </div>
         </>
       )}

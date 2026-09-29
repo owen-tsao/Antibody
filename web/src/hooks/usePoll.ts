@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 
+import { ApiError } from "@/api";
 import { POLL_CADENCES, usePrefs } from "@/lib/prefs";
 
 /**
@@ -21,6 +22,9 @@ export function usePoll<T>(fn: () => Promise<T>, baseIntervalMs: number) {
   const intervalMs = baseIntervalMs * POLL_CADENCES[prefs.pollCadence];
   const [data, setData] = useState<T | null>(null);
   const [error, setError] = useState<string | null>(null);
+  // The HTTP status behind `error` when it was an ApiError (null for a network failure or after a success):
+  // the shell needs to tell a 401 (ask for the token) from an API that is not there.
+  const [status, setStatus] = useState<number | null>(null);
   const [failing, setFailing] = useState(0);
   const fnRef = useRef(fn);
   const tickRef = useRef<() => void>(() => undefined);
@@ -45,11 +49,13 @@ export function usePoll<T>(fn: () => Promise<T>, baseIntervalMs: number) {
           if (alive && g === gen) {
             setData((prev) => (prev !== null && JSON.stringify(prev) === JSON.stringify(next) ? prev : next));
             setError(null);
+            setStatus(null);
             setFailing(0);
           }
         } catch (e) {
           if (alive && g === gen) {
             setError(e instanceof Error ? e.message : String(e));
+            setStatus(e instanceof ApiError ? e.status : null);
             setFailing((n) => n + 1);
           }
         }
@@ -79,8 +85,9 @@ export function usePoll<T>(fn: () => Promise<T>, baseIntervalMs: number) {
   const reset = useCallback(() => {
     setData(null);
     setError(null);
+    setStatus(null);
     setFailing(0);
     tickRef.current();
   }, []);
-  return { data, error, failing, refresh, reset };
+  return { data, error, status, failing, refresh, reset };
 }

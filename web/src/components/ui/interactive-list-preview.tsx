@@ -553,14 +553,14 @@ export default function InteractiveListPreview({
                   }}
                 >
                   <td
-                    className="truncate py-4 pr-6 text-[13px] font-medium uppercase tracking-[0.08em] md:py-5"
+                    className="truncate py-4 pr-6 text-[13px] font-medium md:py-5"
                     title={item.client}
                   >
                     {item.client}
                   </td>
                   {!item.spanGutter && <td className="p-0" aria-hidden />}
                   <td
-                    className="py-4 text-right text-[12px] uppercase tracking-[0.08em] md:py-5"
+                    className="py-4 text-right text-[12px] md:py-5"
                     colSpan={item.spanGutter ? 2 : 1}
                   >
                     <span className="inline-flex max-w-full flex-wrap items-baseline justify-end gap-x-3 gap-y-1 whitespace-nowrap">

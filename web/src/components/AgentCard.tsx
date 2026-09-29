@@ -2,7 +2,7 @@ import type { ReactNode } from "react";
 
 import type { Agent } from "@/api";
 import { useMotionPref } from "@/hooks/useMotionPref";
-import { agentHueRotate } from "@/lib/derive";
+import { agentHueRotate, heroSubline, heroTitle } from "@/lib/derive";
 import { cn } from "@/lib/utils";
 
 /**
@@ -11,8 +11,9 @@ import { cn } from "@/lib/utils";
  * prompt — the `Card`'s 4 px `#6C6C6C` rim on `#222`, its shadow stack, and inside it the demo's photo (one
  * soft amber streak on black, `object-cover object-left-top`) with the title set over the middle. Every agent
  * is its own colour by turning the photo's hue (`agentHueRotate`); `AgentTile` shows the same photo small, so
- * the tile and the card are one picture at two sizes. `name` is a slot so Home / Current run can make it the
- * agent switcher; `children` is an overlay over the photo (a full-face link, the Heal orb).
+ * the tile and the card are one picture at two sizes. The title is one line (`heroTitle`: a trailing
+ * parenthetical moves to the subline, a long name takes the smaller step); `name` is a slot so Home / Current
+ * run can make it the agent switcher; `children` is an overlay over the photo (a full-face link, the Heal orb).
  */
 
 // From the paste, verbatim: this is what sits the card on the page.
@@ -27,15 +28,19 @@ export default function AgentCard({
   agent,
   name,
   subline,
+  starting = false,
   ratio = "video",
   title = "center",
   children,
   className,
 }: {
   agent: Agent;
-  /** The title over the photo — text, or the agent switcher. */
-  name: ReactNode;
-  subline?: string;
+  /** The title over the photo: the agent switcher, or (default) the agent's name set by `heroTitle`. */
+  name?: ReactNode;
+  /** The line under the title: the verdict on the Agents grid, or (default) the agent's kind line (`heroSubline`). */
+  subline?: ReactNode;
+  /** The example agent between the click and the next poll — the subline says so. */
+  starting?: boolean;
   ratio?: "video" | "free";
   /** Where the name sits: centred, or in the upper third to leave the lower half to an overlay. */
   title?: "center" | "upper";
@@ -44,6 +49,7 @@ export default function AgentCard({
   className?: string;
 }) {
   const reduced = useMotionPref();
+  const hero = heroTitle(agent.name);
   return (
     <div
       className={cn(
@@ -78,8 +84,15 @@ export default function AgentCard({
           title === "upper" ? "justify-start pt-[14%]" : "justify-center",
         )}
       >
-        <div className="display leading-[1] [font-size:clamp(24px,9cqw,72px)] [&_a]:pointer-events-auto [&_button]:pointer-events-auto [&_[role=listbox]]:pointer-events-auto">{name}</div>
-        {subline && <div className="mt-2 text-[13px] text-white/70">{subline}</div>}
+        <div
+          className={cn(
+            "display whitespace-nowrap leading-[1] [&_a]:pointer-events-auto [&_button]:pointer-events-auto [&_[role=listbox]]:pointer-events-auto",
+            hero.size === "lg" ? "[font-size:clamp(24px,9cqw,72px)]" : "[font-size:clamp(22px,6.5cqw,52px)]",
+          )}
+        >
+          {name ?? hero.name}
+        </div>
+        <div className="mt-2 text-[13px] text-white/70">{subline ?? heroSubline(hero, agent, starting)}</div>
       </div>
     </div>
   );

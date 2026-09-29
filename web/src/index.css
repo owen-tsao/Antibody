@@ -3,14 +3,17 @@
 /* Tokens: Owen's UI standard, dark set. Everything else derives from these. */
 :root {
   --bg: #000;
-  --card: #0c0c0e;
+  /* The surface every panel, table and strip sits on: one visible step off the floor, so structure comes from
+     tone and the lines inside can stay quiet. Also the floating surfaces (dialogs, hover cards) — their shadow
+     does the separating there. Plan 13 §1: if this is not visibly a surface, raise it; never brighten the lines. */
+  --card: #0e0e11;
   --inset: #131316;
   --hover: #19191d;
-  /* Hairline dividers and the hover step above them. 8 % read as invisible on pure black (Owen, Sep 20). */
-  --border: rgba(255, 255, 255, 0.14);
-  --border-2: rgba(255, 255, 255, 0.22);
-  /* The outer edge of a framed surface on black (panel, table, pill). Dividers inside stay `--border`. */
-  --frame: rgba(255, 255, 255, 0.3);
+  /* Hairline dividers inside a lifted surface, and the hover / emphasis step above them. */
+  --border: rgba(255, 255, 255, 0.1);
+  --border-2: rgba(255, 255, 255, 0.16);
+  /* The outer edge of a framed surface (panel, table, dialog). The hero card has its own frame — the one loud element. */
+  --frame: rgba(255, 255, 255, 0.16);
   --fg: #fafafa;
   --muted: #a1a1aa;
   --faint: #5f5f68;
@@ -125,10 +128,11 @@ h1, h2, h3 {
   to { opacity: 1; }
 }
 
-/* Text links and quiet text buttons: a hairline underline draws in from the left on hover and
-   leaves to the right, so it reads as a wipe rather than a toggle. Put `.u-line` on the text span;
-   it fires on its own hover, on a `.group` ancestor's hover, and on keyboard focus. Disabled hosts
-   never draw it. */
+/* The one primary text action on a surface (Review Fix 4 →, Watch it back, apply 3 rules): a hairline
+   underline draws in from the left on hover and leaves to the right, so it reads as a wipe rather than a
+   toggle. Put `.u-line` on the text span; it fires on its own hover, on a `.group` ancestor's hover, and on
+   keyboard focus. Disabled hosts never draw it. Secondary links (Open the diff, Compare versions, About
+   this run) just brighten — the wipe on every link made it mean nothing (Owen, Sep 29). */
 .u-line {
   position: relative;
 }
@@ -147,7 +151,8 @@ h1, h2, h3 {
 .u-line:hover::after,
 .group:hover .u-line::after,
 :focus-visible > .u-line::after,
-.u-line:focus-visible::after {
+.u-line:focus-visible::after,
+.u-line.is-on::after {
   transform: scaleX(1);
   transform-origin: left;
 }

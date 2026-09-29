@@ -21,6 +21,8 @@ export interface RunSettings {
   world: World;
   /** The agent to attack (an id from GET /api/agents); null = the API's own default. */
   target: string | null;
+  /** The domain pack to run in (a name from GET /api/domains); null = the agent's own `domain`, else the API's default. */
+  domain: string | null;
   /** false → `--no-vulnerability`: skip the end-of-run measurement of what still lands on v0 and the final version. */
   vulnerability: boolean;
 }
@@ -41,6 +43,7 @@ export const DEFAULT_SETTINGS: RunSettings = {
   untilQuiet: null,
   world: "auto",
   target: null,
+  domain: null,
   vulnerability: true,
 };
 
@@ -73,6 +76,7 @@ function normalizeSettings(raw: unknown): RunSettings {
     // `world` has no field any more; a "mock" persisted by an older build must not keep steering runs unseen.
     world: "auto",
     target: typeof r.target === "string" && r.target ? r.target : null,
+    domain: typeof r.domain === "string" && r.domain ? r.domain : null,
     vulnerability: typeof r.vulnerability === "boolean" ? r.vulnerability : DEFAULT_SETTINGS.vulnerability,
   };
 }
@@ -104,6 +108,7 @@ export function isDefaultSettings(s: RunSettings): boolean {
     s.secondPass === DEFAULT_SETTINGS.secondPass &&
     s.untilQuiet === DEFAULT_SETTINGS.untilQuiet &&
     s.world === DEFAULT_SETTINGS.world &&
+    s.domain === DEFAULT_SETTINGS.domain &&
     s.vulnerability === DEFAULT_SETTINGS.vulnerability
   );
 }
@@ -118,6 +123,7 @@ export function toStartBody(s: RunSettings): LoopStartBody {
     until_quiet: s.untilQuiet,
     world: s.world,
     target: s.target,
+    domain: s.domain,
     vulnerability: s.vulnerability,
   };
 }

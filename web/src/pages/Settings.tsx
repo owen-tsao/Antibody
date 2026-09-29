@@ -1,3 +1,5 @@
+import { useCallback } from "react";
+
 import { api } from "@/api";
 import AgentSwitcher from "@/components/AgentSwitcher";
 import ApiDown from "@/components/ApiDown";
@@ -5,8 +7,9 @@ import Panel from "@/components/Panel";
 import Page from "@/components/Page";
 import RunSettingsFields, { Row, Select } from "@/components/RunSettingsFields";
 import type { ShellData } from "@/components/Shell";
+import TokenField from "@/components/TokenField";
 import { usePoll } from "@/hooks/usePoll";
-import { seedCount, selectedAgent } from "@/lib/derive";
+import { domainFallback, seedCount, selectedAgent } from "@/lib/derive";
 import { DEFAULT_PREFS, isDefaultPrefs, MOTION_PREFS, REPLAY_SPEEDS, usePrefs, type MotionPref, type ReplaySpeed } from "@/lib/prefs";
 import { linkProps, SETTINGS_SECTIONS, settings as settingsRoute, type SettingsSection } from "@/lib/routes";
 import { DEFAULT_SETTINGS, estimateLabel, isDefaultSettings, type RunSettings } from "@/lib/settings";
@@ -28,6 +31,7 @@ const SECTION_LABEL: Record<SettingsSection, string> = {
   display: "Display",
   models: "Models",
   environment: "Environment",
+  access: "Access",
 };
 
 const MOTION_LABEL: Record<MotionPref, string> = { system: "follow the system", reduced: "reduced", full: "full" };
@@ -35,6 +39,9 @@ const MOTION_LABEL: Record<MotionPref, string> = { system: "follow the system", 
 export default function Settings({ section, settings, onSettingsChange, shell }: { section: SettingsSection; settings: RunSettings; onSettingsChange: (next: RunSettings) => void; shell: ShellData }) {
   const { health, agents } = shell;
   const { data: manifest, error: manifestError, refresh: refreshManifest } = usePoll(api.manifest, STATIC_MS);
+  const { data: domains } = usePoll(api.domains, STATIC_MS);
+  const gatewayFn = useCallback(() => (section === "environment" ? api.gateway(1) : Promise.resolve(null)), [section]);
+  const { data: gatewayLog } = usePoll(gatewayFn, 0);
   const { prefs, setPrefs } = usePrefs();
   const seeds = seedCount(manifest);
   const models = manifest?.models;
@@ -77,11 +84,8 @@ export default function Settings({ section, settings, onSettingsChange, shell }:
                 </Row>
               </Panel>
               <Panel title="Run defaults" aside={<span className="tabular">{estimateLabel(settings, seeds)}</span>}>
-                <RunSettingsFields settings={settings} onChange={onSettingsChange} seedCount={seeds} framed={false} />
+                <RunSettingsFields settings={settings} onChange={onSettingsChange} seedCount={seeds} domain={{ domains, fallback: domainFallback(target, manifest?.domain) }} framed={false} />
               </Panel>
-              <p className="px-1 text-[12px] text-[var(--faint)]">
-                Every row is a flag of <span className="code">chaos.loop run</span>; Heal on Current run starts with these.
-              </p>
             </>
           )}
 
@@ -109,7 +113,7 @@ export default function Settings({ section, settings, onSettingsChange, shell }:
                     [
                       ["Target", "The agent under attack, when it is the built-in one.", models?.target],
                       ["Chaos", "Invents attacks after the seeds.", models?.chaos],
-                      ["Repair", "Proposes patches when an attack lands.", models?.repair],
+                      ["Repair", "Proposes a fix when an attack gets through.", models?.repair],
                       ["Judge", "Decides whether an episode failed.", models?.judge],
                       ["Inference", "Where every model call goes.", models?.inference_url],
                     ] as const
@@ -153,8 +157,26 @@ export default function Settings({ section, settings, onSettingsChange, shell }:
                     <dd className="code text-[12px] text-[var(--muted)]">{health.version}</dd>
                   </div>
                 )}
+                <div className="flex flex-col gap-1.5 px-4 py-3">
+                  <dt className="text-[13px] text-[var(--fg)]">Enforcement gateway</dt>
+                  <dd className="text-[12px] text-[var(--faint)]">Runs the approved version's tool rules in front of an agent's real tools; logs first, blocks with --enforce. Start it beside the agent:</dd>
+                  <dd className="code select-all text-[12px] text-[var(--muted)]">{gatewayLog?.command ?? "python -m chaos.gateway --backend <tools url> --version approved"}</dd>
+                </div>
               </dl>
             </Panel>
+          )}
+
+          {section === "access" && (
+            <>
+              <Panel title="API token" aside={<span>{health ? (health.auth_required ? "required by this API" : "not required") : "…"}</span>}>
+                <div className="px-4 py-4">
+                  <TokenField onChange={shell.refresh} />
+                </div>
+              </Panel>
+              <p className="px-1 text-[12px] text-[var(--faint)]">
+                Set <span className="code">ANTIBODY_API_TOKEN</span> in the API's environment and every request but the health check must carry it. Unset, the API is open on this machine as before.
+              </p>
+            </>
           )}
         </div>
       </div>

@@ -13,7 +13,9 @@ import Home from "@/pages/Home";
 import AgentPage from "@/pages/Agent";
 import Agents from "@/pages/Agents";
 import Onboarding from "@/pages/Onboarding";
+import Review from "@/pages/Review";
 import Runs from "@/pages/Runs";
+import Schedules from "@/pages/Schedules";
 import Settings from "@/pages/Settings";
 import Run from "@/pages/Run";
 import Cycle from "@/pages/Cycle";
@@ -86,7 +88,7 @@ function AppPages({ route, settings, onSettingsChange }: { route: Route; setting
   return (
     <Shell route={route} settings={settings} onSettingsChange={onSettingsChange}>
       {(data) => {
-        const { loop, replay, status, statusError, health, agents, agentsError, runs, runsError, refresh } = data;
+        const { loop, agents, runs, runsError, refresh } = data;
         return (
           <>
             <FirstRun agents={agents} runs={runs} loop={loop} />
@@ -106,12 +108,16 @@ function AppPages({ route, settings, onSettingsChange }: { route: Route; setting
                   return <AgentPage id={route.id} shell={data} />;
                 case "runs":
                   return <Runs runs={runs} runsError={runsError} loop={loop} refresh={refresh} />;
+                case "schedules":
+                  return <Schedules shell={data} settings={settings} />;
+                case "review":
+                  return <Review run={route.run} v={route.v} shell={data} />;
                 case "run":
                   return (
                     <Run
                       id={route.id}
                       replay={route.replay === true}
-                      shell={{ loop, replay, status, statusError, health, agents, agentsError, runs, runsError, refresh }}
+                      shell={data}
                       settings={settings}
                       onSettingsChange={onSettingsChange}
                     />

@@ -15,11 +15,11 @@ dependency: `lib/routes.ts` is `parse(pathname)`, `href(route)`, `navigate(route
 | Path | Route kind | Page | Data it reads |
 | --- | --- | --- | --- |
 | `/` | `landing` | `pages/Intro` + `ui/splash-backdrop` — the only page with the shaders; they unmount before anything under `/app` mounts | nothing |
-| `/app`, `/app/home` | `home` | `pages/Home` — one agent, right now: its `AgentCard` (the name is `AgentSwitcher size="hero"`) with the last run's stats strip under it, beside **Needs attention** (cycles of the last run where the attack landed and nothing was patched) and **Recent runs** (this agent's last three). `/app` → here | shell data; `/api/cycles` + `/api/state` of the last run every 10 s |
+| `/app`, `/app/home` | `home` | `pages/Home` — one agent, right now: its `AgentCard` (the name is `AgentSwitcher size="hero"`) with the last run's stats strip under it, beside **Needs attention** (rows: cycles of the last run where the attack got through and no fix held — `#N · fix rejected` / `no fix tried`) and **Recent runs** (this agent's last three). `/app` → here | shell data; `/api/cycles` + `/api/state` of the last run every 10 s |
 | `/app/onboarding/:step` | `onboarding` | `pages/Onboarding` (outside the shell) — Choose · Connect · Tools · First run, rail from `components/WizardRail`; bad step → 1. Connect pings the typed URL (`POST /api/agents/ping`) and only Save stores the agent | `/api/health` 60 s, `/api/manifest` 60 s; `/api/agents` + `/api/agents/example/log` every 3 s while the example agent starts |
 | `/app/agents` | `agents` | `pages/Agents` — the fleet as a grid of `AgentCard`s (16:9, most recently run first): the card face is a link to the agent's page; a quiet **attack next** button in the corner (visible on hover / focus; **selected** at rest on the current target) makes the agent the next run's target; a dashed **Connect an agent** card → the wizard. Cards move only under the cursor. No page action — nothing here starts a run | shell data |
 | `/app/agents/new` | — | → `/app/onboarding/2` | — |
-| `/app/agents/:id` | `agent` | `pages/Agent` — the agent, whole: tile · name · subline · tools mapped, the per-agent actions as quiet text (ping with its last result, start/stop the example agent, delete with a second click; a 409 while a run is on shows inline), a run `Dropdown` (newest first) with one link — **watch replay** when the run has a recording, else **open run** — and, for the picked run, `components/RunResults`: a **Versions** panel (the rail v0 → vN, final selected, and one stats line for the picked version) over the hover list of the cycles that attacked it (chart beside the cursor, click → the cycle page) | `/api/cycles`, `/api/state` of the picked run, once per pick; `/api/agents` 3 s while the example agent starts |
+| `/app/agents/:id` | `agent` | `pages/Agent` — the agent, whole: tile · name · subline · tools mapped, the per-agent actions as quiet text (ping with its last result, start/stop the example agent, delete with a second click; a 409 while a run is on shows inline), a run `Dropdown` (newest first) with one link — **watch replay** when the run has a recording, else **open run** — and, for the picked run, `components/RunResults`: a **Versions** panel (the rail v0 → vN + **all**, final selected, the picked version's numbers as cells and its review) over the hover list of the cycles that attacked it (chart beside the cursor, click → the cycle page) | `/api/cycles`, `/api/state` of the picked run, once per pick; `/api/agents` 3 s while the example agent starts |
 | `/app/run`, `/app/run/replay`, `/app/run/cycles/:n` | `run` / `cycle` with `id: "live"` | **Current run**: the run page for the live run (identity rule below). `/app/runs/live…` redirects here | see "Run page" |
 | `/app/runs` | `runs` | `pages/Runs` — every run newest first: started · agent · cycles · `v0 → vN` · duration · status (`running` / `finished · not archived` / `demo tape` / `finished`) · **watch** on rows with a recording; row → the run. Runs are started from Current run, not here | `runs` from the shell |
 | `/app/runs/:id` | `run` | the run page — see "Run page" below | see "Run page" |
@@ -65,7 +65,7 @@ motion); nothing slides. The serif `display` face is the wordmark's and the land
 
 ## Starting a run
 
-One way in. The **Heal orb** (`components/HealOrb.tsx`) sits on Current run's empty face — over the selected
+One way in. The **Heal button** (`components/HealOrb.tsx`: a 200 × 52 chrome-rimmed rectangle, `OrbButton radius={14}`) sits on Current run's empty face — over the selected
 agent's card, with the estimate line under it — and starts a run against that agent with the saved defaults in
 one press (`POST /api/loop/start`, `toStartBody`); while a loop runs or a tape plays it yields to a line
 pointing at what is on screen. A 409 (something already running) stays on `/app/run`; any other error is shown
@@ -115,9 +115,9 @@ faces, picked by `runMode(id, row, loop, replay)` in `lib/derive.ts`:
 | --- | --- | --- | --- |
 | `starting` | `id === "live"`, `loop.running`, and `GET /api/runs/live` still 404s (no `run.json` yet) | `live` | title, "starting · measuring baseline…", the plate saying the same, grey orbs |
 | `live` | `id === "live"` and `loop.running` | `live` cycles/state 2 s, `status` from the shell | stats plate, four orbs, **stop run** in the header, the cycles box following the newest cycle |
-| `finished` (history) | a history row or `golden` | `run:<id>` / `golden` cycles/state 10 s, `GET /api/runs/{id}` | header facts (`started · agent · world · flags · v0 → vN`), the numbers line, **watch it back** and **roll back to v<n>** as quiet text, then `RunResults` (Versions panel + the hover list on the page's black, its rows on the content edge and its white bar running 20 px into the gutter) |
+| `finished` (history) | a history row or `golden` | `run:<id>` / `golden` cycles/state 10 s, `GET /api/runs/{id}` | no header line: `RunResults` with its `between` slot filled — the **Versions** panel first (rail v0 → vN + **all**, the picked version's numbers as labelled cells, its review as a pill), then **About this run** (`runFacts` cells: started · agent · world · config; `settingsLine` as a caption; `summaryCells`; **Watch it back** and **Restore a version** v<n> chips), then the hover list on the page's black, its rows on the content edge and its white bar running 20 px into the gutter |
 | `finished` (`live`, **last run**) | `lastRunFace`: `id === "live"`, `loop.running === false`, and `state.source === "live"` (run files still in `runs/`; `null` is loading) | `live` cycles/state 10 s | the four orbs at rest (grey, no plate), header facts, the numbers line, the cycles box; header actions **clear** (quiet, disabled while `loop.running`; errors inline) and **See results** (the one `.u-line` action → the agent's page) |
-| `finished` (`live`, **empty**) | `emptyLiveFace`: `id === "live"`, the live row poll failing (404) *and* `state.source === "golden"` — an empty `runs/` makes `live` reads fall back to the demo tape; `state === null` is loading, not empty | `live` cycles/state 10 s | the selected agent's `AgentCard` (720 px, name = `AgentSwitcher size="hero"`, title in the upper third) with the **Heal orb** and estimate on its lower half; nothing else |
+| `finished` (`live`, **empty**) | `emptyLiveFace`: `id === "live"`, the live row poll failing (404) *and* `state.source === "golden"` — an empty `runs/` makes `live` reads fall back to the demo tape; `state === null` is loading, not empty | `live` cycles/state 10 s | the selected agent's `AgentCard` (720 px, name = `AgentSwitcher size="hero"`, title in the upper third) with the **Heal button** and estimate on its lower half; nothing else |
 | `finished` (`live`, **settling**) | `idleFaceSettling`: at rest, until the row, the cycles *and* the state have each answered or failed — they land in any order, and the two faces above are only decidable once all three are in | — | `loading…`, nothing else: never the tape's cycles under "no run yet" with the orbs arriving a beat later. Clear, **watch it back** and a tape letting go of `live` all call `dropLive`: the held `live` frame goes and the row / cycles / state polls `reset()` then refresh (the polls keep last-good answers on purpose, so forgetting is what makes the drop stick), so every hand-over passes through here |
 | `watching` | `GET /api/replay` is active and its `recording.source` is this run's tape (on `/app/run`, any tape) | `live` cycles/state 2 s + `status` from the shell | the live face with `ReplayControls` under the title; **stop** returns to `finished` |
 
@@ -172,14 +172,15 @@ web/src/
   components/Dropdown.tsx    the app's one listbox: trigger + floating panel, ↑/↓ Home/End typeahead Enter Escape, flips when short on room, opens sideways for the collapsed rail
   components/AgentSwitcher.tsx  the agent picker on Dropdown (rail · hero sizes; Shell, Home, Current run, Settings)
   components/AgentCard.tsx   an agent as a picture: the Ruixen Container-Text-Scroll card as pasted (4 px #6C6C6C rim on #222, 30 px radius, its shadow stack) around the paste's photo, hue-rotated per agent (agentHueRotate), the name large over it; no shader. Hover: the photo zooms 5 %, the rim brightens, the title lifts — CSS, gated on useMotionPref. The card does not clip (the switcher's panel may hang below it); the photo is clipped alone. The title layer lets clicks fall through to a full-face link except on its own controls
-  components/HealOrb.tsx     the Heal orb + estimate (Current run's empty face)
-  components/RunResults.tsx  a finished run's results: Versions panel + hover list (Agent page, history run page)
+  components/HealOrb.tsx     the Heal button + estimate (Current run's empty face)
+  components/RunResults.tsx  a finished run's results: Versions panel (+ `all`) · `between` slot · hover list (Agent page, history run page)
   components/RunSettingsFields.tsx  the settings rows + Row / Select / Switch (Settings page, wizard step 4)
   components/ApiDown.tsx     "API unreachable · retry"
   components/ErrorBoundary.tsx  keeps a render error to an inline note (root, run page, MetalFrame)
-  components/OrbButton.tsx   the landing page's one control: a disc in a liquid-metal rim
+  components/OrbButton.tsx   the splash pages' control: a disc (default) or a rectangle (`radius`) in a liquid-metal rim
   components/WizardRail.tsx  the onboarding step rail
-  components/ui/             liquid-metal-border (MetalFrame — always the shader; Heal orb, cycles box, stats plate),
+  components/ui/             liquid-metal-border (MetalFrame — always the shader; Heal button, cycles box, stats plate, the orbit's core),
+                             radial-orbital-timeline (Owen's orbital node graph, chrome core, click → the host's dialog; Schedules),
                              interactive-list-preview (the results hover list, verbatim 21st.dev + our six changes),
                              splash-backdrop, orb, agent-plan, liquid-metal-hero (the verbatim demo splash-backdrop
                              was tuned from) and the shadcn badge / button / card it imports
@@ -235,7 +236,7 @@ web/  (Vite + React + TS + Tailwind)  ──HTTP──▶  api/main.py (FastAPI)
 ```
 cycle: int
 timestamp: ISO string
-scenario: { id, kind, title, user_message, customer_id, faults[], expected_behavior, forbidden_tool_calls[], attacker_goal, origin }
+scenario: { id, kind, title, user_message, customer_id, faults[], expected_behavior, expected_calls[], forbidden_calls[], attacker_goal, origin }
 attack_succeeded: bool
 verdict: { scenario_id, config_version, passed, failure_kind|null, reason, method: "deterministic"|"llm", evidence: {} }
 patch: { kind, rationale, guardrail_rule?, system_prompt?, validator_name?, tool_policy? } | null

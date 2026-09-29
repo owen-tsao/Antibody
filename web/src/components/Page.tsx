@@ -25,9 +25,11 @@ export default function Page({
 }) {
   return (
     <div className="flex min-h-full flex-col">
-      <header className="sticky top-0 z-10 flex h-14 shrink-0 items-center justify-between gap-4 border-b border-[var(--border)] bg-[var(--bg)]/85 px-8 backdrop-blur-sm">
+      {/* Above the page's tables (`relative z-10`, so their rows do not scroll over the title) but under the Shell's
+          mobile top bar (z-20) and menu (z-30), which share `top-0` with this header below md. */}
+      <header className="sticky top-0 z-[15] flex h-14 shrink-0 items-center justify-between gap-4 border-b border-[var(--border)] bg-[var(--bg)]/85 px-8 backdrop-blur-sm">
         <div className="flex min-w-0 items-baseline gap-3">
-          {eyebrow && <span className="truncate text-[12px] text-[var(--faint)]">{eyebrow}</span>}
+          {eyebrow && <span className="shrink-0 text-[12px] text-[var(--faint)]">{eyebrow}</span>}
           <h1 className="truncate text-[16px] font-semibold tracking-[-0.015em] text-[var(--fg)]">{title}</h1>
         </div>
         {action && <div className="flex shrink-0 items-center gap-3">{action}</div>}
