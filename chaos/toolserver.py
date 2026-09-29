@@ -37,18 +37,19 @@ import secrets
 import socket
 import threading
 import time
-from typing import Any
+from typing import Any, Callable
 
 import uvicorn
+import weave
 from fastapi import FastAPI, Header, HTTPException, Request, Response
 from starlette.concurrency import run_in_threadpool
 
-from chaos.toolbus import ToolSession, call_tool
-from chaos.tools import serialize_result, tool_specs_for
+from chaos.schemas import ToolCall
+from chaos.toolbus import SESSION_HEADER, ToolSession, call_tool
+from chaos.tools import serialize_result
 
 PORT_ENV = "ANTIBODY_TOOLS_PORT"
 DEFAULT_PORT = 8765
-SESSION_HEADER = "X-Antibody-Session"
 # Tool arguments are a handful of short strings and numbers; anything this large is not arguments.
 MAX_BODY_BYTES = 64 * 1024
 
@@ -57,8 +58,14 @@ _sessions_lock = threading.Lock()
 
 
 def register(session: ToolSession) -> str:
-    """Make a session reachable over HTTP; returns the id the agent must send back on every tool call."""
-    session_id = secrets.token_urlsafe(16)
+    """Make a session reachable over HTTP; returns the id the agent must send back on every tool call.
+
+    The id is `session.session_id` when the episode already minted one (`chaos.target.episode_thread`, so the agent's
+    tool calls join the episode's Weave thread), else a fresh token written there, so a pass-through session forwards
+    it to the backend either way.
+    """
+    session_id = session.session_id or secrets.token_urlsafe(16)
+    session.session_id = session_id
     with _sessions_lock:
         _sessions[session_id] = session
     return session_id
@@ -77,25 +84,53 @@ def _session_or_404(session_id: str | None) -> ToolSession:
     return session
 
 
-app = FastAPI(title="Antibody tool server", docs_url=None, redoc_url=None, openapi_url=None)
+def build_app(
+    session_for: Callable[[str | None], ToolSession],
+    list_tools: Callable[[ToolSession], list[dict[str, Any]]],
+    after_call: Callable[[str, ToolSession, ToolCall], None] | None = None,
+    title: str = "Antibody tool server",
+) -> FastAPI:
+    """The HTTP contract above over any session registry: the loop's (below) or the gateway's (`chaos.gateway`),
+    which creates a session on first sight, lists the real backend's tools and logs every call."""
+    app = FastAPI(title=title, docs_url=None, redoc_url=None, openapi_url=None)
+
+    @app.get("/tools")
+    def _list_tools(x_antibody_session: str | None = Header(default=None, alias=SESSION_HEADER)) -> list[dict[str, Any]]:
+        return list_tools(session_for(x_antibody_session))
+
+    @app.post("/tools/{name}")
+    async def _run_tool(
+        name: str,
+        request: Request,
+        x_antibody_session: str | None = Header(default=None, alias=SESSION_HEADER),
+    ) -> Response:
+        session = session_for(x_antibody_session)
+        args = _parse_args(await request.body())
+        # Tools may block (Zendesk, a faulted timeout, a real backend); off the event loop so concurrent sessions do not queue.
+        call = await run_in_threadpool(traced_call_tool, session, name, args, x_antibody_session)
+        if after_call is not None:
+            after_call(x_antibody_session or "", session, call)
+        return Response(content=serialize_result(call.result), media_type="application/json")
+
+    return app
 
 
-@app.get("/tools")
-def list_tools(x_antibody_session: str | None = Header(default=None, alias=SESSION_HEADER)) -> list[dict[str, Any]]:
-    return tool_specs_for(_session_or_404(x_antibody_session).ticket_mode)
+def traced_call_tool(session: ToolSession, name: str, args: dict[str, Any], session_id: str | None) -> ToolCall:
+    """`call_tool` inside `weave.thread(session_id)` when this process traces (plan 11 §4.2), plain otherwise.
+
+    The id is the agent's `X-Antibody-Session`, which is the episode's thread id, so an external agent's tool calls
+    show up in the same Weave thread as the episode that made them. Threads are contextvars: opened here, on the
+    worker thread the tool runs on, or the tool's own ops would not see it. In the loop process the client exists
+    (the tool server is a daemon thread of it); the gateway has one only on `ANTIBODY_GATEWAY_WEAVE=1`; with none,
+    nothing is entered at all.
+    """
+    if not session_id or weave.get_client() is None:
+        return call_tool(session, name, args)
+    with weave.thread(session_id):
+        return call_tool(session, name, args)
 
 
-@app.post("/tools/{name}")
-async def run_tool(
-    name: str,
-    request: Request,
-    x_antibody_session: str | None = Header(default=None, alias=SESSION_HEADER),
-) -> Response:
-    session = _session_or_404(x_antibody_session)
-    args = _parse_args(await request.body())
-    # Tools may block (Zendesk, a faulted timeout); off the event loop so concurrent sessions do not queue.
-    call = await run_in_threadpool(call_tool, session, name, args)
-    return Response(content=serialize_result(call.result), media_type="application/json")
+app = build_app(_session_or_404, lambda s: s.domain.specs(s.ticket_mode))
 
 
 def _parse_args(raw: bytes) -> dict[str, Any]:
@@ -161,9 +196,9 @@ def _main(argv: list[str] | None = None) -> None:
     import signal
     from pathlib import Path
 
+    from chaos.domains import active_domain
     from chaos.schemas import AgentConfig
-    from chaos.scenarios import LEGIT_SCENARIOS, SEED_SCENARIOS
-    from chaos.target_agent import V0_CONFIG, new_session
+    from chaos.target_agent import new_session, v0_config
 
     parser = argparse.ArgumentParser(description="Serve Antibody's tools for one fixed session, for agent development.")
     parser.add_argument("--config", default="v0", help="'v0' for the initial config, or a path to a config JSON")
@@ -171,11 +206,13 @@ def _main(argv: list[str] | None = None) -> None:
     parser.add_argument("--session", default="dev", help="the session id to accept (default: dev)")
     args = parser.parse_args(argv)
 
-    cfg = V0_CONFIG if args.config == "v0" else AgentConfig(**json.loads(Path(args.config).read_text()))
-    scenarios = {s.id: s for s in SEED_SCENARIOS + LEGIT_SCENARIOS}
+    domain = active_domain()
+    cfg = v0_config(domain) if args.config == "v0" else AgentConfig(**json.loads(Path(args.config).read_text()))
+    scenarios = {s.id: s for s in domain.seeds + domain.legit}
     if args.scenario not in scenarios:
         raise SystemExit(f"unknown scenario {args.scenario!r}; one of {sorted(scenarios)}")
-    session = new_session(cfg, scenarios[args.scenario], ticket_mode=False)
+    session = new_session(cfg, scenarios[args.scenario], ticket_mode=False, domain=domain)
+    session.session_id = args.session
     with _sessions_lock:
         _sessions[args.session] = session
 

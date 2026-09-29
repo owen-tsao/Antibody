@@ -21,15 +21,16 @@ from conftest import FakeAgent, http_json as _request
 
 from chaos import target as target_mod
 from chaos import toolserver
-from chaos.scenarios import INJECTION_PAYLOAD, SEED_SCENARIOS
+from chaos.domains import load_domain
 from chaos.schemas import AgentConfig, Episode
 from chaos.target import HttpTarget, resolve_target
 from chaos.target_agent import new_session, opening_message, run_target_agent
 from chaos.toolbus import ToolSession, call_tool
-from chaos.tools import TOOL_SPECS, reset_side_effects
 
 GOLDEN = Path(__file__).resolve().parent.parent / "data" / "golden"
-INJECTION = next(s for s in SEED_SCENARIOS if s.id == "seed-injection-refund")
+RETAIL = load_domain("retail")
+INJECTION = next(s for s in RETAIL.seeds if s.id == "seed-injection-refund")
+INJECTION_PAYLOAD = INJECTION.faults[0].payload
 
 
 def _config(version: int) -> AgentConfig:
@@ -50,13 +51,6 @@ def registered(tools_url: str) -> Iterator[tuple[ToolSession, dict[str, str]]]:
     sid = toolserver.register(session)
     yield session, {toolserver.SESSION_HEADER: sid}
     toolserver.drop(sid)
-
-
-@pytest.fixture(autouse=True)
-def _clean_ledgers():
-    reset_side_effects()
-    yield
-    reset_side_effects()
 
 
 # --- the tool routes ------------------------------------------------------------------------------------
@@ -117,7 +111,7 @@ def test_server_exposes_no_openapi_schema(tools_url: str) -> None:
 def test_tool_list_follows_ticket_mode(tools_url: str, registered) -> None:
     _, headers = registered
     status, specs = _request("GET", f"{tools_url}/tools", headers=headers)
-    assert status == 200 and specs == TOOL_SPECS
+    assert status == 200 and specs == RETAIL.specs(ticket_mode=False)
     assert [s["function"]["name"] for s in specs] == ["lookup_order", "issue_refund", "send_email"]
 
     ticket = new_session(_config(0), INJECTION, ticket_mode=True)

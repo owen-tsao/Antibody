@@ -1,0 +1,34 @@
+{
+  "customers": {
+    "cust_ana": {"customer_id": "cust_ana", "name": "Ana Ruiz", "email": "ana@example.com"},
+    "cust_ben": {"customer_id": "cust_ben", "name": "Ben Okafor", "email": "ben@example.com"},
+    "cust_chloe": {"customer_id": "cust_chloe", "name": "Chloe Martin", "email": "chloe@example.com"},
+    "cust_dev": {"customer_id": "cust_dev", "name": "Dev Patel", "email": "dev@example.com"},
+    "cust_ella": {"customer_id": "cust_ella", "name": "Ella Novak", "email": "ella@example.com"},
+    "cust_farid": {"customer_id": "cust_farid", "name": "Farid Haddad", "email": "farid@example.com"}
+  },
+  "flights": {
+    "SK101": {"flight_number": "SK101", "origin": "SFO", "destination": "JFK", "departure": "2026-10-03T08:15:00-07:00", "status": "on_time", "delay_minutes": 0, "seats_available": 12},
+    "SK102": {"flight_number": "SK102", "origin": "JFK", "destination": "SFO", "departure": "2026-10-05T17:40:00-04:00", "status": "on_time", "delay_minutes": 0, "seats_available": 4},
+    "SK205": {"flight_number": "SK205", "origin": "LAX", "destination": "SEA", "departure": "2026-10-04T11:00:00-07:00", "status": "cancelled", "delay_minutes": 0, "seats_available": 0},
+    "SK206": {"flight_number": "SK206", "origin": "LAX", "destination": "SEA", "departure": "2026-10-04T15:30:00-07:00", "status": "on_time", "delay_minutes": 0, "seats_available": 9},
+    "SK310": {"flight_number": "SK310", "origin": "BOS", "destination": "ORD", "departure": "2026-10-02T06:50:00-04:00", "status": "delayed", "delay_minutes": 180, "seats_available": 2},
+    "SK311": {"flight_number": "SK311", "origin": "ORD", "destination": "BOS", "departure": "2026-10-06T19:05:00-05:00", "status": "on_time", "delay_minutes": 0, "seats_available": 20},
+    "SK420": {"flight_number": "SK420", "origin": "DEN", "destination": "AUS", "departure": "2026-10-07T09:30:00-06:00", "status": "delayed", "delay_minutes": 35, "seats_available": 6},
+    "SK421": {"flight_number": "SK421", "origin": "AUS", "destination": "DEN", "departure": "2026-10-09T13:10:00-05:00", "status": "on_time", "delay_minutes": 0, "seats_available": 15}
+  },
+  "reservations": {
+    "R-7001": {"reservation_id": "R-7001", "customer_id": "cust_ana", "email": "ana@example.com", "passenger_name": "Ana Ruiz", "flight_number": "SK101", "seat": "12A", "status": "confirmed", "fare": 320.0, "fare_class": "flex", "booked_at": "2026-09-01T10:00:00Z"},
+    "R-7002": {"reservation_id": "R-7002", "customer_id": "cust_ana", "email": "ana@example.com", "passenger_name": "Ana Ruiz", "flight_number": "SK102", "seat": "12A", "status": "confirmed", "fare": 310.0, "fare_class": "flex", "booked_at": "2026-09-01T10:02:00Z"},
+    "R-7003": {"reservation_id": "R-7003", "customer_id": "cust_ben", "email": "ben@example.com", "passenger_name": "Ben Okafor", "flight_number": "SK101", "seat": "21C", "status": "confirmed", "fare": 189.0, "fare_class": "basic", "booked_at": "2026-09-10T15:20:00Z"},
+    "R-7004": {"reservation_id": "R-7004", "customer_id": "cust_chloe", "email": "chloe@example.com", "passenger_name": "Chloe Martin", "flight_number": "SK206", "seat": "3B", "status": "confirmed", "fare": 240.0, "fare_class": "flex", "booked_at": "2026-09-12T09:00:00Z"},
+    "R-7005": {"reservation_id": "R-7005", "customer_id": "cust_chloe", "email": "chloe@example.com", "passenger_name": "Chloe Martin", "flight_number": "SK205", "seat": "7A", "status": "confirmed", "fare": 150.0, "fare_class": "basic", "booked_at": "2026-09-12T09:03:00Z"},
+    "R-7006": {"reservation_id": "R-7006", "customer_id": "cust_dev", "email": "dev@example.com", "passenger_name": "Dev Patel", "flight_number": "SK420", "seat": "18D", "status": "confirmed", "fare": 129.0, "fare_class": "basic", "booked_at": "2026-09-15T20:45:00Z"},
+    "R-7007": {"reservation_id": "R-7007", "customer_id": "cust_ella", "email": "ella@example.com", "passenger_name": "Ella Novak", "flight_number": "SK310", "seat": "5C", "status": "confirmed", "fare": 275.0, "fare_class": "flex", "booked_at": "2026-09-18T08:30:00Z"},
+    "R-7008": {"reservation_id": "R-7008", "customer_id": "cust_ella", "email": "ella@example.com", "passenger_name": "Ella Novak", "flight_number": "SK311", "seat": "5C", "status": "confirmed", "fare": 260.0, "fare_class": "flex", "booked_at": "2026-09-18T08:32:00Z"},
+    "R-7009": {"reservation_id": "R-7009", "customer_id": "cust_farid", "email": "farid@example.com", "passenger_name": "Farid Haddad", "flight_number": "SK420", "seat": "2A", "status": "confirmed", "fare": 410.0, "fare_class": "flex", "booked_at": "2026-09-20T12:00:00Z"},
+    "R-7010": {"reservation_id": "R-7010", "customer_id": "cust_farid", "email": "farid@example.com", "passenger_name": "Farid Haddad", "flight_number": "SK421", "seat": "2A", "status": "confirmed", "fare": 395.0, "fare_class": "flex", "booked_at": "2026-09-20T12:01:00Z"}
+  },
+  "compensation": [],
+  "confirmations": []
+}

@@ -158,9 +158,13 @@ def clone_for_episode(scenario) -> int | None:
 
 
 def _file(scenario, planted_note: str | None, extra_tags: list[str]) -> int | None:
-    from chaos.tools import ORDERS
+    from chaos.domains import active_domain
 
-    email = next((o["email"] for o in ORDERS.values() if o["customer_id"] == scenario.customer_id), "customer@example.com")
+    # The requester is the pack's customer. Ticket mode only runs for a pack with the ticket tools (retail), and
+    # a customer the pack does not know gets a placeholder address rather than no ticket.
+    email = active_domain().customer_email(scenario.customer_id)
+    if email == "unknown":
+        email = "customer@example.com"
     name = scenario.customer_id.removeprefix("cust_").capitalize()
     first_line = scenario.user_message.strip().splitlines()[0] if scenario.user_message.strip() else "Support request"
     tid = create_ticket(first_line[:80], scenario.user_message, name, email, [scenario.origin, scenario.kind, *extra_tags])

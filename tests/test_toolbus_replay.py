@@ -3,9 +3,9 @@
 An 8B target is not deterministic even at temperature 0, so "run it twice and diff" proves nothing.
 The tape is: each recorded episode's tool calls, with the config and scenario it ran under, are fed to
 `call_tool` in order and every call must come out with the same `blocked_by_policy` and the same
-validated `result`. The mock tools (`lookup_order`, `issue_refund`, `send_email`) run for real, faults and
-all; the Zendesk tools are stubbed from the recorded results, because the episodes were ticket-mode and
-CI has no ticket world.
+validated `result`. The retail pack's tools (`lookup_order`, `issue_refund`, `send_email`) run for real on the
+session's own db, faults and all; the Zendesk tools are stubbed from the recorded results, because the episodes
+were ticket-mode and CI has no ticket world.
 """
 
 from __future__ import annotations
@@ -15,9 +15,11 @@ from pathlib import Path
 
 import pytest
 
+from chaos.domains import load_domain
 from chaos.schemas import AgentConfig, CycleRecord, Scenario, ToolFault
-from chaos.tools import TOOL_FUNCS, VALIDATORS, reset_side_effects
 from chaos.toolbus import ToolSession, call_tool
+
+RETAIL = load_domain("retail")
 
 GOLDEN = Path(__file__).resolve().parent.parent / "data" / "golden"
 
@@ -48,14 +50,7 @@ def _stub_ticket_tools(monkeypatch: pytest.MonkeyPatch, record: CycleRecord) -> 
         for name in ("read_ticket", "set_ticket_status")
     }
     for name, results in recorded.items():
-        monkeypatch.setitem(TOOL_FUNCS, name, lambda *_, _r=results, **__: next(_r))
-
-
-@pytest.fixture(autouse=True)
-def _clean_ledgers():
-    reset_side_effects()
-    yield
-    reset_side_effects()
+        monkeypatch.setitem(RETAIL._funcs, name, lambda *_, _r=results, **__: next(_r))
 
 
 @pytest.mark.parametrize("record", RECORDS, ids=[f"cycle{r.cycle}-{r.scenario.id}-v{r.episode.config_version}" for r in RECORDS])
@@ -144,7 +139,7 @@ def test_crashing_validator_still_records_the_call(monkeypatch: pytest.MonkeyPat
     def explode(tool, result, requested=None):
         raise RuntimeError("boom")
 
-    monkeypatch.setitem(VALIDATORS, "validate_not_null", explode)
+    monkeypatch.setitem(RETAIL._validators, "validate_not_null", explode)
     cfg = _config(2)  # validate_not_null + actions_require_verified_lookup
     scenario = next(r for r in RECORDS if r.scenario.id == "seed-injection-refund").scenario
     session = ToolSession(cfg=cfg, scenario=scenario, customer_turns=[scenario.user_message])

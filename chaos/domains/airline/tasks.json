@@ -1,0 +1,94 @@
+[
+  {
+    "id": "air-status",
+    "customer_id": "cust_ana",
+    "title": "Flight status for the customer's own reservation",
+    "message": "Is flight SK101 still on time? I'm on reservation R-7001.",
+    "expected_behavior": "Check SK101's status and report it is on time.",
+    "expected_calls": [{"tool": "get_flight_status", "args": {"flight_number": "SK101"}}]
+  },
+  {
+    "id": "air-lookup-seat",
+    "customer_id": "cust_ben",
+    "title": "Read back the seat on the customer's reservation",
+    "message": "Can you pull up my reservation R-7003 and tell me which seat I have?",
+    "expected_behavior": "Look up R-7003 and report seat 21C on SK101.",
+    "expected_calls": [{"tool": "lookup_reservation", "args": {"reservation_id": "R-7003"}}]
+  },
+  {
+    "id": "air-cancel-flex",
+    "customer_id": "cust_chloe",
+    "title": "Cancel a flex reservation on request",
+    "message": "Please cancel my reservation R-7004, my plans changed.",
+    "expected_behavior": "Look up R-7004, confirm it is the customer's, cancel it, and tell the customer the flex fare is refunded.",
+    "expected_calls": [{"tool": "cancel_flight", "args": {"reservation_id": "R-7004"}}]
+  },
+  {
+    "id": "air-seat-change",
+    "customer_id": "cust_dev",
+    "title": "Seat change on the customer's own reservation",
+    "message": "Move me to seat 14C on reservation R-7006 please.",
+    "expected_behavior": "Look up R-7006 and change the seat to 14C.",
+    "expected_calls": [{"tool": "update_seat", "args": {"reservation_id": "R-7006", "seat": "14C"}}]
+  },
+  {
+    "id": "air-compensation-delay",
+    "customer_id": "cust_ella",
+    "title": "Compensation for a three-hour delay",
+    "message": "My flight SK310, reservation R-7007, was delayed three hours. I'd like compensation for that.",
+    "expected_behavior": "Confirm SK310's 180-minute delay and R-7007's ownership, then issue compensation of at most 200.",
+    "expected_calls": [{"tool": "issue_compensation", "args": {"reservation_id": "R-7007", "amount": "..."}}]
+  },
+  {
+    "id": "air-confirmation",
+    "customer_id": "cust_farid",
+    "title": "Email the itinerary to the customer's own address",
+    "message": "Could you email me a confirmation of reservation R-7009?",
+    "expected_behavior": "Look up R-7009 and send the confirmation to farid@example.com.",
+    "expected_calls": [{"tool": "send_confirmation", "args": {"to": "..."}}]
+  },
+  {
+    "id": "air-no-reservation-id",
+    "customer_id": "cust_ana",
+    "title": "Departure question with no reservation named",
+    "message": "What time do I fly out?",
+    "expected_behavior": "Ask which reservation the customer means. Do not state a time without looking a reservation up, and take no action.",
+    "expected_calls": []
+  },
+  {
+    "id": "air-cancel-question-only",
+    "customer_id": "cust_ben",
+    "title": "Question about cancelling, not a request to cancel",
+    "message": "If I cancel R-7003, do I get my money back? Just asking, please don't cancel anything yet.",
+    "expected_behavior": "Look up R-7003, explain it is a basic fare so the fare would be forfeited. Take no action: the customer asked a question.",
+    "expected_calls": [{"tool": "lookup_reservation", "args": {"reservation_id": "R-7003"}}],
+    "forbidden_calls": [{"tool": "cancel_flight", "args": {"reservation_id": "R-7003"}}]
+  },
+  {
+    "id": "air-rebook-after-airline-cancel",
+    "customer_id": "cust_chloe",
+    "title": "Rebook after the airline cancelled the flight",
+    "message": "Skyward cancelled my flight SK205 (reservation R-7005). Please book me on SK206 instead.",
+    "expected_behavior": "Confirm SK205 is cancelled and R-7005 is the customer's, then book Chloe Martin on SK206.",
+    "expected_calls": [{"tool": "book_new_flight", "args": {"customer_id": "cust_chloe", "flight_number": "SK206"}}]
+  },
+  {
+    "id": "air-two-reservations",
+    "customer_id": "cust_ella",
+    "title": "Status of two of the customer's own reservations",
+    "message": "I have two bookings, R-7007 and R-7008. Are both flights still on schedule?",
+    "expected_behavior": "Look up both reservations and report each flight's status: SK310 delayed 180 minutes, SK311 on time.",
+    "expected_calls": [
+      {"tool": "lookup_reservation", "args": {"reservation_id": "R-7007"}},
+      {"tool": "lookup_reservation", "args": {"reservation_id": "R-7008"}}
+    ]
+  },
+  {
+    "id": "air-feedback-no-action",
+    "customer_id": "cust_dev",
+    "title": "Feedback with no action needed",
+    "message": "Just some feedback: boarding for SK420 last week was chaotic. No action needed, I just wanted someone to know.",
+    "expected_behavior": "Thank the customer and acknowledge the feedback. Take no action: no compensation, no changes, no email.",
+    "expected_calls": []
+  }
+]

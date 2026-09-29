@@ -3,6 +3,7 @@
 Layout:
     runs/configs/v{n}.json   every accepted AgentConfig, one file per version
     runs/regression.json     the captured regression suite (scenarios)
+    runs/approvals.json      which saved versions a person has approved or rejected (absent = pending)
     runs/run.json            what only the loop process knows about this run (world, target, flags)
     runs/loop_settings.json  the request body the API last spawned a run with (absent for a terminal-only install)
     cycles.jsonl             append-only cycle log read by the dashboard
@@ -125,14 +126,78 @@ def load_regression() -> list[Scenario]:
     return [Scenario(**row) for row in json.loads(REGRESSION_PATH.read_text())]
 
 
-def write_run_manifest(world: str, target: str, flags: list[str]) -> Path:
+# --- approvals: which saved versions a person has certified -------------------------------------------------
+#
+# The loop promotes every gated patch at once (that is how fixes stack inside a run); approval sits beside it
+# and says which of those versions is *production*. `runs/approvals.json` is `{"3": {"status", "at", "note"}}`;
+# a version with no entry is pending. It is a run file: it moves to history/ with the run (`archive_previous_run`),
+# `reset` deletes it, and a rollback lands as a new pending version. v0 — the code's own initial config — counts
+# as approved when nothing newer is, which is also what `check` verifies on an empty tree.
+
+REVIEW_STATUSES = ("approved", "rejected")
+
+
+def approvals_path() -> Path:
+    """Beside regression.json, resolved at call time so a relocated runs/ (tests, ANTIBODY_RUNS_DIR) carries it along."""
+    return REGRESSION_PATH.parent / "approvals.json"
+
+
+def load_approvals(path: Path | None = None) -> dict[int, dict]:
+    path = path or approvals_path()
+    if not path.exists():
+        return {}
+    raw = json.loads(path.read_text())
+    return {int(k): v for k, v in raw.items() if str(k).isdigit() and isinstance(v, dict) and v.get("status") in REVIEW_STATUSES}
+
+
+def save_approvals(decisions: dict[int, dict]) -> None:
+    RUNS_DIR.mkdir(parents=True, exist_ok=True)
+    path = approvals_path()
+    fd, tmp = tempfile.mkstemp(dir=path.parent, prefix=".approvals-", suffix=".tmp")
+    try:
+        with os.fdopen(fd, "w") as f:
+            f.write(json.dumps({str(k): v for k, v in sorted(decisions.items())}, indent=2))
+        os.replace(tmp, path)
+    except BaseException:
+        with contextlib.suppress(OSError):
+            os.unlink(tmp)
+        raise
+
+
+def review(version: int, status: str, note: str = "") -> dict:
+    """Record one decision on a saved version and return the entry. ValueError for a status that is not one of ours."""
+    from datetime import datetime, timezone
+
+    if status not in REVIEW_STATUSES:
+        raise ValueError(f"status must be one of {REVIEW_STATUSES}")
+    decisions = load_approvals()
+    entry = {"status": status, "at": datetime.now(timezone.utc).isoformat(timespec="seconds"), "note": note[:500]}
+    decisions[version] = entry
+    save_approvals(decisions)
+    return entry
+
+
+def review_status(version: int, decisions: dict[int, dict] | None = None) -> str:
+    entry = (load_approvals() if decisions is None else decisions).get(version)
+    return entry["status"] if entry else "pending"
+
+
+def approved_version(decisions: dict[int, dict] | None = None) -> int:
+    """The certified config: the highest approved version, or 0 when no one has approved anything yet."""
+    decisions = load_approvals() if decisions is None else decisions
+    approved = [v for v, e in decisions.items() if e.get("status") == "approved"]
+    return max(approved) if approved else 0
+
+
+def write_run_manifest(world: str, target: str, flags: list[str], domain: str = "retail", seed: int | None = None) -> Path:
     """Record the facts about this run that no file the loop writes would otherwise carry.
 
     Only what the process alone knows goes in: which world it attacked (`mock`/`zendesk`), which target
-    (`builtin` or the `ANTIBODY_TARGET` URL), its CLI flags, and the wall-clock start. Cycle counts,
-    versions and the finish time are *not* stored: the API derives those from `cycles.jsonl`, `configs/`
-    and `status_log.jsonl` at read time (`api.store.run_manifest`), so the manifest can never disagree
-    with the run it describes — the loop appends cycles long after this file is written.
+    (`builtin` or the `ANTIBODY_TARGET` URL), which domain pack, the seed behind every choice the harness made,
+    its CLI flags, and the wall-clock start. Cycle counts, versions and the finish time are *not* stored: the API
+    derives those from `cycles.jsonl`, `configs/` and `status_log.jsonl` at read time (`api.store.run_manifest`),
+    so the manifest can never disagree with the run it describes — the loop appends cycles long after this file
+    is written.
 
     `flags` are the flags of the process that *started* the run. A `--resume` continuation does not call
     this, so a run resumed with different flags keeps the first process's; the history folder is one
@@ -144,11 +209,29 @@ def write_run_manifest(world: str, target: str, flags: list[str]) -> Path:
     doc = {
         "world": world,
         "target": target,
+        "domain": domain,
+        "seed": seed,
         "flags": list(flags),
         "started_at": datetime.now(timezone.utc).isoformat(),
     }
     RUN_MANIFEST_PATH.write_text(json.dumps(doc, indent=2))
     return RUN_MANIFEST_PATH
+
+
+def amend_run_manifest(**fields) -> None:
+    """Add facts the loop learns after the start to `run.json`, whole-file via rename so a poll never reads a torn
+    document. Today: `weave_leaderboard_url`, known only once the run has published it. A run without a manifest
+    (a `--resume` whose original predates the file) gets nothing rather than a manifest that lies about its start."""
+    try:
+        doc = json.loads(RUN_MANIFEST_PATH.read_text())
+    except (OSError, ValueError):
+        return
+    if not isinstance(doc, dict):
+        return
+    doc.update(fields)
+    tmp = RUN_MANIFEST_PATH.with_suffix(".json.tmp")
+    tmp.write_text(json.dumps(doc, indent=2))
+    os.replace(tmp, RUN_MANIFEST_PATH)
 
 
 def _remove(path: Path) -> None:
@@ -312,6 +395,7 @@ def archive_previous_run() -> Path | None:
     movable = [
         CONFIGS_DIR,
         REGRESSION_PATH,
+        approvals_path(),
         CYCLES_PATH,
         RUN_MANIFEST_PATH,
         RUNS_DIR / "status.json",

@@ -1,0 +1,13 @@
+{
+  "customers": {
+    "cust_owen": {"customer_id": "cust_owen", "email": "owen@example.com"},
+    "cust_maya": {"customer_id": "cust_maya", "email": "maya@example.com"}
+  },
+  "orders": {
+    "A-1001": {"order_id": "A-1001", "customer_id": "cust_owen", "email": "owen@example.com", "status": "shipped", "total": 42.0, "items": ["USB-C cable"]},
+    "A-1002": {"order_id": "A-1002", "customer_id": "cust_owen", "email": "owen@example.com", "status": "delivered", "total": 129.99, "items": ["Mechanical keyboard"]},
+    "B-2001": {"order_id": "B-2001", "customer_id": "cust_maya", "email": "maya@example.com", "status": "processing", "total": 899.0, "items": ["Monitor"]}
+  },
+  "refunds": [],
+  "emails": []
+}
