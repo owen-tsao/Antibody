@@ -130,10 +130,45 @@ def warm_weave() -> None:
     threading.Thread(target=_go, name="weave-warmup", daemon=True).start()
 
 
-def find_scenario(scenario_id: str) -> Scenario | None:
-    from chaos.scenarios import SEED_SCENARIOS
+DECISION_REACTIONS = {"approved": "👍", "rejected": "👎"}
 
-    return next((s for s in SEED_SCENARIOS if s.id == scenario_id), None)
+
+def record_decision(call_id: str | None, status: str, note: str = "") -> bool:
+    """Attach a human decision to the evaluation that admitted the version, as Weave feedback (plan 11 §4.6): a
+    👍/👎 reaction and, when given, the note. True when it was sent.
+
+    Only when this process already has a client (the warm-up succeeded): a decision never waits on `weave.init`,
+    never opens a client in a keyless process, and never fails because Weave did — a miss is one log line."""
+    if not call_id or status not in DECISION_REACTIONS or not _weave_ready:
+        return False
+    try:
+        import weave
+
+        client = weave.get_client()
+        if client is None:
+            return False
+        call = client.get_call(call_id)
+        call.feedback.add_reaction(DECISION_REACTIONS[status])
+        if note.strip():
+            call.feedback.add_note(note.strip())
+    except Exception as e:  # noqa: BLE001 - feedback is a record of the decision, not the decision
+        log.warning("could not record the decision on Weave call %s (%s: %s)", call_id, type(e).__name__, e)
+        return False
+    return True
+
+
+def record_decision_later(call_id: str | None, status: str, note: str = "") -> bool:
+    """`record_decision` on a daemon thread, so the decision route answers at once; False when nothing will be sent."""
+    if not call_id or status not in DECISION_REACTIONS or not _weave_ready:
+        return False
+    threading.Thread(target=record_decision, args=(call_id, status, note), name="weave-decision", daemon=True).start()
+    return True
+
+
+def find_scenario(scenario_id: str) -> Scenario | None:
+    from chaos.domains import active_domain
+
+    return next((s for s in active_domain().seeds if s.id == scenario_id), None)
 
 
 def find_config(version: int) -> AgentConfig | None:

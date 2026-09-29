@@ -211,10 +211,16 @@ def test_runs_list_shape(client: TestClient, history: Path) -> None:
     golden = next(r for r in rows if r["id"] == "golden")
     assert golden["label"] == "demo tape" and golden["current"] is False
     keys = {
-        "id", "label", "current", "started_at", "finished_at", "world", "target", "agent", "cycles",
+        "id", "label", "current", "started_at", "finished_at", "world", "target", "domain", "seed", "agent", "cycles",
         "accepted", "rejected", "versions", "final_version", "flags", "synthesized", "recording", "duration_s",
+        "pass_k", "cost_usd", "latency_ms", "legit_covered", "weave_leaderboard_url",
     }
-    assert all(set(r) == keys for r in rows)
+    # `cost_source` is present only once a cycle was priced (plan 11 §4.1); no run here has one.
+    assert all(set(r) - {"cost_source"} == keys for r in rows), [set(r) ^ keys for r in rows if set(r) - {"cost_source"} != keys]
+    assert all(r["weave_leaderboard_url"] is None for r in rows), "no run on disk published a leaderboard"
+    # A tape recorded before coverage was measured says so with None, not a made-up number.
+    assert golden["legit_covered"] is None
+    assert golden["domain"] == "retail" and golden["seed"] is None and golden["cost_usd"] is None, "pre-pack tape: defaults"
     dated = [r["started_at"] for r in rows if not r["current"] and r["started_at"]]
     assert dated == sorted(dated, reverse=True)
 
@@ -278,7 +284,7 @@ def test_run_detail_has_configs(client: TestClient, history: Path) -> None:
     doc = client.get("/api/runs/manifested-run_2").json()
     assert doc["world"] == "zendesk"
     assert [c["version"] for c in doc["configs"]] == [0, 1, 2, 3]
-    assert {"version", "parent_version", "patch_note"} == set(doc["configs"][0])
+    assert {"version", "parent_version", "patch_note", "review"} == set(doc["configs"][0])
     assert client.get("/api/runs/golden").json()["label"] == "demo tape"
 
 

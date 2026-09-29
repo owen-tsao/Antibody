@@ -1,6 +1,6 @@
 """Loop control: the settings sidecar, body rules, and the guards in chaos.state that keep `reset` safe.
 
-Run with `uv run --with pytest pytest tests/`. Nothing here spawns the loop: `subprocess.Popen` is
+Run with `uv run pytest -q`. Nothing here spawns the loop: `subprocess.Popen` is
 replaced with a stand-in, and the layout guard is exercised in a child interpreter because it fires
 at import time.
 """
@@ -49,6 +49,16 @@ def runs(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
     monkeypatch.setattr(loop_ctl, "RUN_MANIFEST_PATH", runs / "run.json")
     monkeypatch.setattr(loop_ctl, "_handle", None)
     monkeypatch.setattr(loop_ctl.subprocess, "Popen", FakeProc)
+    # `start(mode="vulnerability")` reads the live run's manifest through api.store: point it at the same folder.
+    from api import store
+
+    monkeypatch.setattr(store, "RUN_MANIFEST_PATH", runs / "run.json")
+    monkeypatch.setattr(store, "CONFIGS_DIR", runs / "configs")
+    monkeypatch.setattr(store, "REGRESSION_PATH", runs / "regression.json")
+    monkeypatch.setattr(store, "CYCLES_PATH", runs / "cycles.jsonl")
+    monkeypatch.setattr(store, "STATUS_PATH", runs / "status.json")
+    monkeypatch.setattr(store, "STATUS_LOG_PATH", runs / "status_log.jsonl")
+    monkeypatch.setattr(store, "HISTORY_DIR", tmp_path / "history")
     monkeypatch.setenv("ANTIBODY_IGNORE_EXTERNAL_LOOP", "1")
     monkeypatch.delenv("ANTIBODY_LOOP_CMD", raising=False)
     return runs
@@ -205,12 +215,12 @@ def test_value_error_400_is_scoped_to_the_loop_start_body() -> None:
     from fastapi.exceptions import RequestValidationError
     from fastapi import Request
 
-    from api.main import _body_rules_are_400s
+    from api.main import _validation_errors
 
     def respond(path: str, loc: tuple) -> int:
         scope = {"type": "http", "method": "POST", "path": path, "headers": [], "query_string": b""}
         exc = RequestValidationError([{"type": "value_error", "loc": loc, "msg": "Value error, nothing to run", "input": {}}])
-        return asyncio.run(_body_rules_are_400s(Request(scope), exc)).status_code
+        return asyncio.run(_validation_errors(Request(scope), exc)).status_code
 
     assert respond("/api/loop/start", ("body",)) == 400
     assert respond("/api/loop/start", ("body", "chaos_cycles")) == 400
@@ -227,6 +237,102 @@ def test_resume_with_nothing_saved_is_400(client: TestClient, runs: Path) -> Non
 def test_valid_body_without_key_is_503(client: TestClient, runs: Path) -> None:
     r = client.post("/api/loop/start", json={"chaos_cycles": 1})
     assert r.status_code == 503 and "restart the API" in r.json()["detail"]
+
+
+# --- mode: "vulnerability" (plan 11 §7): Measure on the spawner ---------------------------------------
+
+
+def _measurable_live_run(runs: Path, manifest: dict | None) -> None:
+    """A live run with one saved version and one captured attack, the way the loop leaves it behind."""
+    from chaos.domains import active_domain
+    from chaos.state import save_config, save_regression
+    from chaos.target_agent import v0_config
+
+    domain = active_domain()
+    cfg = v0_config(domain)
+    cfg.version, cfg.parent_version, cfg.patch_note = 1, 0, "test"
+    save_config(cfg)
+    save_regression(domain.seeds[:1])
+    if manifest is not None:
+        (runs / "run.json").write_text(json.dumps(manifest))
+
+
+def test_measure_spawns_the_vulnerability_command_with_the_live_runs_target_and_leaves_the_sidecar(runs: Path) -> None:
+    run_body = loop_ctl.LoopStartBody(chaos_cycles=2)
+    loop_ctl.start(run_body)
+    loop_ctl._handle.proc.returncode = 0
+    _measurable_live_run(runs, {"world": "mock", "target": "builtin", "domain": "airline", "flags": loop_ctl._flags(run_body)})
+
+    out = loop_ctl.start(loop_ctl.LoopStartBody(mode="vulnerability", target=None, world="auto"))
+    cmd = loop_ctl._handle.proc.cmd
+    assert cmd[-3:] == ["-m", "chaos.loop", "vulnerability"] and "--chaos-cycles" not in cmd
+    # The child attacks the run's own agent in the run's own world and domain, whatever the request said.
+    assert out["target"] == "builtin"
+    assert out["settings"]["mode"] == "vulnerability" and out["settings"]["domain"] == "airline" and out["settings"]["world"] == "mock"
+    line = (runs / "loop.log").read_text().splitlines()[-1]
+    assert "ANTIBODY_TARGET=builtin" in line and "ANTIBODY_DOMAIN=airline" in line and "ANTIBODY_NO_ZENDESK=1" in line
+    # While it runs, state says what is running; the sidecar still describes the run on disk, so afterwards the
+    # run's own settings come back rather than a measurement pretending to be a run.
+    assert loop_ctl.state()["settings"]["mode"] == "vulnerability"
+    assert json.loads((runs / "loop_settings.json").read_text())["body"] == run_body.model_dump()
+    loop_ctl._handle.proc.returncode = 0
+    assert loop_ctl.state()["settings"] == run_body.model_dump()
+
+
+def test_measure_follows_the_manifest_target_even_when_its_agent_row_is_gone(runs: Path) -> None:
+    _measurable_live_run(runs, {"world": "zendesk", "target": "http://127.0.0.1:9999", "domain": "retail", "flags": []})
+    body, target = loop_ctl._live_run_measurement(loop_ctl.LoopStartBody(mode="vulnerability", world="mock"))
+    assert target == "http:http://127.0.0.1:9999" and body.target is None
+    assert body.world == "auto" and body.domain == "retail", "the run's world and domain, not the request's"
+    (runs / "run.json").write_text(json.dumps({"target": "ftp://nope"}))
+    with pytest.raises(ValueError, match="cannot be attacked"):
+        loop_ctl._live_run_measurement(loop_ctl.LoopStartBody(mode="vulnerability"))
+
+
+def test_measure_is_refused_while_a_loop_runs_and_when_there_is_nothing_to_measure(client: TestClient, runs: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("WANDB_API_KEY", "not-a-real-key")
+    r = client.post("/api/loop/start", json={"mode": "vulnerability"})
+    assert r.status_code == 400 and r.json()["detail"].startswith("nothing to measure")
+    _measurable_live_run(runs, None)
+    assert client.post("/api/loop/start", json={"mode": "vulnerability"}).status_code == 201
+    r = client.post("/api/loop/start", json={"mode": "vulnerability"})
+    assert r.status_code == 409 and r.json()["detail"]["settings"]["mode"] == "vulnerability"
+    # A running measurement blocks a run, the same way a run blocks a measurement.
+    assert client.post("/api/loop/start", json={"chaos_cycles": 1}).status_code == 409
+
+
+def test_measure_without_a_key_is_503_and_a_bad_mode_is_422(client: TestClient, runs: Path) -> None:
+    _measurable_live_run(runs, None)
+    r = client.post("/api/loop/start", json={"mode": "vulnerability"})
+    assert r.status_code == 503 and "restart the API" in r.json()["detail"]
+    assert client.post("/api/loop/start", json={"mode": "measure"}).status_code == 422
+
+
+def test_external_measurement_counts_as_the_loop_being_busy() -> None:
+    import re
+
+    pat = re.compile(loop_ctl.LOOP_PATTERN)
+    assert pat.search("python -m chaos.loop vulnerability") and pat.search("python3.12 -m chaos.loop run --seeds 1")
+    assert not pat.search("python -m chaos.loop check --json") and not pat.search('rg "chaos.loop run"')
+
+
+def test_live_row_says_measuring_while_a_measurement_runs(client: TestClient, runs: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    from chaos.state import GOLDEN_DIR
+
+    (runs / "configs").mkdir(parents=True)
+    (runs / "cycles.jsonl").write_text((GOLDEN_DIR / "cycles.jsonl").read_text())
+    _measurable_live_run(runs, {"world": "mock", "target": "builtin", "flags": []})
+    assert "measuring" not in client.get("/api/runs/live").json()
+    monkeypatch.setenv("WANDB_API_KEY", "not-a-real-key")
+    assert client.post("/api/loop/start", json={"mode": "vulnerability"}).status_code == 201
+    row = client.get("/api/runs/live").json()
+    assert row["measuring"] is True and row["finished_at"] is None
+    # A terminal-started measurement has no settings; status.json is what says so.
+    monkeypatch.setattr(loop_ctl, "_handle", None)
+    monkeypatch.setattr(loop_ctl, "external_pid", lambda: 999)
+    assert client.get("/api/runs/live").json()["measuring"] is False
+    (runs / "status.json").write_text(json.dumps({"cycle": 4, "phase": "baseline", "measuring": "vulnerability"}))
+    assert client.get("/api/runs/live").json()["measuring"] is True
 
 
 def test_health_golden_needs_the_phase_log(client: TestClient) -> None:
@@ -399,3 +505,30 @@ def test_migration_never_promotes_over_an_existing_run(runs: Path) -> None:
     state._migrate_legacy_archive()
     assert (state.HISTORY_DIR / "r2" / "cycles.jsonl").read_text() == "real\n"
     assert (staging / "cycles.jsonl").read_text() == "orphan\n"
+
+
+# --- chaos.config: the test session never reads the checkout's .env -------------------------------------
+
+
+def test_no_dotenv_flag_keeps_the_env_file_out_of_the_process(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """`ANTIBODY_NO_DOTENV=1` (set for the whole suite by conftest) makes `load_env` a no-op; without it the file fills gaps."""
+    from chaos import config
+
+    (tmp_path / ".env").write_text('ANTIBODY_TEST_ONLY_VAR="from-dotenv"\n')
+    monkeypatch.setattr(config, "ROOT", tmp_path)
+    monkeypatch.delenv("ANTIBODY_TEST_ONLY_VAR", raising=False)
+    assert os.environ.get(config.NO_DOTENV_ENV) == "1", "conftest sets the flag before chaos is imported"
+    config.load_env()
+    assert "ANTIBODY_TEST_ONLY_VAR" not in os.environ
+    monkeypatch.delenv(config.NO_DOTENV_ENV)
+    config.load_env()
+    assert os.environ["ANTIBODY_TEST_ONLY_VAR"] == "from-dotenv"
+
+
+def test_the_suite_runs_keyless_from_a_scratch_runs_dir() -> None:
+    """What conftest promises: no key in the environment, and every state path under the session's scratch dir."""
+    from conftest import SCRATCH
+
+    assert "WANDB_API_KEY" not in os.environ
+    assert state.RUNS_DIR.is_relative_to(SCRATCH) and state.HISTORY_DIR.is_relative_to(SCRATCH)
+    assert not state.RUNS_DIR.is_relative_to(ROOT) and not state.HISTORY_DIR.is_relative_to(ROOT)

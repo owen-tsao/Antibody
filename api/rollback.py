@@ -12,9 +12,10 @@ forget what this config was hardened against. The merged suite may hold attacks 
 saw; `newer_tests` counts them so the UI can say "N tests are newer than this config" and `check`
 reports them honestly.
 
-This is the API's one write into `runs/configs` and `runs/regression.json`. It refuses while a loop is
-running (the loop owns those files then) and when the run was made against another target than the
-current `ANTIBODY_TARGET` (a config tuned for an external agent means nothing to the built-in one).
+This is the API's one write into `runs/configs`; `runs/regression.json` is also written by `api.incidents`
+(an imported transcript) and, later, by the tools panel's starter rules. Every such writer refuses while a loop
+is running (the loop owns those files then); rollback also refuses when the run was made against another
+target than the current `ANTIBODY_TARGET` (a config tuned for an external agent means nothing to the built-in one).
 Never touches history/.
 
 Concurrency: the running-check, the version pick and both writes happen under `loop_ctl.runs_lock`,

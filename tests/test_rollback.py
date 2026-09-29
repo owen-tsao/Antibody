@@ -114,7 +114,7 @@ def test_rollback_appends_after_the_latest_live_version(world: dict[str, Path], 
     # It is a copy: the run's own v2 is untouched and the live list gained a version rather than losing one.
     assert store.read_config(f"run:{RUN}", 2).patch_note != cfg["patch_note"]
     rows = client.get("/api/configs", params={"source": "live"}).json()
-    assert rows[-1] == {"version": 2, "parent_version": 1, "patch_note": cfg["patch_note"]}
+    assert rows[-1] == {"version": 2, "parent_version": 1, "patch_note": cfg["patch_note"], "review": "pending"}
 
 
 def test_rollback_twice_keeps_incrementing(world: dict[str, Path], client: TestClient) -> None:

@@ -78,7 +78,7 @@ from typing import Literal
 
 from pydantic import BaseModel, Field, ValidationError, model_validator
 
-from api import agents
+from api import agents, store
 from chaos import state as chaos_state
 from chaos.state import LOOP_SETTINGS_PATH, ROOT, RUN_MANIFEST_PATH, RUNS_DIR
 from chaos.target import resolve_target
@@ -93,10 +93,15 @@ class LoopStartBody(BaseModel):
 
     Every field is one `chaos.loop run` flag (see `_flags`), except `target`, which is an agent id from
     `GET /api/agents` and becomes the child's `ANTIBODY_TARGET` (plan 00, Block 1). `None` means the
-    API process's own default target. Unknown keys are ignored rather than rejected, so a UI still
-    sending the retired `mode` works.
+    API process's own default target. Unknown keys are ignored rather than rejected.
+
+    `mode: "vulnerability"` (plan 11 §7) spawns `chaos.loop vulnerability` instead of a run: it re-measures every
+    saved version of the *live* run against its final regression suite and writes `runs/vulnerability.json`. Only
+    the live run is measurable (`vulnerability_by_version` reads the live paths), so there is no run id to give;
+    the run flags are ignored and the child inherits the live run's target, domain and world from `run.json`.
     """
 
+    mode: Literal["run", "vulnerability"] = "run"
     chaos_cycles: int = Field(3, ge=0, le=10)
     # None = all seeds; 0 = `--no-seeds`.
     seeds: int | None = Field(None, ge=0, le=10)
@@ -107,12 +112,17 @@ class LoopStartBody(BaseModel):
     until_quiet: int | None = Field(None, ge=1, le=10)
     world: World = "auto"
     target: str | None = Field(None, min_length=1, max_length=64)
+    # The domain pack to run in (`GET /api/domains`). None: the picked agent's own `domain`, else the API's default.
+    domain: str | None = Field(None, min_length=1, max_length=32)
     # Measure v0 vs the final config after the run (`runs/vulnerability.json`), so the run page has its
     # "blocks N of M" number. On by default here, off in the CLI: a dashboard run is meant to be looked at.
     vulnerability: bool = True
 
     @model_validator(mode="after")
     def _rules(self) -> LoopStartBody:
+        # A measurement ignores the run flags, so their consistency rules do not apply to it.
+        if self.mode != "run":
+            return self
         if self.chaos_cycles == 0 and self.seeds == 0:
             raise ValueError("nothing to run: no seeds and no chaos cycles")
         # The streak is counted over chaos cycles only, so it can never be reached past the cap.
@@ -162,8 +172,9 @@ IDLE = {
 }
 
 # Anchored on the interpreter flag so an `rg "chaos.loop run"` or an editor grep in this checkout is
-# not mistaken for a running loop (which would 409 Heal and Replay for as long as it lived).
-LOOP_PATTERN = r"[Pp]ython[0-9.]* -m chaos\.loop run"
+# not mistaken for a running loop (which would 409 Heal and Replay for as long as it lived). A `vulnerability`
+# measurement writes into runs/ too, so it counts as the loop being busy.
+LOOP_PATTERN = r"[Pp]ython[0-9.]* -m chaos\.loop (run|vulnerability)"
 # Wrappers that also carry the pattern on their command line (the `uv run` launcher, the shell
 # that started it, pgrep itself). The loop is the python process underneath.
 _WRAPPER_NAMES = {"uv", "zsh", "bash", "sh", "pgrep", "-zsh", "-bash"}
@@ -273,9 +284,13 @@ def _env_overrides(body: LoopStartBody, target: str) -> dict[str, str]:
 
     `ANTIBODY_TARGET` is always set, even to `builtin`: `chaos.config.load_env` fills the child's env from
     `.env` with `setdefault`, so an `.env` naming an external agent would otherwise win over the agent the
-    user picked in the request.
+    user picked in the request. `ANTIBODY_TOOLS_BACKEND` is set when the picked agent has real tools of its
+    own (plan 09 §4), and set *empty* otherwise for the same `.env` reason. `ANTIBODY_DOMAIN` is the request's
+    pack, else the agent row's, else whatever this process runs with (retail when nothing says).
     """
-    overrides = {"ANTIBODY_TARGET": target}
+    row = agents.get_agent(body.target) if body.target else None
+    domain = body.domain or (row or {}).get("domain") or os.environ.get("ANTIBODY_DOMAIN", "").strip() or "retail"
+    overrides = {"ANTIBODY_TARGET": target, "ANTIBODY_TOOLS_BACKEND": (row or {}).get("tools_backend") or "", "ANTIBODY_DOMAIN": domain}
     if body.world == "mock":
         overrides["ANTIBODY_NO_ZENDESK"] = "1"
     return overrides
@@ -285,7 +300,8 @@ def _command(body: LoopStartBody) -> list[str]:
     override = os.environ.get("ANTIBODY_LOOP_CMD")
     if override:
         return shlex.split(override)
-    tail = ["-m", "chaos.loop", "run", *_flags(body)]
+    # A measurement takes no run flags: it measures the versions already on disk against the suite already on disk.
+    tail = ["-m", "chaos.loop", "vulnerability"] if body.mode == "vulnerability" else ["-m", "chaos.loop", "run", *_flags(body)]
     if shutil.which("uv"):
         return ["uv", "run", "python", *tail]
     return [sys.executable, *tail]
@@ -356,10 +372,61 @@ def saved_settings() -> dict | None:
     return body.model_dump()
 
 
+def preflight(body: LoopStartBody) -> None:
+    """The reasons a start would fail before a child is spawned, as exceptions the caller maps to a status.
+
+    ValueError (400) for a `resume` with nothing to continue from, a `target` naming no agent, or a `vulnerability`
+    measurement with nothing on disk to measure; MissingKey (503) when the install has no WANDB_API_KEY. One place,
+    so the route and the scheduler (`api.schedules`) refuse for the same reasons and a scheduled run on a keyless
+    install records "skipped" rather than a child that exits 1 a second later.
+    """
+    from api import attack
+    from chaos.state import latest_version, load_regression
+
+    if body.resume and latest_version() is None:
+        raise ValueError("nothing to resume: no saved config to continue from")
+    if body.mode == "vulnerability" and (latest_version() is None or not load_regression()):
+        raise ValueError("nothing to measure: the live run has no saved config or no captured attacks")
+    if body.target is not None and agents.get_agent(body.target) is None:
+        raise ValueError(f"unknown agent {body.target!r}")
+    if attack.missing_api_key():
+        raise MissingKey()
+
+
+class MissingKey(Exception):
+    """No WANDB_API_KEY: the loop cannot call inference."""
+
+
+def _live_run_measurement(body: LoopStartBody) -> tuple[LoopStartBody, str]:
+    """A `vulnerability` body completed from the live run's `run.json`, plus the canonical target the child gets.
+
+    The measurement re-attacks the run's own agent, in the run's own world and domain: the request's fields are
+    whatever the UI's defaults were, not what the run was. A run whose agent row was deleted is still measurable
+    (the target string is in the manifest); a run with no `run.json` is measured against the built-in agent in the
+    mock world, which is what the manifest says about it too.
+    """
+    manifest = store.run_manifest("live") or {}
+    raw = manifest.get("target") or "builtin"
+    try:
+        target = agents.canonical(raw)
+    except ValueError as e:
+        raise ValueError(f"the live run's target {raw!r} cannot be attacked: {e}") from e
+    row = agents.agent_for_target(raw)
+    completed = body.model_copy(
+        update={"target": row["id"] if row else None, "domain": manifest.get("domain"), "world": "mock" if manifest.get("world") == "mock" else "auto"}
+    )
+    return completed, target
+
+
 def start(body: LoopStartBody) -> dict:
-    """Spawn the loop. Raises RuntimeError("running") if one we started is still alive, ValueError for an unknown `target`."""
+    """Spawn the loop. Raises RuntimeError("running") if one we started is still alive, ValueError for an unknown
+    `target` or `domain`. Callers run `preflight` first; `start` itself only re-checks what it must (the target resolves)."""
     global _handle
-    target = agents.resolve_agent(body.target)
+    if body.mode == "vulnerability":
+        body, target = _live_run_measurement(body)
+    else:
+        target = agents.resolve_agent(body.target)
+    agents.validate_domain(body.domain)
     with runs_lock:
         if is_running():
             raise RuntimeError("running")
@@ -381,8 +448,10 @@ def start(body: LoopStartBody) -> dict:
                 stdin=subprocess.DEVNULL,
                 start_new_session=True,
             )
-        # After Popen: a spawn that raised must not leave a sidecar describing a run that never began.
-        _write_settings(body, proc.pid, started_at, cmd, target)
+        # After Popen: a spawn that raised must not leave a sidecar describing a run that never began. A
+        # measurement leaves the sidecar alone: it describes the run on disk, and the measurement did not change it.
+        if body.mode == "run":
+            _write_settings(body, proc.pid, started_at, cmd, target)
         _handle = LoopHandle(proc=proc, started_at=started_at, settings=body.model_dump())
     return {"pid": proc.pid, "started_at": started_at, "settings": body.model_dump(), "target": target}
 

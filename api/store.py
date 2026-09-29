@@ -46,6 +46,7 @@ class RunPaths(NamedTuple):
     status_log: Path
     manifest: Path
     status: Path
+    approvals: Path
 
 
 def run_dir(run_id: str) -> Path:
@@ -89,9 +90,11 @@ def run_paths(source: Source) -> RunPaths:
             status_log=GOLDEN_DIR / "status_log.jsonl",
             manifest=GOLDEN_DIR / "runs" / "run.json",
             status=GOLDEN_DIR / "runs" / "status.json",
+            approvals=GOLDEN_DIR / "runs" / "approvals.json",
         )
     if source == "live":
-        return RunPaths(CYCLES_PATH, CONFIGS_DIR, REGRESSION_PATH, STATUS_LOG_PATH, RUN_MANIFEST_PATH, STATUS_PATH)
+        # approvals.json sits beside regression.json (chaos.state.approvals_path), so a relocated runs/ carries it.
+        return RunPaths(CYCLES_PATH, CONFIGS_DIR, REGRESSION_PATH, STATUS_LOG_PATH, RUN_MANIFEST_PATH, STATUS_PATH, REGRESSION_PATH.parent / "approvals.json")
     if source.startswith(RUN_PREFIX):
         d = run_dir(source[len(RUN_PREFIX) :])
         return RunPaths(
@@ -101,6 +104,7 @@ def run_paths(source: Source) -> RunPaths:
             status_log=d / "status_log.jsonl",
             manifest=d / "run.json",
             status=d / "status.json",
+            approvals=d / "approvals.json",
         )
     raise ValueError(f"unknown source {source!r}")
 
@@ -156,6 +160,15 @@ def read_config(source: Source, version: int) -> AgentConfig | None:
         return None
 
 
+def eval_call_id(source: Source, version: int) -> str | None:
+    """The Weave call id of the gate-new evaluation that admitted `version`: the cycle whose gate promoted the config to
+    it, first sample. None for v0 (never gated), records written before ids were stored, or a run without a client."""
+    for rec in read_cycles(source):
+        if rec.gate is not None and rec.config_after == version and rec.config_before != version:
+            return rec.gate.weave_eval_call_ids[0] if rec.gate.weave_eval_call_ids else None
+    return None
+
+
 def read_regression(source: Source) -> list[Scenario]:
     path = run_paths(source).regression
     if not path.exists():
@@ -166,14 +179,28 @@ def read_regression(source: Source) -> list[Scenario]:
         return []
 
 
+def read_approvals(source: Source) -> dict[int, dict]:
+    """A run's review decisions by version (`chaos.state.load_approvals` shape); `{}` when none were made or the file is
+    torn. `load_approvals` drops malformed entries itself; a file whose top level is not an object is the one shape
+    that gets past it (`AttributeError` on `.items()`), and one hand-edited run must not take the inbox down."""
+    from chaos.state import load_approvals
+
+    try:
+        return load_approvals(run_paths(source).approvals)
+    except (OSError, ValueError, TypeError, AttributeError):
+        return {}
+
+
 def read_vulnerability(source: Source) -> dict | None:
-    """`runs/vulnerability.json` as `{"landed": {"v0": 6, ...}, "suite_size": 6, "world": "mock"|"zendesk"|None}`.
+    """`runs/vulnerability.json` as `{"landed": {"v0": 6, ...}, "suite_size": 6, "world": "mock"|"zendesk"|None}`,
+    plus `by_attack: {"v0": {scenario_id: [bool per sample]}}` and `samples` when `vulnerability_detail.json` has them.
 
     Written by `chaos.loop vulnerability` (every saved version) or by `chaos.loop run --vulnerability`
     at the end of a run (v0 and the final version only; what the dashboard starts): how many of the final
     regression suite's attacks land on each measured config. The denominator is that final suite, so it comes from
     `regression.json`, not from any one cycle's `regression_suite_size`. `world` is where the
-    measurement ran (from the detail file); None when the run predates that field.
+    measurement ran (from the detail file); None when the run predates that field. A cell counts as landed when
+    it landed in the majority of samples (the detail file's `rule`), the same rule that produced the counts.
     """
     regression = run_paths(source).regression
     path = regression.parent / "vulnerability.json"
@@ -192,14 +219,28 @@ def read_vulnerability(source: Source) -> dict | None:
     }
     if not landed:
         return None
-    world = None
+    out: dict = {"landed": landed, "suite_size": len(read_regression(source)), "world": None}
     try:
         detail = json.loads((regression.parent / "vulnerability_detail.json").read_text())
-        if isinstance(detail, dict) and detail.get("world") in ("mock", "zendesk"):
-            world = detail["world"]
     except (OSError, ValueError):
-        pass
-    return {"landed": landed, "suite_size": len(read_regression(source)), "world": world}
+        return out
+    if not isinstance(detail, dict):
+        return out
+    if detail.get("world") in WORLDS:
+        out["world"] = detail["world"]
+    # Per-attack cells (plan 11 §7): `{"v0": {"seed-x": [true, false, true]}}`, one boolean per sample. Only well-formed
+    # entries pass; a torn or hand-edited file degrades to counts, never to a 500. Absent for runs measured before the
+    # detail file existed, so the payload keeps its old shape and the UI renders counts.
+    by_attack = {
+        v: {sid: [bool(b) for b in hits] for sid, hits in attacks.items() if isinstance(sid, str) and isinstance(hits, list)}
+        for v, attacks in (detail.get("landed") or {}).items()
+        if isinstance(v, str) and v in landed and isinstance(attacks, dict)
+    }
+    if by_attack:
+        out["by_attack"] = by_attack
+        if isinstance(detail.get("samples"), int) and not isinstance(detail.get("samples"), bool):
+            out["samples"] = detail["samples"]
+    return out
 
 
 def read_status() -> dict:
@@ -277,14 +318,34 @@ def _manifest_file(path: Path) -> dict | None:
     target = doc.get("target") if isinstance(doc.get("target"), str) and doc["target"] else "builtin"
     flags = [f for f in doc.get("flags", []) if isinstance(f, str)] if isinstance(doc.get("flags"), list) else []
     started = doc.get("started_at") if isinstance(doc.get("started_at"), str) else None
-    return {"world": world, "target": target, "flags": flags, "started_at": started}
+    domain = doc.get("domain") if isinstance(doc.get("domain"), str) and doc["domain"] else "retail"
+    seed = doc.get("seed") if isinstance(doc.get("seed"), int) and not isinstance(doc.get("seed"), bool) else None
+    leaderboard = doc.get("weave_leaderboard_url") if isinstance(doc.get("weave_leaderboard_url"), str) and doc["weave_leaderboard_url"].startswith("https://") else None
+    return {"world": world, "target": target, "flags": flags, "started_at": started, "domain": domain, "seed": seed, "weave_leaderboard_url": leaderboard}
+
+
+def _sum_or_none(values: list) -> float | int | None:
+    present = [v for v in values if v is not None]
+    if not present:
+        return None
+    total = sum(present)
+    return round(total, 6) if isinstance(total, float) else total
+
+
+def _cost_source(cycles: list[CycleRecord]) -> str | None:
+    """Where the run's `cost_usd` came from: `weave` when every priced cycle was read back from Weave, `estimated`
+    otherwise (the local price table, or records from before the label existed); None when no cycle has a cost."""
+    priced = [rec for rec in cycles if rec.cost_usd is not None]
+    if not priced:
+        return None
+    return "weave" if all(rec.cost_source == "weave" for rec in priced) else "estimated"
 
 
 def run_manifest(source: Source) -> dict | None:
     """One run described: what its process recorded plus what its files say now.
 
-    `run.json` contributes only `world`, `target`, `flags` (and `started_at` as a fallback): those are
-    facts nobody but the loop process had. Everything countable — `cycles`, `accepted`, `rejected`,
+    `run.json` contributes only `world`, `target`, `domain`, `seed`, `flags` (and `started_at` as a fallback): those
+    are facts nobody but the loop process had. Everything countable — `cycles`, `accepted`, `rejected`,
     `versions`, `final_version`, `started_at`, `finished_at`, `recording`, `duration_s` — is read from
     `cycles.jsonl`, `configs/` and `status_log.jsonl` here, because the loop keeps appending to those long
     after any file written at start could be current. Runs made before `run.json` existed get `world: "mock"`,
@@ -313,6 +374,11 @@ def run_manifest(source: Source) -> dict | None:
         "finished_at": last,
         "world": stored["world"] if stored else "mock",
         "target": stored["target"] if stored else "builtin",
+        # Runs recorded before domain packs existed ran the retail world and made unseeded choices.
+        "domain": stored["domain"] if stored else "retail",
+        "seed": stored["seed"] if stored else None,
+        # The run's Weave leaderboard (legit pass rate per version, plan 11 §4.3); null until the loop publishes it at run end.
+        "weave_leaderboard_url": stored["weave_leaderboard_url"] if stored else None,
         "cycles": len(cycles),
         "accepted": sum(1 for g in gated if g.accepted),
         "rejected": sum(1 for g in gated if not g.accepted),
@@ -320,10 +386,21 @@ def run_manifest(source: Source) -> dict | None:
         "final_version": final_version,
         "flags": stored["flags"] if stored else [],
         "synthesized": stored is None,
+        # pass^k per accepted version: the fix held in `passed` of `k` independent episodes at the gate that made it.
+        "pass_k": {str(rec.config_after): rec.gate.pass_k for rec in cycles if rec.gate is not None and rec.gate.accepted},
+        # How many of the pack's legit tasks the target could perform, from the latest gate that measured it
+        # (None: no gate yet, or a run recorded before coverage existed — every task was judged).
+        "legit_covered": next((g.legit_covered for g in reversed(gated) if g.legit_covered is not None), None),
+        # The run's bill so far, summed over cycles that recorded one (None when none did: records before the fields existed).
+        "cost_usd": _sum_or_none([rec.cost_usd for rec in cycles]),
+        "latency_ms": _sum_or_none([rec.latency_ms for rec in cycles]),
         # What `api.replay.load_recording` needs: a phase log with timed rows and the cycles they land.
         # A run whose loop died before its first phase row has files but is not a tape.
         "recording": duration_s is not None and paths.cycles.exists(),
         "duration_s": round(duration_s, 1) if duration_s is not None else None,
+        # "weave" only when every priced cycle was priced by Weave; one estimated cycle makes the sum an estimate.
+        # Left out, rather than null, when no cycle has a cost (the UI's type says absent).
+        **({"cost_source": source} if (source := _cost_source(cycles)) else {}),
     }
 
 
@@ -353,3 +430,82 @@ def history_runs() -> list[dict]:
 def newest_first(manifests: list[dict]) -> list[dict]:
     """Sort by `started_at` descending. A run with no phase log has no start time and sorts last rather than breaking the sort."""
     return sorted(manifests, key=lambda m: (m["started_at"] is not None, m["started_at"] or "", m["id"]), reverse=True)
+
+
+# --- Review inbox (plan 11 §7): every version awaiting a decision, per agent, in one read ------------------
+
+
+def _cycle_that_made(cycles: list[CycleRecord], version: int) -> CycleRecord | None:
+    """The cycle whose accepted patch produced `version`, or None (a rollback copy, starter rules)."""
+    return next((rec for rec in cycles if rec.config_after == version and rec.config_before < version and rec.gate is not None and rec.gate.accepted), None)
+
+
+def review_items(run: dict, source: Source) -> list[dict]:
+    """One row per saved version past v0 of one run, highest version first, in the inbox's item shape.
+
+    `run` is a runs-list row (`id`, `started_at`, `current`). v0 is the code's own config and is never reviewed.
+    `decided_at` is null while the version is pending; a decided row also carries `status` (approved/rejected) and
+    `note`. Only the live run's versions can be decided (`POST /api/configs/{v}/review` is live-only), so `live`
+    is what tells the UI whether a pending row is a queue item or an archived one.
+    """
+    cycles = read_cycles(source)
+    decisions = read_approvals(source)
+    out: list[dict] = []
+    for v in reversed([v for v in config_versions(source) if v > 0]):
+        cycle = _cycle_that_made(cycles, v)
+        cfg = read_config(source, v)
+        gate = cycle.gate if cycle is not None else None
+        decision = decisions.get(v)
+        item = {
+            "run": run["id"],
+            "run_started": run.get("started_at"),
+            "live": run["id"] == "live",
+            "version": v,
+            "cycle": cycle.cycle if cycle is not None else None,
+            # What the version fixes: the cycle's attack, else the saved patch note (a rollback copy, starter rules).
+            "title": cycle.scenario.title if cycle is not None else ((cfg.patch_note if cfg is not None else "") or f"v{v}"),
+            "gate": {
+                "fix_passes": gate.fix_passes,
+                "fix_samples": gate.fix_samples,
+                "legit_pass_rate": gate.legit_pass_rate,
+                "legit_covered": gate.legit_covered,
+            } if gate is not None else None,
+            "decided_at": decision.get("at") if decision else None,
+        }
+        if decision:
+            item["status"] = decision["status"]
+            item["note"] = decision.get("note", "")
+        out.append(item)
+    return out
+
+
+def review_inbox(runs: list[dict]) -> list[dict]:
+    """`[{agent: {id, name} | null, pending: [...], archived: [...], decided: [...]}]`: the Review page's index, one read.
+
+    `runs` is `GET /api/runs`' list (each row already joined to its `agent`). The golden demo tape is skipped: it is
+    not anyone's run and nothing on it can be decided. Groups are one per agent in the order the runs list has them
+    (current run first, then newest); runs whose agent row is gone group under `agent: null`. `pending` holds only
+    the live run's undecided versions — the ones a decision can actually be recorded on — so its length is the
+    reviewer's real workload. Undecided versions of archived runs go to `archived` (they can be looked at, not
+    decided); `decided` mixes live and archived, newest run first. Every list is highest version first within a run.
+    A run that fails to read contributes nothing rather than failing the poll.
+    """
+    groups: dict[str | None, dict] = {}
+    for run in runs:
+        if run.get("label") == "demo tape" or run["id"] == "golden":
+            continue
+        source: Source = "live" if run.get("current") else f"{RUN_PREFIX}{run['id']}"
+        try:
+            items = review_items(run, source)
+        except (ValueError, LookupError, OSError):
+            continue
+        agent = run.get("agent")
+        key = agent["id"] if agent else None
+        group = groups.setdefault(key, {"agent": agent, "pending": [], "archived": [], "decided": []})
+        for item in items:
+            bucket = "decided" if item["decided_at"] else "pending" if item["live"] else "archived"
+            group[bucket].append(item)
+    for group in groups.values():
+        # Stable sort: live rows first; run order (and version order within a run) is preserved from `runs`.
+        group["decided"].sort(key=lambda item: not item["live"])
+    return list(groups.values())

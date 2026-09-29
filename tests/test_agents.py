@@ -1,6 +1,6 @@
 """Agents as objects (plan 00, Block 1): the store, the ping, the runs join, the target on the request body.
 
-Run with `env -u WANDB_API_KEY uv run pytest -q`. The store lives in a temp history/, the spawn is a stand-in,
+Run with `uv run pytest -q`. The store lives in a temp history/, the spawn is a stand-in,
 and the "agents" pinged are `FakeAgent`s from conftest on ephemeral ports. Nothing here needs a key or a model.
 """
 
@@ -32,6 +32,10 @@ class FakeProc:
     def poll(self):
         return self.returncode
 
+    def wait(self, timeout=None):
+        self.returncode = 0
+        return 0
+
 
 @pytest.fixture
 def world(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> dict[str, Path]:
@@ -59,12 +63,9 @@ def world(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> dict[str, Path]:
     monkeypatch.setenv("ANTIBODY_IGNORE_EXTERNAL_LOOP", "1")
     monkeypatch.delenv("ANTIBODY_LOOP_CMD", raising=False)
     monkeypatch.delenv("ANTIBODY_TARGET", raising=False)
-    # No socket probe of 8790 from the tests: whatever is on the developer's machine must not change a result.
-    monkeypatch.setattr(example_agent, "port_answers", lambda: False)
-    monkeypatch.setattr(example_agent, "_proc", None)
-    monkeypatch.setattr(example_agent, "RUNS_DIR", runs)
-    monkeypatch.setattr(example_agent, "LOG_PATH", runs / "example_agent.log")
-    monkeypatch.setattr(example_agent, "PID_PATH", runs / "example_agent.pid")
+    # No socket probe of 8790/8792 from the tests: whatever is on the developer's machine must not change a result.
+    monkeypatch.setattr(example_agent, "port_answers", lambda ex: False)
+    monkeypatch.setattr(example_agent, "_procs", {})
     return {"runs": runs, "history": history}
 
 
@@ -79,11 +80,12 @@ def client(world: dict[str, Path], monkeypatch: pytest.MonkeyPatch) -> TestClien
 # --- the store --------------------------------------------------------------------------------------
 
 
-def test_list_starts_with_the_two_synthetic_rows(world: dict[str, Path]) -> None:
+def test_list_starts_with_the_synthetic_rows(world: dict[str, Path]) -> None:
     rows = agents.list_agents()
-    assert [r["id"] for r in rows] == ["builtin", "example"]
-    builtin, example = rows
+    assert [r["id"] for r in rows] == ["builtin", "example", "example-airline"]
+    builtin, example, airline = rows
     assert builtin["transport"] == "in-process" and builtin["url"] is None and builtin["synthetic"]
+    assert airline["url"] == "http://127.0.0.1:8792" and airline["tools_backend"] == "http://127.0.0.1:8793" and airline["domain"] == "airline"
     assert [t["name"] for t in builtin["tools"]] == ["lookup_order", "issue_refund", "send_email", "read_ticket", "set_ticket_status"]
     assert example["url"] == "http://127.0.0.1:8790" and example["running"] is False and example["synthetic"]
     assert not (world["history"] / "agents.json").exists(), "synthetic rows are never stored"
@@ -96,7 +98,7 @@ def test_add_round_trips_through_the_file(world: dict[str, Path]) -> None:
     assert len(row["id"]) >= 8 and row["id"] not in agents.RESERVED_IDS
     on_disk = json.loads((world["history"] / "agents.json").read_text())
     assert on_disk == [{k: v for k, v in row.items() if k != "synthetic"}]
-    assert agents.list_agents()[2] == row
+    assert agents.list_agents()[-1] == row
     assert agents.get_agent(row["id"]) == row
     assert not list(world["history"].glob(".agents-*")), "no temp file left behind"
 
@@ -133,8 +135,8 @@ def test_delete_removes_only_stored_rows(world: dict[str, Path]) -> None:
     a = agents.add_agent("a", "http://127.0.0.1:9991")
     b = agents.add_agent("b", "http://127.0.0.1:9992")
     agents.delete_agent(a["id"])
-    assert [r["id"] for r in agents.list_agents()] == ["builtin", "example", b["id"]]
-    for bad in ("builtin", "example", a["id"], "nope"):
+    assert [r["id"] for r in agents.list_agents()] == ["builtin", "example", "example-airline", b["id"]]
+    for bad in ("builtin", "example", "example-airline", a["id"], "nope"):
         with pytest.raises(LookupError):
             agents.delete_agent(bad)
 
@@ -142,12 +144,12 @@ def test_delete_removes_only_stored_rows(world: dict[str, Path]) -> None:
 def test_unreadable_store_reads_as_empty(world: dict[str, Path], client: TestClient) -> None:
     world["history"].mkdir()
     (world["history"] / "agents.json").write_text("{not json")
-    assert [r["id"] for r in agents.list_agents()] == ["builtin", "example"]
+    assert [r["id"] for r in agents.list_agents()] == ["builtin", "example", "example-airline"]
     (world["history"] / "agents.json").write_text(json.dumps([{"id": 1}, "x", {"id": "ok", "url": "http://h", "name": "n"}]))
-    assert [r["id"] for r in agents.list_agents()] == ["builtin", "example", "ok"]
+    assert [r["id"] for r in agents.list_agents()] == ["builtin", "example", "example-airline", "ok"]
     # A hand-edited row whose URL resolves to nothing is skipped, not raised: the runs list must not 500.
     (world["history"] / "agents.json").write_text(json.dumps([{"id": "bad", "url": "gopher://x", "name": "n"}]))
-    assert [r["id"] for r in agents.list_agents()] == ["builtin", "example"]
+    assert [r["id"] for r in agents.list_agents()] == ["builtin", "example", "example-airline"]
     assert client.get("/api/runs").status_code == 200
 
 
@@ -311,7 +313,7 @@ def test_ping_by_url_route(client: TestClient, fake_agent: FakeAgent) -> None:
 
 
 def test_agent_routes(client: TestClient, fake_agent: FakeAgent) -> None:
-    assert [a["id"] for a in client.get("/api/agents").json()] == ["builtin", "example"]
+    assert [a["id"] for a in client.get("/api/agents").json()] == ["builtin", "example", "example-airline"]
     r = client.post("/api/agents", json={"name": "x", "url": fake_agent.url})
     assert r.status_code == 201, r.text
     row = r.json()
@@ -340,6 +342,39 @@ def test_example_start_is_503_without_a_key(client: TestClient) -> None:
     r = client.post("/api/agents/example/start")
     assert r.status_code == 503 and "WANDB_API_KEY" in r.json()["detail"]
     assert client.post("/api/agents/example/stop").status_code == 404
+    assert client.post("/api/agents/example/stop", json={"name": "airline"}).status_code == 404
+    assert client.post("/api/agents/example/start", json={"name": "nope"}).status_code == 404, "an unknown example is named before the key is checked"
+    assert client.get("/api/agents/example/log?name=nope").status_code == 404
+
+
+def test_the_airline_example_is_its_own_row_and_child(client: TestClient, world: dict[str, Path], monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("WANDB_API_KEY", "test-not-a-real-key")
+    spawned: list[FakeProc] = []
+    monkeypatch.setattr(example_agent.subprocess, "Popen", lambda cmd, **kw: (spawned.append(FakeProc(cmd, **kw)) or spawned[-1]))
+    row = next(a for a in client.get("/api/agents").json() if a["id"] == "example-airline")
+    assert row["url"] == "http://127.0.0.1:8792" and row["tools_backend"] == "http://127.0.0.1:8793" and row["domain"] == "airline"
+    assert row["running"] is False and row["synthetic"] is True and "airline" in row["name"].lower()
+    r = client.post("/api/agents/example/start", json={"name": "airline"})
+    assert r.status_code == 202 and r.json()["example"] == "airline" and r.json()["url"] == "http://127.0.0.1:8792"
+    (proc,) = spawned
+    assert proc.env["AGENT_PORT"] == "8792" and proc.env["TOOLS_PORT"] == "8793"
+    assert (world["runs"] / "example_agent-airline.pid").read_text() == "4242"
+    assert (world["runs"] / "example_agent-airline.log").read_text().startswith("$ (cd examples/agents/openai_cs_airline")
+    # The two examples are independent: the airline child does not make `example` busy, and each stops its own.
+    assert client.post("/api/agents/example/start", json={"name": "airline"}).status_code == 409
+    assert client.post("/api/agents/example/start").status_code == 202 and len(spawned) == 2
+    assert spawned[1].env["AGENT_PORT"] == "8790" and "TOOLS_PORT" not in spawned[1].env
+    rows = {a["id"]: a for a in client.get("/api/agents").json()}
+    assert rows["example"]["starting"] is True and rows["example-airline"]["starting"] is True
+    assert client.post("/api/agents/example/stop", json={"name": "airline"}).json()["owned"] is True
+    assert not (world["runs"] / "example_agent-airline.pid").exists() and (world["runs"] / "example_agent.pid").exists()
+    assert client.get("/api/agents/example/log?name=airline").json()["lines"][0].startswith("$ (cd")
+    # The loop started from the airline row inherits its tools backend and world.
+    r = client.post("/api/loop/start", json={"target": "example-airline"})
+    assert r.status_code == 201, r.text
+    env = loop_ctl._handle.proc.env
+    assert env["ANTIBODY_TARGET"] == "http:http://127.0.0.1:8792" and env["ANTIBODY_TOOLS_BACKEND"] == "http://127.0.0.1:8793" and env["ANTIBODY_DOMAIN"] == "airline"
+    assert client.delete("/api/agents/example-airline").status_code in (404, 409), "a synthetic row cannot be deleted"
 
 
 def test_example_start_spawns_in_its_folder_and_409s_when_bound(client: TestClient, world: dict[str, Path], monkeypatch: pytest.MonkeyPatch) -> None:
@@ -363,8 +398,8 @@ def test_example_start_spawns_in_its_folder_and_409s_when_bound(client: TestClie
     assert example["starting"] is True and example["pid"] == 4242
     # A second start while ours is still coming up, or while anything answers on the port, is a 409.
     assert client.post("/api/agents/example/start").status_code == 409
-    monkeypatch.setattr(example_agent, "port_answers", lambda: True)
-    monkeypatch.setattr(example_agent, "_proc", None)
+    monkeypatch.setattr(example_agent, "port_answers", lambda ex: True)
+    monkeypatch.setattr(example_agent, "_procs", {})
     (world["runs"] / "example_agent.pid").unlink()
     assert client.post("/api/agents/example/start").status_code == 409
     stopped = client.post("/api/agents/example/stop")
@@ -375,14 +410,15 @@ def test_stale_pid_file_is_never_signalled(world: dict[str, Path], monkeypatch: 
     """After a reboot the pid in the file can belong to anything; only a session leader running agent.py is ours."""
     import os
 
+    ex = example_agent.example(None)
     world["runs"].mkdir()
     (world["runs"] / "example_agent.pid").write_text(str(os.getpid()))  # alive, but this test process
     signalled: list[tuple[int, int]] = []
     monkeypatch.setattr(loop_ctl, "_killpg", lambda pid, sig: signalled.append((pid, sig)))
-    assert example_agent._owned_pid() is None
+    assert example_agent._owned_pid(ex) is None
     assert not (world["runs"] / "example_agent.pid").exists(), "a pid that is not our child is forgotten"
     with pytest.raises(LookupError):
-        example_agent.stop()
+        example_agent.stop(ex)
     assert signalled == []
     # The check itself: our own pid is not a session leader whose command line names agent.py.
     assert example_agent._looks_like_our_child(os.getpid()) is False
@@ -453,3 +489,89 @@ def test_rollback_compares_targets_by_canonical_name(world: dict[str, Path], cli
     # The API pointed at the same agent in canonical form accepts the run recorded in the bare form.
     monkeypatch.setenv("ANTIBODY_TARGET", "http:http://127.0.0.1:9999")
     assert client.post("/api/rollback", json={"run": "ext", "version": 1}).status_code == 200
+
+
+# --- bring your own tools (plan 09 §4) ---------------------------------------------------------------
+
+
+@pytest.fixture
+def live_configs(world: dict[str, Path], monkeypatch: pytest.MonkeyPatch) -> Path:
+    """`chaos.state`'s config paths in the temp runs/ too, so `tools/apply` cannot write the developer's real runs/."""
+    runs = world["runs"]
+    monkeypatch.setattr(state, "CONFIGS_DIR", runs / "configs")
+    monkeypatch.setattr(state, "REGRESSION_PATH", runs / "regression.json")
+    monkeypatch.setattr(state, "CYCLES_PATH", runs / "cycles.jsonl")
+    return runs
+
+
+def test_tools_backend_is_stored_patched_and_passed_to_the_child(client: TestClient, world: dict[str, Path]) -> None:
+    created = client.post("/api/agents", json={"name": "Acme", "url": "http://127.0.0.1:9999"}).json()
+    assert created["tools_backend"] is None
+    assert all(a["tools_backend"] is None for a in client.get("/api/agents").json() if a["id"] != "example-airline")
+
+    r = client.patch(f"/api/agents/{created['id']}", json={"tools_backend": "http://127.0.0.1:9998"})
+    assert r.status_code == 200 and r.json()["tools_backend"] == "http://127.0.0.1:9998"
+    assert client.patch(f"/api/agents/{created['id']}", json={"tools_backend": "ftp://x"}).status_code == 400
+    assert client.patch("/api/agents/builtin", json={"tools_backend": "http://127.0.0.1:1"}).status_code == 404
+    assert client.patch("/api/agents/nope", json={"tools_backend": None}).status_code == 404
+
+    out = loop_ctl.start(loop_ctl.LoopStartBody(target=created["id"]))
+    assert loop_ctl._handle.proc.env["ANTIBODY_TOOLS_BACKEND"] == "http://127.0.0.1:9998"
+    assert out["target"].endswith("127.0.0.1:9999")
+    # While it runs the value cannot change under the child.
+    assert client.patch(f"/api/agents/{created['id']}", json={"tools_backend": None}).status_code == 409
+    loop_ctl._handle = None
+    # Back to the sandbox: the child sees the variable set empty, so an .env value cannot win.
+    assert client.patch(f"/api/agents/{created['id']}", json={"tools_backend": None}).json()["tools_backend"] is None
+    loop_ctl.start(loop_ctl.LoopStartBody(target=created["id"]))
+    assert loop_ctl._handle.proc.env["ANTIBODY_TOOLS_BACKEND"] == ""
+    created2 = client.post("/api/agents", json={"name": "B", "url": "http://127.0.0.1:9997", "tools_backend": "http://127.0.0.1:9996"}).json()
+    assert created2["tools_backend"] == "http://127.0.0.1:9996"
+
+
+def test_tools_proposal_and_apply(client: TestClient, live_configs: Path) -> None:
+    fake = FakeAgent(tools=[{"name": "lookup_order", "description": ""}, {"name": "issue_refund", "description": ""}, {"name": "send_sms", "description": "texts the customer"}])
+    try:
+        agent = client.post("/api/agents", json={"name": "Acme", "url": fake.url}).json()
+        before = client.get(f"/api/agents/{agent['id']}/tools").json()
+        assert before == {"tools": None, "mapping": None, "classes": {}, "starter_rules": {}}
+        assert client.post(f"/api/agents/{agent['id']}/ping").json()["ok"] is True
+        doc = client.get(f"/api/agents/{agent['id']}/tools").json()
+        assert [t["name"] for t in doc["tools"]] == ["lookup_order", "issue_refund", "send_sms"]
+        assert doc["classes"] == {"lookup_order": "read", "issue_refund": "money", "send_sms": "message"}
+        assert set(doc["starter_rules"]) == {"issue_refund", "send_sms"}
+        assert doc["starter_rules"]["issue_refund"]["max_calls"] == 1
+        assert doc["mapping"]["unknown"] == ["send_sms"]
+
+        assert client.post(f"/api/agents/{agent['id']}/tools/apply", json={"rules": {}}).status_code == 400
+        r = client.post(f"/api/agents/{agent['id']}/tools/apply", json={"rules": doc["starter_rules"]})
+        assert r.status_code == 201, r.text
+        cfg = r.json()
+        assert cfg["version"] == 0 and cfg["parent_version"] is None
+        assert set(cfg["tool_policy"]["tool_rules"]) == {"issue_refund", "send_sms"}
+        assert "starter tool rules for Acme" in cfg["patch_note"]
+        assert (live_configs / "configs" / "v0.json").exists()
+        # The fresh tree is labelled as this agent's, not read as a legacy built-in run.
+        assert json.loads((live_configs / "run.json").read_text())["target"].endswith(fake.url.split("//")[1])
+        # A second apply tightens on top of the first as v1.
+        r2 = client.post(f"/api/agents/{agent['id']}/tools/apply", json={"rules": {"send_sms": {"deny": True}}})
+        assert r2.status_code == 201, r2.text
+        assert r2.json()["version"] == 1
+        rules = r2.json()["tool_policy"]["tool_rules"]
+        assert rules["send_sms"]["deny"] is True and rules["send_sms"]["requires_verified_lookup"] is True and "issue_refund" in rules
+        assert client.get("/api/agents/nope/tools").status_code == 404
+    finally:
+        fake.close()
+
+
+def test_tools_apply_refuses_while_running_or_for_another_agents_live_run(client: TestClient, live_configs: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    agent = client.post("/api/agents", json={"name": "Acme", "url": "http://127.0.0.1:9999"}).json()
+    rules = {"rules": {"issue_refund": {"deny": True}}}
+    live_configs.mkdir(exist_ok=True)
+    (live_configs / "run.json").write_text(json.dumps({"world": "mock", "target": "builtin", "flags": []}))
+    r = client.post(f"/api/agents/{agent['id']}/tools/apply", json=rules)
+    assert r.status_code == 409 and "not this agent" in r.json()["detail"]
+    (live_configs / "run.json").write_text(json.dumps({"world": "mock", "target": "http://127.0.0.1:9999", "flags": []}))
+    assert client.post(f"/api/agents/{agent['id']}/tools/apply", json=rules).status_code == 201
+    monkeypatch.setattr(loop_ctl, "state", lambda: {**loop_ctl.IDLE, "running": True})
+    assert client.post(f"/api/agents/{agent['id']}/tools/apply", json=rules).status_code == 409

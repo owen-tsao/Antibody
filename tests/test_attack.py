@@ -12,10 +12,10 @@ from fastapi.testclient import TestClient
 
 from api import attack
 from chaos import toolserver
-from chaos.scenarios import SEED_SCENARIOS
+from chaos.domains import load_domain
 from chaos.target import TARGET_ENV
 
-INJECTION = next(s for s in SEED_SCENARIOS if s.id == "seed-injection-refund")
+INJECTION = next(s for s in load_domain("retail").seeds if s.id == "seed-injection-refund")
 
 
 @pytest.fixture

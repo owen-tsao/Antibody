@@ -37,33 +37,31 @@ import urllib.parse
 from datetime import datetime, timezone
 
 from api import example_agent, store
-from chaos.target import BuiltinTarget, get_json, is_timeout, post_json, resolve_target
+from chaos.target import BuiltinTarget, is_timeout, list_tools, post_json, resolve_target
 
 
 def storefront_tools() -> list[str]:
-    """The sandbox storefront's tool names (`chaos.tools.TOOL_FUNCS`), imported on first use.
+    """The active pack's tool names (`ANTIBODY_DOMAIN`, default retail), imported on first use.
 
-    `chaos.tools` does `import weave`, a slow library import the API keeps off its startup path
+    The packs do `import weave`, a slow library import the API keeps off its startup path
     (see `api.manifest`); the list is only needed once someone pings or reads the built-in row.
     """
-    from chaos.tools import TOOL_FUNCS
+    from chaos.domains import active_domain
 
-    return list(TOOL_FUNCS)
+    return list(active_domain().tools)
 
 
 def _customer_email(customer_id: str) -> str:
-    from chaos.tools import customer_email_for
+    from chaos.domains import active_domain
 
-    return customer_email_for(customer_id)
+    return active_domain().customer_email(customer_id)
 
 
 BUILTIN_ID = "builtin"
-EXAMPLE_ID = "example"
-RESERVED_IDS = frozenset({BUILTIN_ID, EXAMPLE_ID})
+RESERVED_IDS = frozenset({BUILTIN_ID, *(e.row_id for e in example_agent.EXAMPLES.values())})
 MAX_URL_BYTES = 2048
 MAX_NAME_CHARS = 80
 PING_TIMEOUT_S = 10.0
-TOOLS_TIMEOUT_S = 2.0
 REPLY_PREVIEW_CHARS = 160
 # Something the agent can answer without wanting a tool: the point is reachability, not a scenario.
 HELLO_MESSAGE = "Hello! Quick check that you are reachable. Please just say hi and tell me what you can help with."
@@ -137,33 +135,40 @@ def _builtin_row() -> dict:
         "created_at": None,
         "last_ping": None,
         "tools": [{"name": n, "description": ""} for n in storefront_tools()],
+        "tools_backend": None,
+        "domain": None,
         "synthetic": True,
     }
 
 
-def _example_row(*, probe: bool = True) -> dict:
+def _example_row(ex: example_agent.Example, *, probe: bool = True) -> dict:
     row = {
-        "id": EXAMPLE_ID,
-        "name": "Example agent (OpenAI Agents SDK)",
+        "id": ex.row_id,
+        "name": ex.title,
         "transport": "http",
-        "url": example_agent.URL,
+        "url": ex.url,
         "created_at": None,
         "last_ping": None,
         "tools": None,
+        "tools_backend": ex.tools_backend,
+        "domain": ex.domain,
         "synthetic": True,
     }
     if probe:
-        row.update({k: v for k, v in example_agent.state().items() if k in ("running", "starting", "pid")})
+        row.update({k: v for k, v in example_agent.state_of(ex).items() if k in ("running", "starting", "pid")})
     return row
 
 
 def list_agents(*, probe: bool = True) -> list[dict]:
-    """`builtin`, `example`, then the stored rows oldest first. Stored rows carry `synthetic: false`.
+    """`builtin`, the bundled examples (`example`, `example-airline`), then the stored rows oldest first. Stored rows
+    carry `synthetic: false`.
 
-    `probe=False` skips the example agent's port check (`running`/`starting`/`pid` are then absent):
+    `probe=False` skips the examples' port checks (`running`/`starting`/`pid` are then absent):
     for joins and id lookups that only need names and URLs, one HTTP probe per call would be waste.
     """
-    return [_builtin_row(), _example_row(probe=probe), *({**row, "synthetic": False} for row in _read())]
+    # Rows stored before plan 09 have no `tools_backend`, rows before packs no `domain`; read both as "none".
+    examples = [_example_row(ex, probe=probe) for ex in example_agent.EXAMPLES.values()]
+    return [_builtin_row(), *examples, *({"tools_backend": None, "domain": None, **row, "synthetic": False} for row in _read())]
 
 
 def get_agent(agent_id: str) -> dict | None:
@@ -185,8 +190,13 @@ def _validate_url(url: str) -> str:
     return url.rstrip("/")
 
 
-def add_agent(name: str, url: str) -> dict:
-    """Store a new agent. ValueError for a bad name/URL (400); Duplicate when the URL is already connected (409)."""
+def add_agent(name: str, url: str, tools_backend: str | None = None, domain: str | None = None) -> dict:
+    """Store a new agent. ValueError for a bad name/URL/domain (400); Duplicate when the URL is already connected (409).
+
+    `tools_backend` (plan 09 §4) is where the agent's real tools live — `POST <tools_backend>/tools/{name}` —
+    so the tool bus can front them instead of the sandbox storefront; None means the sandbox. `domain` is the pack
+    whose world the agent speaks (`chaos.domains.list_domains`); None means the API's default (`ANTIBODY_DOMAIN`).
+    """
     name = " ".join(name.split())
     if not name:
         raise ValueError("name must not be empty")
@@ -202,6 +212,8 @@ def add_agent(name: str, url: str) -> dict:
         "created_at": datetime.now(timezone.utc).isoformat(),
         "last_ping": None,
         "tools": None,
+        "tools_backend": _validate_url(tools_backend) if tools_backend else None,
+        "domain": validate_domain(domain),
     }
     with _store_lock:
         rows = _read()
@@ -211,6 +223,32 @@ def add_agent(name: str, url: str) -> dict:
                 raise Duplicate(f"{url} is already connected as {existing['name']!r} (id {existing['id']})")
         _write([*rows, row])
     return {**row, "synthetic": False}
+
+
+def validate_domain(domain: str | None) -> str | None:
+    """A pack name from `chaos.domains.list_domains()`, or None for the default. ValueError otherwise."""
+    from chaos.domains import list_domains
+
+    if domain is None or not domain.strip():
+        return None
+    if domain not in list_domains():
+        raise ValueError(f"unknown domain {domain!r}; one of {list_domains()}")
+    return domain
+
+
+def set_tools_backend(agent_id: str, tools_backend: str | None) -> dict:
+    """Point a stored agent at its real tools, or back at the sandbox (None). LookupError for a synthetic/unknown id; ValueError for a bad URL."""
+    if agent_id in RESERVED_IDS:
+        raise LookupError(f"agent {agent_id!r} is built in; its tools are the sandbox's")
+    backend = _validate_url(tools_backend) if tools_backend else None
+    with _store_lock:
+        rows = _read()
+        row = next((r for r in rows if r["id"] == agent_id), None)
+        if row is None:
+            raise LookupError(f"no agent {agent_id!r}")
+        row["tools_backend"] = backend
+        _write(rows)
+    return {"tools_backend": None, "domain": None, **row, "synthetic": False}
 
 
 def delete_agent(agent_id: str) -> None:
@@ -272,23 +310,6 @@ def tool_mapping(tools: list[dict] | None) -> dict | None:
     return {"known": [n for n in names if n in known_names], "unknown": [n for n in names if n not in known_names]}
 
 
-def _fetch_tools(url: str) -> list[dict] | None:
-    """`GET <url>/tools` as `[{name, description}]`; None on any failure (the route is optional)."""
-    try:
-        doc = get_json(f"{url}/tools", TOOLS_TIMEOUT_S)
-    except Exception:  # noqa: BLE001 - absent route, refused, timed out, not JSON: all mean "does not list tools"
-        return None
-    if not isinstance(doc, list):
-        return None
-    out = []
-    for item in doc:
-        if isinstance(item, dict) and isinstance(item.get("name"), str):
-            out.append({"name": item["name"], "description": item.get("description") if isinstance(item.get("description"), str) else ""})
-        elif isinstance(item, str):
-            out.append({"name": item, "description": ""})
-    return out
-
-
 def _describe_error(e: Exception) -> str:
     if is_timeout(e):
         return f"timed out after {PING_TIMEOUT_S:.0f}s"
@@ -334,7 +355,7 @@ def ping(agent: dict) -> dict:
         else:
             result = {"ok": False, "latency_ms": latency, "error": 'agent returned no reply: expected {"reply": "..."}'}
     # No tool listing when the hello already failed: a black-hole host would cost another 2 s for nothing.
-    tools = _fetch_tools(url) if result["ok"] else None
+    tools = list_tools(url) if result["ok"] else None
     result["tools"] = tools
     result["mapping"] = tool_mapping(tools)
     _record_ping(agent["id"], result)

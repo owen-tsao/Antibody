@@ -20,7 +20,7 @@ def test_builtin_target_keeps_its_display_name_and_model(monkeypatch: pytest.Mon
     monkeypatch.delenv(TARGET_ENV, raising=False)
     target = manifest.build()["target"]
     assert target == {
-        "name": manifest.TARGET_NAME,
+        "name": manifest.TARGET_NAMES["retail"],
         "model": target["model"],
         "model_short": manifest._short_model(target["model"]),
         "transport": "in-process",
@@ -39,7 +39,7 @@ def test_external_target_reports_its_canonical_name_url_and_no_model(monkeypatch
         "url": "http://localhost:8790",
     }
     # Only `target` depends on the env; the rest of the manifest is the same for every target.
-    assert set(built) == {"target", "models", "tools", "families", "defaults"}
+    assert set(built) == {"target", "domain", "models", "tools", "families", "defaults"}
     assert [t["name"] for t in built["tools"]][:3] == ["lookup_order", "issue_refund", "send_email"]
 
 

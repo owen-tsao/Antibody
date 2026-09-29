@@ -22,6 +22,9 @@ is what the Makefile waits on and where the UI learns whether a key is set.
 Without WANDB_API_KEY the API is Replay-only: /api/attack and POST /api/loop/start answer 503
 instead of spawning work that would die on `get_client()`.
 
+Request bodies are capped at the front door (`BodyCap`: `MAX_BODY_BYTES`, tighter per route in `BODY_CAPS`) and
+answer 413 before anything is buffered; a 422 for a body over `ECHO_MAX_BYTES` omits FastAPI's per-error `input` echo.
+
 Precedence for status, state and cycles is live > replay > file: a running loop always owns the
 screen, so a replay is ignored *and stopped* the moment one is seen (`replay_if_no_loop`), and
 `POST /api/loop/start` stops an active replay before spawning. Only with no loop alive does an
@@ -42,26 +45,41 @@ can exercise replay while a real run owns runs/. Never set it on the demo server
 
 from __future__ import annotations
 
+import json
 import logging
 from contextlib import asynccontextmanager
 from typing import Literal
 
-from fastapi import FastAPI, HTTPException, Query, Request
+from fastapi import FastAPI, HTTPException, Query, Request, Response
+from fastapi.encoders import jsonable_encoder
 from fastapi.exception_handlers import request_validation_exception_handler
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
+from starlette.datastructures import Headers
+from starlette.types import ASGIApp, Message, Receive, Scope, Send
 
-from api import agents, attack, example_agent, loop_ctl, manifest, replay, rollback, store
+from api import agents, attack, auth, example_agent, incidents, loop_ctl, manifest, replay, rollback, schedules, store, tool_setup
 from api.loop_ctl import LoopStartBody
 from api.store import Source
-from chaos import state
-from chaos.state import ROOT, latest_version
+from chaos import gateway, scenarios, state
+from chaos.schemas import ScenarioKind, ToolRule
+from chaos.state import ROOT
 
 WEB_DIST = ROOT / "web" / "dist"
 NO_KEY_MESSAGE = "WANDB_API_KEY missing; add it to .env and restart the API (Replay works without one)"
 LOOP_START_PATH = "/api/loop/start"
+IMPORT_PATH = "/api/scenarios/import"
+
+# Request bodies the API accepts, in bytes. Every body is a small JSON document; the one paste route carries a
+# transcript capped at `scenarios.IMPORT_MAX_CHARS` characters, which JSON-escaped in UTF-8 stays well under its
+# cap. Over the line the answer is 413 before the body is buffered or parsed — a 5 MB paste used to be read whole,
+# rejected by Pydantic, and echoed back as an 11 MB 422.
+MAX_BODY_BYTES = 1024 * 1024
+BODY_CAPS = {IMPORT_PATH: 256 * 1024}
+# A 422 echoes the offending `input` per error, which for a body over this size repeats the paste once per field.
+ECHO_MAX_BYTES = 4096
 
 # uvicorn only installs handlers for its own loggers; logging under its name is the one way a
 # line reliably reaches the terminal the server was started from.
@@ -80,18 +98,95 @@ async def _lifespan(_: FastAPI):
     except OSError as e:  # noqa: BLE001 - a half-moved archive must not stop the API from serving
         _log.warning("could not migrate runs/archive into history/: %s", e)
     attack.warm_weave()
+    # Scheduled runs (api.schedules): a 30 s ticker; `ANTIBODY_NO_SCHEDULER=1` keeps it off (tests, CI).
+    schedules.start_daemon()
     yield
+    schedules.stop_daemon()
 
 
 app = FastAPI(title="Antibody API", version="0.1.0", lifespan=_lifespan)
 
 
+def body_cap(path: str) -> int:
+    """How many body bytes a route may carry: its own line from `BODY_CAPS`, else `MAX_BODY_BYTES`."""
+    return BODY_CAPS.get(path, MAX_BODY_BYTES)
+
+
+def too_large(cap: int) -> str:
+    return f"request body is larger than {cap} bytes"
+
+
+class BodyCap:
+    """Pure ASGI front door for request size: a declared `Content-Length` over the route's cap is 413 at once, and a body
+    that arrives without one (chunked) is counted as it streams and refused at the same line — the 413 goes out from
+    here, the app is handed a disconnect so it stops reading, and whatever it answers to that is dropped. Not an
+    exception raised from `receive`: `BaseHTTPMiddleware` awaits `receive` inside a task group, which would wrap it in
+    an `ExceptionGroup` that FastAPI turns into a 400. Outermost on purpose: nothing downstream buffers a byte over the cap."""
+
+    def __init__(self, app: ASGIApp):
+        self.app = app
+
+    async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
+        if scope["type"] != "http":
+            await self.app(scope, receive, send)
+            return
+        cap = body_cap(scope["path"])
+        refusal = JSONResponse(status_code=413, content={"detail": too_large(cap)})
+        declared = Headers(scope=scope).get("content-length", "")
+        if declared.isdigit() and int(declared) > cap:
+            await refusal(scope, receive, send)
+            return
+        seen = 0
+        refused = False
+
+        async def counted() -> Message:
+            nonlocal seen, refused
+            message = await receive()
+            if message["type"] == "http.request" and not refused:
+                seen += len(message.get("body", b""))
+                if seen > cap:
+                    refused = True
+                    await refusal(scope, receive, send)
+                    return {"type": "http.disconnect"}
+            return message
+
+        async def unless_refused(message: Message) -> None:
+            if not refused:
+                await send(message)
+
+        await self.app(scope, counted, unless_refused)
+
+
+@app.middleware("http")
+async def _bearer_token(request: Request, call_next):
+    """`ANTIBODY_API_TOKEN` set → every /api route but /api/health wants the bearer (api.auth). A JSONResponse
+    rather than an HTTPException: raised inside middleware, an exception skips FastAPI's handlers."""
+    if not auth.authorized(request):
+        return auth.refusal()
+    return await call_next(request)
+
+
+app.add_middleware(BodyCap)
+
+
+def body_size(request: Request, exc: RequestValidationError) -> int:
+    """The rejected body's size in bytes: the declared length when there is one, else the parsed document's."""
+    declared = request.headers.get("content-length", "")
+    if declared.isdigit():
+        return int(declared)
+    body = getattr(exc, "body", None)
+    if body is None:
+        return 0
+    return len(body) if isinstance(body, (bytes, str)) else len(json.dumps(body, default=str))
+
+
 @app.exception_handler(RequestValidationError)
-async def _body_rules_are_400s(request: Request, exc: RequestValidationError) -> JSONResponse:
-    """A `LoopStartBody` `model_validator` rule ("nothing to run", "until_quiet cannot exceed chaos_cycles")
-    is a client error the drawer shows verbatim, so `POST /api/loop/start` answers 400 with the plain
-    message. Only that route and only errors located in its body qualify; everywhere else, and for
-    field-level errors (a value out of range, a wrong type), FastAPI's 422 envelope stands."""
+async def _validation_errors(request: Request, exc: RequestValidationError) -> JSONResponse:
+    """Two departures from FastAPI's 422 envelope. A `LoopStartBody` `model_validator` rule ("nothing to run",
+    "until_quiet cannot exceed chaos_cycles") is a client error the drawer shows verbatim, so `POST /api/loop/start`
+    answers 400 with the plain message — only that route and only errors located in its body. And for a body over
+    `ECHO_MAX_BYTES` the per-error `input` echo is dropped: the answer says where and why without repeating the paste.
+    Everywhere else, and for field-level errors on a small body, the standard envelope stands."""
     if request.url.path == LOOP_START_PATH:
         rules = [
             e["msg"].removeprefix("Value error, ")
@@ -100,6 +195,9 @@ async def _body_rules_are_400s(request: Request, exc: RequestValidationError) ->
         ]
         if rules:
             return JSONResponse(status_code=400, content={"detail": rules[0]})
+    if body_size(request, exc) > ECHO_MAX_BYTES:
+        errors = [{k: v for k, v in e.items() if k != "input"} for e in exc.errors()]
+        return JSONResponse(status_code=422, content={"detail": jsonable_encoder(errors)})
     return await request_validation_exception_handler(request, exc)
 
 
@@ -173,6 +271,8 @@ def get_health() -> dict:
         "golden_exists": replay.GOLDEN_LOG.exists() and replay.GOLDEN_CYCLES.exists(),
         "has_api_key": not attack.missing_api_key(),
         "weave": attack.weave_status(),
+        # Whether every other /api route wants `Authorization: Bearer` (api.auth); never the token.
+        "auth_required": auth.required(),
     }
 
 
@@ -191,10 +291,12 @@ def get_state(source: str = Query("live")) -> dict:
 
     last_gate: Literal["accepted", "rejected"] | None = None
     legit_pass_rate: float | None = None
+    legit_covered: dict[str, int] | None = None
     for rec in reversed(cycles):
         if rec.gate is not None:
             last_gate = "accepted" if rec.gate.accepted else "rejected"
             legit_pass_rate = rec.gate.legit_pass_rate
+            legit_covered = rec.gate.legit_covered
             break
 
     out = {
@@ -203,6 +305,8 @@ def get_state(source: str = Query("live")) -> dict:
         ),
         "suite_size": cycles[-1].regression_suite_size if cycles else 0,
         "legit_pass_rate": legit_pass_rate,
+        # The denominator behind the rate: legit tasks the target could perform, of the pack's total (None = all).
+        "legit_covered": legit_covered,
         "last_gate": last_gate,
         "loop": loop_ctl.state(),
         "source": "replay" if replaying else src,
@@ -247,13 +351,19 @@ def get_configs(source: str = Query("live")) -> list[dict]:
 
 
 def _config_rows(src: Source) -> list[dict]:
+    decisions = store.read_approvals(src)
     out = []
     for v in store.config_versions(src):
         cfg = store.read_config(src, v)
         if cfg is None:
             continue
         out.append(
-            {"version": cfg.version, "parent_version": cfg.parent_version, "patch_note": cfg.patch_note}
+            {
+                "version": cfg.version,
+                "parent_version": cfg.parent_version,
+                "patch_note": cfg.patch_note,
+                "review": state.review_status(cfg.version, decisions),
+            }
         )
     return out
 
@@ -267,15 +377,68 @@ def get_config(version: int, source: str = Query("live")) -> dict:
     return cfg.model_dump()
 
 
+# --- Approval: which saved versions a person certified (docs/plans/09, §2) ------------------------------
+
+
+class ReviewBody(BaseModel):
+    status: Literal["approved", "rejected"]
+    note: str = Field("", max_length=500)
+
+
+@app.get("/api/approvals")
+def get_approvals(source: str = Query("live")) -> dict:
+    """`{certified, decisions: [{version, status, at, note}]}` for every saved version of a run; absent = pending."""
+    src = _read_source(_source(source))
+    decisions = store.read_approvals(src)
+    return {
+        "certified": state.approved_version(decisions),
+        "decisions": [
+            {"version": v, **(decisions.get(v) or {"status": "pending", "at": None, "note": ""})}
+            for v in store.config_versions(src)
+        ],
+    }
+
+
+@app.post("/api/configs/{version}/review")
+def review_config(version: int, body: ReviewBody) -> dict:
+    """Approve or reject one live version. Allowed while the loop runs: the loop never reads this file."""
+    if store.read_config("live", version) is None:
+        raise HTTPException(404, f"no live config v{version}")
+    with loop_ctl.runs_lock:
+        entry = state.review(version, body.status, body.note)
+    # The decision as feedback on the evaluation that admitted the version, when this process traces (plan 11 §4.6);
+    # off the request thread, and silently skipped without a client or a stored call id.
+    attack.record_decision_later(store.eval_call_id("live", version), body.status, body.note)
+    return {"version": version, **entry, "certified": state.approved_version()}
+
+
+@app.get("/api/review/inbox")
+def get_review_inbox() -> list[dict]:
+    """Every saved version per agent, split into `pending` and `decided` (api.store.review_inbox): the Review index in one poll
+    instead of three reads per run. Golden is not a run anyone decides on and is left out."""
+    return store.review_inbox(get_runs())
+
+
 @app.get("/api/regression")
 def get_regression(source: str = Query("live")) -> list[dict]:
     src = _read_source(_source(source))
+    # The suite is the one live file a person writes before any run exists (an imported incident); show it
+    # rather than the golden fallback, which the other read routes take on an empty tree.
+    if source == "live" and src == "golden" and not replay_if_no_loop() and store.run_paths("live").regression.exists():
+        src = "live"
     return [s.model_dump() for s in store.read_regression(src)]
 
 
 @app.get("/api/manifest")
 def get_manifest() -> dict:
     return manifest.build()
+
+
+@app.get("/api/domains")
+def get_domains() -> list[dict]:
+    """Every domain pack the loop can run in: `[{name, tools: [{name, class}], families: [name], legit: number}]`.
+    Built from the packs on first request (they import weave, kept off the API's startup path like the manifest)."""
+    return manifest.domains()
 
 
 # --- Run history (docs/plans/02, B1) ---------------------------------------------------------------
@@ -301,8 +464,12 @@ def _live_row() -> dict | None:
     row = store.run_manifest("live")
     if row is None:
         return None
-    if loop_ctl.state()["running"]:
+    loop = loop_ctl.state()
+    if loop["running"]:
         row["finished_at"] = None
+        # A `vulnerability` measurement re-attacks this run's versions (plan 11 §7): the one we spawned says so in its
+        # settings; one started from a terminal, or the epilogue of a `--vulnerability` run, says so in status.json.
+        row["measuring"] = (loop["settings"] or {}).get("mode") == "vulnerability" or store.read_status().get("measuring") == "vulnerability"
     return {**row, "recording": False, "label": None, "current": True}
 
 
@@ -363,6 +530,14 @@ def get_run(run_id: str) -> dict:
 class AgentBody(BaseModel):
     name: str
     url: str
+    # Where the agent's real tools live (`POST <tools_backend>/tools/{name}`); omitted = the sandbox storefront.
+    tools_backend: str | None = None
+    # The domain pack whose world this agent speaks (`GET /api/domains`); omitted = the API's default.
+    domain: str | None = Field(None, max_length=32)
+
+
+class AgentPatchBody(BaseModel):
+    tools_backend: str | None = None
 
 
 @app.get("/api/agents")
@@ -375,10 +550,53 @@ def get_agents() -> list[dict]:
 def agent_create(body: AgentBody) -> dict:
     """Connect an agent by name and `http(s)://` URL. 400 for a bad name or URL, 409 when that URL is already connected."""
     try:
-        return agents.add_agent(body.name, body.url)
+        return agents.add_agent(body.name, body.url, body.tools_backend, body.domain)
     except ValueError as e:
         raise HTTPException(400, str(e))
     except agents.Duplicate as e:
+        raise HTTPException(409, str(e))
+
+
+@app.patch("/api/agents/{agent_id}")
+def agent_patch(agent_id: str, body: AgentPatchBody) -> dict:
+    """Point a connected agent at its real tools (`tools_backend`), or back at the sandbox with null. 404 for the
+    built-in rows or an unknown id; 400 for a bad URL; 409 while a loop runs (the running child already has its value)."""
+    if loop_ctl.is_running():
+        raise HTTPException(409, "a loop is running; change the tools backend when it finishes")
+    try:
+        return agents.set_tools_backend(agent_id, body.tools_backend)
+    except LookupError as e:
+        raise HTTPException(404, str(e))
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+
+
+@app.get("/api/agents/{agent_id}/tools")
+def agent_tools(agent_id: str) -> dict:
+    """The Tools panel (api.tool_setup): the agent's listed tools, the sandbox mapping, each tool's class and a
+    starter rule per tool. `tools: null` until a ping has listed them."""
+    agent = agents.get_agent(agent_id)
+    if agent is None:
+        raise HTTPException(404, f"no agent {agent_id!r}")
+    return tool_setup.proposal(agent)
+
+
+class ApplyRulesBody(BaseModel):
+    rules: dict[str, ToolRule]
+
+
+@app.post("/api/agents/{agent_id}/tools/apply", status_code=201)
+def agent_tools_apply(agent_id: str, body: ApplyRulesBody) -> dict:
+    """Save the rules as the next live config version. 201 the config; 400 for no rules; 404 unknown agent; 409
+    while a loop runs or when the live run belongs to another agent."""
+    agent = agents.get_agent(agent_id)
+    if agent is None:
+        raise HTTPException(404, f"no agent {agent_id!r}")
+    try:
+        return tool_setup.apply(agent, body.rules).model_dump()
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+    except rollback.RollbackRefused as e:
         raise HTTPException(409, str(e))
 
 
@@ -418,31 +636,46 @@ def agent_ping_url(body: PingUrlBody) -> dict:
         raise HTTPException(400, str(e))
 
 
+class ExampleBody(BaseModel):
+    # Which bundled example: `support` (the original, default) or `airline`. Optional so the connect screen's bodiless call keeps working.
+    name: str | None = None
+
+
+def _example(name: str | None) -> example_agent.Example:
+    try:
+        return example_agent.example(name)
+    except KeyError as e:
+        raise HTTPException(404, str(e))
+
+
 @app.post("/api/agents/example/start", status_code=202)
-def example_agent_start() -> dict:
-    """Spawn the example agent on 8790. 202 because the first start syncs its venv and can take a minute; the `example`
-    row's `running` flips when the port answers. 503 without a key (the agent calls inference); 409 if 8790 is taken."""
+def example_agent_start(body: ExampleBody | None = None) -> dict:
+    """Spawn a bundled example agent on its port. 202 because the first start syncs its venv and can take a minute; the
+    row's `running` flips when the port answers. 503 without a key (the agents call inference); 409 if the port is taken;
+    404 for a name that is not an example."""
+    ex = _example(body.name if body else None)
     if attack.missing_api_key():
         raise HTTPException(503, NO_KEY_MESSAGE)
     try:
-        return example_agent.start()
+        return example_agent.start(ex)
     except example_agent.PortBusy as e:
-        raise HTTPException(409, {"message": str(e), **example_agent.state()})
+        raise HTTPException(409, {"message": str(e), **example_agent.state_of(ex)})
 
 
 @app.post("/api/agents/example/stop")
-def example_agent_stop() -> dict:
-    """Stop the example agent this API spawned. 404 when nothing is running; an agent on 8790 that someone else started
+def example_agent_stop(body: ExampleBody | None = None) -> dict:
+    """Stop the example agent this API spawned. 404 when nothing is running; an agent on the port that someone else started
     is reported (`owned: false`) and left alone."""
+    ex = _example(body.name if body else None)
     try:
-        return example_agent.stop()
+        return example_agent.stop(ex)
     except LookupError as e:
         raise HTTPException(404, str(e))
 
 
 @app.get("/api/agents/example/log")
-def example_agent_log(tail: int = Query(200, ge=1, le=5000)) -> dict:
-    return {"lines": example_agent.log_tail(tail)}
+def example_agent_log(tail: int = Query(200, ge=1, le=5000), name: str | None = None) -> dict:
+    return {"lines": example_agent.log_tail(_example(name), tail)}
 
 
 # --- Loop control ---------------------------------------------------------------
@@ -457,11 +690,11 @@ def loop_start(body: LoopStartBody) -> dict:
     runs (`_body_rules_are_400s`); a `resume` with no saved config, or a `target` naming no agent, is 400
     here rather than a child that exits 1 a second later.
     """
-    if body.resume and latest_version() is None:
-        raise HTTPException(400, "nothing to resume: no saved config to continue from")
-    if body.target is not None and agents.get_agent(body.target) is None:
-        raise HTTPException(400, f"unknown agent {body.target!r}")
-    if attack.missing_api_key():
+    try:
+        loop_ctl.preflight(body)
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+    except loop_ctl.MissingKey:
         raise HTTPException(503, NO_KEY_MESSAGE)
     # Heal always means "start a real run": a replay that was playing is the fallback, not a reason
     # to keep showing recorded data, so it is cleared before the loop is spawned.
@@ -514,6 +747,108 @@ def rollback_to(body: RollbackBody) -> dict:
         raise HTTPException(404, str(e))
     except rollback.RollbackRefused as e:
         raise HTTPException(409, str(e))
+
+
+# --- Import an incident (docs/plans/09-roadmap-v1.md §3) -------------------------------------------------
+
+
+class ImportBody(BaseModel):
+    transcript: str = Field(min_length=1, max_length=scenarios.IMPORT_MAX_CHARS)
+    kind: ScenarioKind
+    title: str = Field("", max_length=80)
+    # None: the active pack's own customer (retail: cust_owen).
+    customer_id: str | None = Field(None, max_length=64)
+
+
+@app.post(IMPORT_PATH, status_code=201)
+def import_scenario(body: ImportBody, response: Response) -> dict:
+    """A pasted support transcript becomes a live regression scenario (api.incidents). 201 `{scenario, created:
+    true}`; 200 `{…, created: false}` when the same customer text was imported before (the row is replaced);
+    400 for a paste with no customer turn; 409 while a loop runs or when the live suite is unreadable."""
+    try:
+        scenario, created = incidents.import_incident(body.transcript, kind=body.kind, title=body.title, customer_id=body.customer_id)
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+    except incidents.ImportRefused as e:
+        raise HTTPException(409, str(e))
+    if not created:
+        response.status_code = 200
+    return {"scenario": scenario.model_dump(), "created": created}
+
+
+# --- Enforcement gateway's shadow log (docs/plans/09-roadmap-v1.md §5) ------------------------------------
+
+
+@app.get("/api/gateway")
+def get_gateway_log(tail: int = Query(200, ge=1, le=5000), backend: str | None = Query(None)) -> dict:
+    """The last `tail` events the gateway (`python -m chaos.gateway`) appended to history/gateway.jsonl, oldest
+    first, and the command line that starts it. `events: []` when it has never run. `backend=<url>` keeps only the
+    rows a gateway in front of that tools backend wrote (`chaos.gateway.for_backend`, the rule the replay follows) —
+    the Agent page passes the agent's `tools_backend` — and the command then names that backend."""
+    backend = backend or None
+    return {"events": gateway.read_log(tail, backend=backend), "command": gateway.command_line(backend) if backend else gateway.command_line()}
+
+
+@app.get("/api/gateway/replay")
+def get_gateway_replay(version: str = Query("approved"), source: str = Query("live"), tail: int = Query(5000, ge=1, le=50000), backend: str | None = Query(None)) -> dict:
+    """Version N's (`approved` for the certified one) `tool_rules` re-run over the last `tail` rows of the real gateway
+    log (`chaos.gateway.replay`): the Review page's "would have blocked N of the last M real calls". The log belongs to
+    the install, not to a run, so every `source` but `golden` reads the same file; golden has no real traffic and
+    replays empty. `backend=<url>` keeps only the rows a gateway in front of that tools backend wrote — the Review
+    page passes the agent's `tools_backend`. 400 for a version that is not a number, 404 for one nobody saved."""
+    src = _source(source)
+    try:
+        cfg = gateway.load_policy_config(version)
+    except ValueError:
+        raise HTTPException(400, "version must be 'approved' or a saved version number")
+    except FileNotFoundError:
+        raise HTTPException(404, f"no saved config v{version}")
+    rows = [] if src == "golden" else gateway.read_log(tail, calls_only=False)
+    return gateway.replay(cfg, rows, backend=backend or None)
+
+
+# --- Schedules (docs/plans/09-roadmap-v1.md §6) ------------------------------------------------------------
+
+
+@app.get("/api/schedules")
+def get_schedules() -> list[dict]:
+    return [schedules.describe(r) for r in schedules.list_schedules()]
+
+
+@app.post("/api/schedules", status_code=201)
+def schedule_create(body: schedules.ScheduleBody) -> dict:
+    """400 for an unknown agent or `on_change` on the built-in agent (it never changes)."""
+    try:
+        return schedules.describe(schedules.create(body))
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+
+
+@app.patch("/api/schedules/{schedule_id}")
+def schedule_update(schedule_id: str, body: schedules.SchedulePatch) -> dict:
+    try:
+        return schedules.describe(schedules.update(schedule_id, body))
+    except LookupError as e:
+        raise HTTPException(404, str(e))
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+
+
+@app.delete("/api/schedules/{schedule_id}", status_code=204)
+def schedule_delete(schedule_id: str) -> None:
+    try:
+        schedules.delete(schedule_id)
+    except LookupError as e:
+        raise HTTPException(404, str(e))
+
+
+@app.post("/api/schedules/{schedule_id}/run")
+def schedule_run(schedule_id: str) -> dict:
+    """Fire now, whatever the trigger says. Always 200: the outcome (`started` / `skipped` / `failed`) is in `last_result`."""
+    row = schedules.get_schedule(schedule_id)
+    if row is None:
+        raise HTTPException(404, f"no schedule {schedule_id!r}")
+    return schedules.describe(schedules.fire(row))
 
 
 # --- Replay of a recorded run (docs/FRONTEND.md §3, slice 7; any past run since plan 02 B1) ------------
