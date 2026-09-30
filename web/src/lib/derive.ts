@@ -2537,22 +2537,41 @@ function blocksValue(v: State["vulnerability"] | undefined, finalVersion: number
 }
 
 export interface AttentionRow {
+  /** The newest cycle this attack got through on; the tile opens it. */
   cycle: number;
   title: string;
-  /** Why it needs a look: the gate rejected the fix, or the attack got through and no fix was tried. */
-  why: "rejected" | "unfixed";
+  /** How many cycles this attack got through without a fix shipping. */
+  count: number;
+  /** Of those, how many had a fix the gate rejected; the rest had no fix tried. */
+  rejected: number;
 }
 
 /**
- * Cycles a person should look at, newest first: an attack that got through and the config did not change for it —
- * the gate rejected the fix (`gate && !gate.accepted`) or there was no gate at all (`attack_succeeded && !gate`,
- * chaos/schemas.py). Blocked attacks and accepted fixes need nobody.
+ * Attacks a person should look at, one row per attack title, newest first: cycles where the attack got through and
+ * the config did not change for it — the gate rejected the fix (`gate && !gate.accepted`) or there was no gate at
+ * all (`attack_succeeded && !gate`, chaos/schemas.py). Blocked attacks and accepted fixes need nobody. Grouped
+ * because a run that fails the same attack eight times is one finding, not eight.
  */
 export function needsAttention(cycles: CycleRecord[]): AttentionRow[] {
-  return cycles
-    .filter((c) => c.attack_succeeded && (!c.gate || !c.gate.accepted))
-    .map((c) => ({ cycle: c.cycle, title: shortTitle(c), why: c.gate ? ("rejected" as const) : ("unfixed" as const) }))
-    .reverse();
+  const groups = new Map<string, AttentionRow>();
+  for (const c of cycles) {
+    if (!c.attack_succeeded || c.gate?.accepted) continue;
+    const title = shortTitle(c);
+    const g = groups.get(title) ?? { cycle: c.cycle, title, count: 0, rejected: 0 };
+    g.cycle = Math.max(g.cycle, c.cycle);
+    g.count += 1;
+    if (c.gate) g.rejected += 1;
+    groups.set(title, g);
+  }
+  return [...groups.values()].sort((a, b) => b.cycle - a.cycle);
+}
+
+/** The tile's chip, beside its count: why the attack is still open — `8 fixes refused`, `no fix tried yet`, or `6 refused · 2 untried`. */
+export function attentionChip(row: AttentionRow): string {
+  const untried = row.count - row.rejected;
+  if (untried === 0) return row.rejected === 1 ? "fix refused" : `${row.rejected} fixes refused`;
+  if (row.rejected === 0) return "no fix tried yet";
+  return `${row.rejected} refused · ${untried} untried`;
 }
 
 /** Who a run attacked: the joined agent's name, "Northwind Support" for the built-in target, else the raw target string. */

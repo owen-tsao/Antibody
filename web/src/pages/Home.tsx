@@ -1,3 +1,4 @@
+import { ArrowRight } from "@phosphor-icons/react";
 import { useEffect } from "react";
 
 import { api } from "@/api";
@@ -8,7 +9,7 @@ import Page from "@/components/Page";
 import Panel, { PanelEmpty, PanelRow } from "@/components/Panel";
 import type { ShellData } from "@/components/Shell";
 import { usePoll } from "@/hooks/usePoll";
-import { fmtDate, homeStats, needsAttention, readSource, runLine, runsForAgent, selectedAgent, versionSpan } from "@/lib/derive";
+import { attentionChip, fmtDate, homeStats, needsAttention, readSource, runLine, runsForAgent, selectedAgent, versionSpan } from "@/lib/derive";
 import { linkProps, RUNS } from "@/lib/routes";
 import type { RunSettings } from "@/lib/settings";
 import { eyebrow, pill, surface } from "@/lib/ui";
@@ -78,7 +79,7 @@ export default function Home({ shell, settings, onSettingsChange }: { shell: She
           </div>
 
           <div className="flex min-h-0 flex-col gap-5">
-            <Panel title="Needs attention" aside={attention && attention.length > 0 ? `${attention.length}` : undefined} className="min-h-[200px] flex-1" bodyClassName="min-h-0 overflow-y-auto">
+            <Panel title="Needs attention" aside={attention && attention.length > 0 ? `${attention.length} ${attention.length === 1 ? "attack" : "attacks"}` : undefined} className="min-h-[200px] flex-1" bodyClassName="min-h-0 overflow-y-auto">
               {!lastRun ? (
                 <PanelEmpty>Nothing yet — run Heal on Current run to find out.</PanelEmpty>
               ) : attention === null ? (
@@ -86,10 +87,27 @@ export default function Home({ shell, settings, onSettingsChange }: { shell: She
               ) : attention.length === 0 ? (
                 <PanelEmpty>Nothing outstanding — every attack that got through was fixed.</PanelEmpty>
               ) : (
-                <div className="divide-y divide-[var(--border)]">
+                // Tiles, not rows: one per attack, so the panel reads as findings and stops rhyming with the run list
+                // under it. An inset step instead of an outline — on black, hairlines are what looked cheap (plan 13).
+                <div className="grid grid-cols-2 gap-2.5 p-3">
                   {attention.map((row) => {
                     const route = { kind: "cycle" as const, id: lastRun.id, n: row.cycle };
-                    return <PanelRow key={row.cycle} {...linkProps(route)} title={row.title} line={`#${row.cycle} · ${row.why === "rejected" ? "fix rejected" : "no fix tried"}`} />;
+                    return (
+                      <a key={row.title} {...linkProps(route)} title={`opens cycle ${row.cycle}, the newest time it got through`} className="group flex min-h-[124px] flex-col justify-between gap-3 rounded-xl bg-[var(--inset)] p-3.5 shadow-[inset_0_1px_0_rgba(255,255,255,0.05)] transition-colors hover:bg-[var(--hover)]">
+                        <span className="flex items-baseline gap-1.5 whitespace-nowrap">
+                          <span className="tabular text-[22px] font-medium leading-none tracking-[-0.02em] text-[var(--fg)]">
+                            {row.count}
+                            <span className="text-[13px] text-[var(--faint)]">×</span>
+                          </span>
+                          <span className="text-[11.5px] text-[var(--muted)]">still gets through</span>
+                        </span>
+                        <span className="line-clamp-2 text-[13px] leading-snug text-[var(--fg)]">{row.title}</span>
+                        <span className="flex items-center justify-between gap-2 text-[11.5px] text-[var(--faint)]">
+                          <span className="tabular truncate">{attentionChip(row)}</span>
+                          <ArrowRight size={14} className="shrink-0 transition-colors group-hover:text-[var(--fg)]" aria-hidden />
+                        </span>
+                      </a>
+                    );
                   })}
                 </div>
               )}

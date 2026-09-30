@@ -2,7 +2,9 @@
 
 Owen, Sep 28: "all these surfaces just look cheap … maybe the grey, thin separating lines, or something else."
 Home is already reverted to the card + facts strip + Needs attention + Recent runs layout (plan 12 §1 undone
-there only; the verdict still lives on Run, Agent and the Agents tiles).
+there only; the verdict still lives on Run, Agent and the Agents tiles). That revert went one step too far: it
+restored the last *committed* Home (Sep 20, 03:00) and so also dropped the uncommitted Sep 20 change that made
+Needs attention a two-column tile grid. Rebuilt Sep 29 as grouped tiles (one per attack, count first).
 
 ## Diagnosis (checked against `web/src/index.css` and the four screenshots)
 
