@@ -353,7 +353,7 @@ def test_the_airline_example_is_its_own_row_and_child(client: TestClient, world:
     monkeypatch.setattr(example_agent.subprocess, "Popen", lambda cmd, **kw: (spawned.append(FakeProc(cmd, **kw)) or spawned[-1]))
     row = next(a for a in client.get("/api/agents").json() if a["id"] == "example-airline")
     assert row["url"] == "http://127.0.0.1:8792" and row["tools_backend"] == "http://127.0.0.1:8793" and row["domain"] == "airline"
-    assert row["running"] is False and row["synthetic"] is True and "airline" in row["name"].lower()
+    assert row["running"] is False and row["synthetic"] is True and row["name"] == example_agent.EXAMPLES["airline"].title
     r = client.post("/api/agents/example/start", json={"name": "airline"})
     assert r.status_code == 202 and r.json()["example"] == "airline" and r.json()["url"] == "http://127.0.0.1:8792"
     (proc,) = spawned

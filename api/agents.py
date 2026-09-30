@@ -7,7 +7,7 @@ users: an agent row resolves to exactly the canonical target string the loop alr
 
 The store is `history/agents.json`, a list of `{id, name, transport, url, created_at, last_ping, tools}`,
 written whole via mkstemp + `os.replace` like `chaos.state.save_regression` (the API reads it on a poll).
-Two rows are synthetic and never stored: `builtin` (the in-process demo agent, like `golden` in the runs
+Two rows are synthetic and never stored: `builtin` (the in-process Northwind Support agent, like `golden` in the runs
 list) and `example` (the OpenAI Agents SDK agent on 8790 that `api.example_agent` can spawn). Neither can
 be deleted. `api.store` stays read-only by design; this module owns the one file the API writes under
 history/.
@@ -129,7 +129,7 @@ def canonical(url_or_name: str) -> str:
 def _builtin_row() -> dict:
     return {
         "id": BUILTIN_ID,
-        "name": "Demo agent (built in)",
+        "name": "Northwind Support",
         "transport": BuiltinTarget.transport,
         "url": None,
         "created_at": None,

@@ -209,7 +209,7 @@ def test_runs_list_shape(client: TestClient, history: Path) -> None:
     assert "golden" in ids and "20260913T174437Z" in ids and "manifested-run_2" in ids
     assert "aborted-before-cycle-1" not in ids
     golden = next(r for r in rows if r["id"] == "golden")
-    assert golden["label"] == "demo tape" and golden["current"] is False
+    assert golden["label"] == "reference run" and golden["current"] is False
     keys = {
         "id", "label", "current", "started_at", "finished_at", "world", "target", "domain", "seed", "agent", "cycles",
         "accepted", "rejected", "versions", "final_version", "flags", "synthesized", "recording", "duration_s",
@@ -285,7 +285,7 @@ def test_run_detail_has_configs(client: TestClient, history: Path) -> None:
     assert doc["world"] == "zendesk"
     assert [c["version"] for c in doc["configs"]] == [0, 1, 2, 3]
     assert {"version", "parent_version", "patch_note", "review"} == set(doc["configs"][0])
-    assert client.get("/api/runs/golden").json()["label"] == "demo tape"
+    assert client.get("/api/runs/golden").json()["label"] == "reference run"
 
 
 @pytest.mark.parametrize(

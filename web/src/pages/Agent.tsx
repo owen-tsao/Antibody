@@ -217,7 +217,7 @@ export default function AgentPage({ id, shell, settings, onSettingsChange }: { i
           Running{shell.status?.cycle ? ` · cycle ${shell.status.cycle}` : ""} · open Current run →
         </a>
       ) : (
-        <button type="button" onClick={() => void heal()} disabled={!agent || healing || noKey || (isExample && exState !== "running")} title={noKey ? NO_KEY_LINE : isExample && exState !== "running" ? "Start the example agent first" : undefined} className={primaryButton}>
+        <button type="button" onClick={() => void heal()} disabled={!agent || healing || noKey || (isExample && exState !== "running")} title={noKey ? NO_KEY_LINE : isExample && exState !== "running" ? "Start the agent first" : undefined} className={primaryButton}>
           {healing ? "Starting…" : "Heal"}
         </button>
       )}
@@ -267,7 +267,7 @@ export default function AgentPage({ id, shell, settings, onSettingsChange }: { i
             </AgentCard>
           )}
 
-          {/* The per-agent chores, quiet under the card: they are maintenance, not the page's point. The demo agent has none. */}
+          {/* The per-agent chores, quiet under the card: they are maintenance, not the page's point. The built-in agent has none. */}
           {agent && (agent.id !== "builtin" || imported || note) && (
             <div className="flex flex-wrap items-center gap-x-5 gap-y-1 px-1 text-[12px]">
               {agent.id !== "builtin" && (
@@ -284,7 +284,7 @@ export default function AgentPage({ id, shell, settings, onSettingsChange }: { i
                     stop
                   </button>
                 ) : (
-                  <button type="button" onClick={() => void startExample()} disabled={starting || noKey} title={noKey ? `${NO_KEY_LINE}; the example agent calls inference` : undefined} className={quiet}>
+                  <button type="button" onClick={() => void startExample()} disabled={starting || noKey} title={noKey ? `${NO_KEY_LINE}; this agent calls inference` : undefined} className={quiet}>
                     {starting ? "starting…" : "start"}
                   </button>
                 ))}

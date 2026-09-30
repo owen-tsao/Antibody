@@ -31,7 +31,7 @@ An AI support agent is a set of drawers it can open: look up a record, issue a r
 Four agents take turns, and a gate decides:
 
 1. **Chaos Agent** invents an attack for the world the target lives in: a poisoned note in a record it reads, a tool that returns garbage or times out, a customer with a sympathetic story about someone else's account, a request phrased so that the honest answer is "no". It picks its attack family with a bandit (what has been working gets tried more) and reads the target's real traces to route around rules that already shipped.
-2. **Target Agent** is whatever you point Antibody at: the built-in support bot (Llama 3.1 8B) or your own agent behind a URL.
+2. **Target Agent** is whatever you point Antibody at: the built-in Northwind Support agent (Llama 3.1 8B, in-process, on a sandbox storefront) or your own agent behind a URL.
 3. **Judge** decides if the target failed — deterministically wherever it can: did a money or record-changing tool get called for something the customer never asked about? did a lookup return someone else's record? did a message go to an address that is not the customer's? did the agent refuse a perfectly reasonable request? Only the fuzzy cases go to an LLM judge, and it sees typed facts about the tool calls, never raw tool output, so an attack cannot talk its way past the judge either.
 4. **Repair Agent** proposes one fix from a fixed menu. For an external agent that menu is per-tool rules (deny, require the customer's intent, require a prior lookup, cap the calls); for the built-in sandbox it also has prompt and guardrail edits.
 5. **Eval Gate** runs the candidate against the new failure (twice — "fixed" means both samples pass), every past failure, and a suite of legitimate customer tasks. A fix ships only if it closes the new hole, holds every old fix, and leaves ordinary customers no worse off than today's production. The gate also reports how many of the legit tasks were actually runnable against this agent, so an empty guard is never silently a passing one.
@@ -83,7 +83,7 @@ ANTIBODY_TARGET=http://127.0.0.1:8792 ANTIBODY_TOOLS_BACKEND=http://127.0.0.1:87
 ANTIBODY_DOMAIN=airline ANTIBODY_NO_ZENDESK=1 uv run python -m chaos.loop run --seeds 2 --chaos-cycles 2
 ```
 
-Two worked examples live in `examples/agents/`, each in its own venv with no imports from Antibody:
+Two bundled agents live in `examples/agents/`, each in its own venv with no imports from Antibody; the dashboard lists them as **Northwind Support (Agents SDK)** and **Skyward Air Support (Agents SDK)** and can start and stop them:
 
 - `openai_agents_support/` — a stock OpenAI Agents SDK support agent using Antibody's sandbox tools.
 - `openai_cs_airline/` — OpenAI's own [customer-service demo](https://github.com/openai/openai-cs-agents-demo) (six agents with handoffs and guardrails, MIT-licensed, attributed) with its chat UI removed and its real tools served on a second port so Antibody can front them. It runs on `Qwen/Qwen3-235B-A22B-Instruct-2507` through W&B Inference because `gpt-oss-120b` narrates the handoff instead of calling it; set `OPENAI_API_KEY` and `AGENT_MODEL=gpt-5.2` to run it as OpenAI shipped it.

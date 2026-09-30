@@ -199,7 +199,7 @@ export default function Onboarding({
   const go = (to: OnboardingStep) => navigate(onboarding(to));
 
   const chooseDemo = () => {
-    setChosen({ id: "builtin", name: "Demo agent (built in)", url: null, domain: null });
+    setChosen({ id: "builtin", name: "Northwind Support", url: null, domain: null });
     go(5);
   };
 
@@ -210,7 +210,7 @@ export default function Onboarding({
     try {
       const rows = await api.agents();
       const row = rows.find((a) => a.id === "example");
-      if (!row) throw new Error("the example agent is not available on this API");
+      if (!row) throw new Error("this agent is not bundled with this API");
       // Already `starting` (from the Agents page a moment ago): the port is taken by its own boot, and
       // asking again would 409. Just wait for it.
       if (!row.running && !row.starting) await api.exampleStart();
@@ -223,12 +223,12 @@ export default function Onboarding({
           const last = log?.lines.filter((l) => l.trim()).at(-1);
           if (last) setLogLine(last);
           if (again.find((a) => a.id === "example")?.running) break;
-          if (Date.now() - t0 > EXAMPLE_TIMEOUT_MS) throw new Error("the example agent did not come up within three minutes; see runs/example_agent.log");
+          if (Date.now() - t0 > EXAMPLE_TIMEOUT_MS) throw new Error("the agent did not come up within three minutes; see runs/example_agent.log");
         }
       }
       const r = await api.agentPing("example");
       if (!alive.current) return;
-      if (!r.ok) throw new Error(`the example agent is up but did not answer the ping: ${r.error}`);
+      if (!r.ok) throw new Error(`the agent is up but did not answer the ping: ${r.error}`);
       setChosen({ id: "example", name: row.name, url: row.url, domain: row.domain ?? null });
       go(3);
     } catch (e) {
@@ -432,17 +432,17 @@ export default function Onboarding({
 
         {step === 1 && (
           <>
-            <Title sub="Antibody deploys it into a sandbox world and attacks it there. Pick one to start with.">Which support agent should Antibody attack?</Title>
+            <Title sub="Antibody deploys it into a sandbox world and attacks it there. Pick one to start with.">Which agent should Antibody attack?</Title>
             <div className="mt-10 grid gap-3 sm:grid-cols-3">
-              <ChoiceCard tile={{ id: "builtin", name: "Demo agent" }} title="Demo agent" body="Built in. See a full heal in minutes with nothing to set up." selected={choice === "builtin"} onSelect={() => setChoice("builtin")} disabled={exampleBusy} />
+              <ChoiceCard tile={{ id: "builtin", name: "Northwind Support" }} title="Northwind Support" body="Built in, runs in-process against a sandbox storefront. A full heal in minutes with nothing to set up." selected={choice === "builtin"} onSelect={() => setChoice("builtin")} disabled={exampleBusy} />
               <ChoiceCard
-                tile={{ id: "example", name: "Example agent" }}
-                title="Example agent"
-                body="An OpenAI Agents SDK agent we start for you on this machine."
+                tile={{ id: "example", name: "Northwind Support (Agents SDK)" }}
+                title="Northwind Support (Agents SDK)"
+                body="The same storefront on a stock OpenAI Agents SDK agent, started for you on this machine."
                 selected={choice === "example"}
                 onSelect={() => setChoice("example")}
                 disabled={exampleBusy || noKey}
-                reason={noKey ? `${NO_KEY_LINE}; the example agent calls inference` : undefined}
+                reason={noKey ? `${NO_KEY_LINE}; this agent calls inference` : undefined}
               />
               <ChoiceCard tile="connect" title="Your own" body="Any agent that answers POST /episode over HTTP." selected={choice === "own"} onSelect={() => setChoice("own")} disabled={exampleBusy} />
             </div>
@@ -450,7 +450,7 @@ export default function Onboarding({
               <p role={exampleNote ? "alert" : undefined} className={cn("mt-4 text-[12px]", exampleNote ? "text-[var(--danger)]" : "text-[var(--muted)]")}>
                 {exampleNote ?? (
                   <>
-                    starting the example agent…{logLine && <span className="code ml-2 text-[var(--faint)]">{logLine}</span>}
+                    starting Northwind Support (Agents SDK)…{logLine && <span className="code ml-2 text-[var(--faint)]">{logLine}</span>}
                   </>
                 )}
               </p>
@@ -755,7 +755,7 @@ function Contract() {
       <div className="border-t border-[var(--border)]">
         <div className="flex items-center justify-between bg-[var(--inset)] px-4 py-2 text-[12px] text-[var(--faint)]">
           <a href={EXAMPLE_README} target="_blank" rel="noreferrer" className="group rounded transition-colors hover:text-[var(--fg)]">
-            the example agent's README ↗
+            the bundled agent's README ↗
           </a>
           <button type="button" onClick={() => void copy()} className="group inline-flex items-center gap-1.5 rounded transition-colors hover:text-[var(--fg)]">
             {copied ? <Check size={12} aria-hidden /> : <Copy size={12} aria-hidden />}

@@ -77,7 +77,7 @@ def test_inbox_keeps_pending_to_the_live_run_and_archived_undecided_apart(two_ru
     rows = [
         {"id": "20260913T174437Z", "started_at": "2026-09-13T00:00:00+00:00", "current": False, "agent": {"id": "a", "name": "A"}},
         {"id": "live", "started_at": "2026-09-20T00:00:00+00:00", "current": True, "agent": {"id": "a", "name": "A"}},
-        {"id": "golden", "label": "demo tape", "current": False, "agent": None},
+        {"id": "golden", "label": "reference run", "current": False, "agent": None},
     ]
     inbox = store.review_inbox(rows)
     assert len(inbox) == 1 and inbox[0]["agent"] == {"id": "a", "name": "A"}

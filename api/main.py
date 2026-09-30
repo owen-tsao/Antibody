@@ -445,14 +445,14 @@ def get_domains() -> list[dict]:
 
 
 def _golden_row() -> dict | None:
-    """The committed demo run as one more row, so the UI has a single list to show."""
+    """The committed reference run as one more row, so the UI has a single list to show."""
     row = store.run_manifest("golden")
     if row is None:
         return None
     meta = replay.recording_meta()
     if meta is not None:
         row["started_at"] = meta["recorded_at"]
-    return {**row, "label": "demo tape", "current": False}
+    return {**row, "label": "reference run", "current": False}
 
 
 def _live_row() -> dict | None:
@@ -481,7 +481,7 @@ def _with_agent(row: dict) -> dict:
 @app.get("/api/runs")
 def get_runs() -> list[dict]:
     """Every run there is to open, newest first: the live run (`current: true`, only once it has a cycle),
-    then history/ and the golden demo tape ordered by start time. Runs with no cycles are hidden."""
+    then history/ and the golden reference run ordered by start time. Runs with no cycles are hidden."""
     rows = [{**m, "label": None, "current": False} for m in store.history_runs()]
     golden = _golden_row()
     if golden is not None and golden["cycles"] > 0:

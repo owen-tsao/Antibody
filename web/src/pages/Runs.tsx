@@ -9,7 +9,7 @@ import { cn } from "@/lib/utils";
 
 /**
  * `/app/runs` (docs/plans/07-app-rework.md §9): every run as one hairline table, newest first — the
- * current run first, labelled by whether its loop is alive; the demo tape labelled as such. A row opens
+ * current run first, labelled by whether its loop is alive; the reference run labelled as such. A row opens
  * the run; **watch** on a row that has a recording opens it playing. Runs are started from Current run,
  * not here: this page is the record.
  *

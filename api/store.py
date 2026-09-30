@@ -482,7 +482,7 @@ def review_items(run: dict, source: Source) -> list[dict]:
 def review_inbox(runs: list[dict]) -> list[dict]:
     """`[{agent: {id, name} | null, pending: [...], archived: [...], decided: [...]}]`: the Review page's index, one read.
 
-    `runs` is `GET /api/runs`' list (each row already joined to its `agent`). The golden demo tape is skipped: it is
+    `runs` is `GET /api/runs`' list (each row already joined to its `agent`). The golden reference run is skipped: it is
     not anyone's run and nothing on it can be decided. Groups are one per agent in the order the runs list has them
     (current run first, then newest); runs whose agent row is gone group under `agent: null`. `pending` holds only
     the live run's undecided versions — the ones a decision can actually be recorded on — so its length is the
@@ -492,7 +492,7 @@ def review_inbox(runs: list[dict]) -> list[dict]:
     """
     groups: dict[str | None, dict] = {}
     for run in runs:
-        if run.get("label") == "demo tape" or run["id"] == "golden":
+        if run.get("label") == "reference run" or run["id"] == "golden":
             continue
         source: Source = "live" if run.get("current") else f"{RUN_PREFIX}{run['id']}"
         try:

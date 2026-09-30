@@ -20,11 +20,11 @@ blank the line in `.env`.
 ## The walk
 
 1. **Open <http://localhost:5173/app/home> with an empty `runs/`** (`uv run python -m chaos.loop reset` first).
-   Expect the home page with no run, no orbs lit, and the golden demo tape offered — never a spinner that never
+   Expect the home page with no run, no orbs lit, and the golden reference run offered — never a spinner that never
    ends or an "API unreachable" line while the API is up. *Catches:* the empty state regressing (a page that only
    renders once cycles exist). **critical**
 
-2. **Start the example agent and connect it.** Agents → Example agent → Start; wait for `running`, then Ping.
+2. **Start the bundled Agents SDK agent and connect it.** Agents → Northwind Support (Agents SDK) → Start; wait for `running`, then Ping.
    Expect `ok`, a latency in ms, a reply preview, and the tool list (`lookup_order`, `issue_refund`, `send_email`)
    with all three marked *known*. *Catches:* the tool server / agent contract drifting (`POST /episode`,
    `GET /tools`, the session header). **critical**
@@ -34,7 +34,7 @@ blank the line in `.env`.
    (`http://127.0.0.1:8790/?x=1`) and expect a 400 explaining why. *Catches:* a ping that hangs or 500s, and
    validation that silently accepts a URL the loop cannot use. *(negative input)*
 
-4. **Heal two cycles against the example agent.** Home → pick the example agent → Heal with chaos cycles 2,
+4. **Heal two cycles against the bundled agent.** Home → pick Northwind Support (Agents SDK) → Heal with chaos cycles 2,
    repair attempts 1, seeds 1. Watch the orbs light in order (chaos → target → judge → repair → gate) and the
    cycle rows appear. Expect at least one judged cycle and the run to end idle with no orb still lit.
    *Catches:* the loop crashing on the pass-through path, the status log leaving an orb "thinking", an external
@@ -67,8 +67,8 @@ blank the line in `.env`.
    middleware, the health check getting locked out (the frontend's "API unreachable" logic depends on it).
    **critical**
 
-9. **Neighbour still works: the demo tape.** Home → Watch the demo. Expect the golden run to play with its
-   cycles, pause/resume and speed working, and the run list to still show `demo tape`. *Catches:* a schema
+9. **Neighbour still works: the reference run.** Home → Watch it back on the reference run. Expect the golden run to play with its
+   cycles, pause/resume and speed working, and the run list to still show `reference run`. *Catches:* a schema
    change that stops `data/golden` parsing (new required fields, renamed scenario fields).
 
 10. **Boundary: a huge import.** Runs → Import incident → paste a 25,000-character transcript. Expect a clear

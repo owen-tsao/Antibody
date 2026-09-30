@@ -93,8 +93,8 @@ class Example:
 
 
 EXAMPLES: dict[str, Example] = {
-    "support": Example("support", "Example agent (OpenAI Agents SDK)", "openai_agents_support", 8790),
-    "airline": Example("airline", "Example airline agent (OpenAI CS demo)", "openai_cs_airline", 8792, tools_port=8793, domain="airline"),
+    "support": Example("support", "Northwind Support (Agents SDK)", "openai_agents_support", 8790),
+    "airline": Example("airline", "Skyward Air Support (Agents SDK)", "openai_cs_airline", 8792, tools_port=8793, domain="airline"),
 }
 DEFAULT = "support"
 

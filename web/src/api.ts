@@ -314,7 +314,7 @@ export interface Manifest {
 export interface RunRow {
   /** "live" | "golden" | a history folder name. */
   id: string;
-  /** Only the golden run carries one ("demo tape"). */
+  /** Only the golden run carries one ("reference run"). */
   label: string | null;
   /** Only the live row. */
   current: boolean;

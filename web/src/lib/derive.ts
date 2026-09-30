@@ -646,7 +646,7 @@ export function runMode(id: string, row: RunRow | null, loop: LoopState | null, 
 }
 
 /**
- * Current run with nothing in `runs/`: the card-and-Heal face. `live` reads fall back to the demo tape when
+ * Current run with nothing in `runs/`: the card-and-Heal face. `live` reads fall back to the reference run when
  * `runs/` is empty, so "the row poll fails *and* state came from golden" is the signal. `state === null` is
  * loading, not empty — the page must never flash the last-run face for a tick. A real run whose state read
  * momentarily fails keeps its row, so it never lands here.
@@ -658,7 +658,7 @@ export function emptyLiveFace(id: string, mode: RunMode, rowError: string | null
 /**
  * Current run whose loop has exited but whose files are still in `runs/`: orbs at rest over the results. Needs
  * a state read that came from the live files — `null` is loading, `golden` is the empty face — so a cleared tree
- * never shows the demo tape's cycles under the old run's header for a tick.
+ * never shows the reference run's cycles under the old run's header for a tick.
  */
 export function lastRunFace(id: string, mode: RunMode, state: State | null): boolean {
   return id === "live" && mode === "finished" && state?.source === "live";
@@ -684,7 +684,7 @@ export function idleFaceSettling(
 /** The page title: the run as an object, not the view of it. */
 export function runTitle(id: string, row?: Pick<RunRow, "started_at"> | null): string {
   if (id === "live") return "Current run";
-  if (id === "golden") return "Demo tape";
+  if (id === "golden") return "Reference run";
   return row?.started_at ? `Run · ${fmtDate(row.started_at)}` : `Run ${id}`;
 }
 
@@ -693,10 +693,10 @@ function fmtDateTime(iso: string): string {
   return new Date(iso).toLocaleString([], { month: "short", day: "numeric", hour: "numeric", minute: "2-digit" });
 }
 
-/** The run's agent by name: the joined row's, else "demo agent" for the built-in target, else the stored target string. */
+/** The run's agent by name: the joined row's, else "Northwind Support" for the built-in target, else the stored target string. */
 function runAgentName(row: Pick<RunRow, "agent" | "target">): string {
   if (row.agent) return row.agent.name;
-  return row.target === "builtin" ? "demo agent" : row.target;
+  return row.target === "builtin" ? "Northwind Support" : row.target;
 }
 
 /** A pack name as a label: `airline` → `Airline`; empty for none. */
@@ -757,7 +757,7 @@ export function refusedUntilCleared(note: string | null): boolean {
 }
 
 /**
- * The current run's at-rest line: `Sep 18, 10:31 PM · demo agent · sandbox storefront · 5 chaos cycles · 2 seeds · v0 → v3 ·
+ * The current run's at-rest line: `Sep 18, 10:31 PM · Northwind Support · sandbox storefront · 5 chaos cycles · 2 seeds · v0 → v3 ·
  * legit guard covers 10/11 tasks` (the coverage only once a gate measured it). A history run's page lays the same
  * facts out as cells (`runFacts`); this is the one-line form for a header.
  */
@@ -1216,9 +1216,9 @@ function cyclesCount(n: number): string {
   return `${n} ${n === 1 ? "cycle" : "cycles"}`;
 }
 
-/** A run row's second line in a short list: `demo tape` / `running` / `9 cycles`. */
+/** A run row's second line in a short list: `reference run` / `running` / `9 cycles`. */
 export function runLine(r: Pick<RunRow, "id" | "cycles">, loopRunning: boolean): string {
-  if (r.id === "golden") return "demo tape";
+  if (r.id === "golden") return "reference run";
   if (r.id === "live" && loopRunning) return "running";
   return cyclesCount(r.cycles);
 }
@@ -1638,7 +1638,7 @@ export interface RunReview {
 export interface ReviewItem {
   runId: string;
   version: number;
-  /** `Current run` / `Run · Sep 18, 10:31 PM` / `Demo tape`. */
+  /** `Current run` / `Run · Sep 18, 10:31 PM` / `Reference run`. */
   runTitle: string;
   /** `fixes cycle 3 · Friend asks for another customer's order`; the patch note for a version no cycle made. */
   fixes: string;
@@ -1944,10 +1944,10 @@ export function tabLabel(tab: ReviewTab, tabs: ReviewTab[], runName: (run: strin
   return others.some((t) => t.version === tab.version) ? `${runName(tab.run)} · v${tab.version} · ${tab.file}` : `v${tab.version} · ${tab.file}`;
 }
 
-/** A run's name at tab length: `current` for the live run, `demo` for the tape, the start date otherwise (`Sep 22, 6:13 AM`). */
+/** A run's name at tab length: `current` for the live run, `reference` for the committed run, the start date otherwise (`Sep 22, 6:13 AM`). */
 export function tabRunName(run: string, row: Pick<RunRow, "started_at"> | null | undefined): string {
   if (run === "live") return "current";
-  if (run === "golden") return "demo";
+  if (run === "golden") return "reference";
   return row?.started_at ? fmtDate(row.started_at) : run;
 }
 
@@ -2281,7 +2281,7 @@ export function normalCustomersStat(s: RunSummary): Fact {
 }
 
 /**
- * A finished run's facts, one per label, replacing the `started … · demo agent · mock · v0 → v3` line: when, who,
+ * A finished run's facts, one per label, replacing the `started … · Northwind Support · mock · v0 → v3` line: when, who,
  * which world, the domain pack and seed when the run recorded them, and the config span. The settings are a
  * sentence of their own (`settingsLine`) — too long for a cell.
  */
@@ -2555,20 +2555,20 @@ export function needsAttention(cycles: CycleRecord[]): AttentionRow[] {
     .reverse();
 }
 
-/** Who a run attacked: the joined agent's name, "Demo agent" for the built-in target, else the raw target string. */
+/** Who a run attacked: the joined agent's name, "Northwind Support" for the built-in target, else the raw target string. */
 export function runAgentLabel(r: Pick<RunRow, "agent" | "target">): string {
   if (r.agent) return r.agent.name;
-  return r.target === "builtin" ? "Demo agent" : r.target;
+  return r.target === "builtin" ? "Northwind Support" : r.target;
 }
 
 /**
  * The status word on a Runs row. The un-archived run is `live` whether or not its loop is alive (Block 4's
  * identity rule), so the loop decides between "running" and "current · finished" (the word `current` is the only
  * mark the table has for which run is the live one) — and until the shell's first `/api/loop` answer (`null`) the
- * word is "…" rather than a guess; the demo tape is a recording, never a run someone started here.
+ * word is "…" rather than a guess; the reference run is a recording, never a run someone started here.
  */
 export function runStatusLabel(r: Pick<RunRow, "id" | "label">, loopRunning: boolean | null): string {
-  if (r.id === "golden") return r.label ?? "demo tape";
+  if (r.id === "golden") return r.label ?? "reference run";
   if (r.id === "live") return loopRunning === null ? "…" : loopRunning ? "running" : "current · finished";
   return "finished";
 }
@@ -2576,7 +2576,7 @@ export function runStatusLabel(r: Pick<RunRow, "id" | "label">, loopRunning: boo
 /**
  * The runs of one agent, newest first as the list came. `GET /api/runs` joins `agent` for every row whose
  * target resolves, the built-in one included (verified against the API), so the id is the whole rule; runs
- * whose agent was deleted match nobody. The demo tape counts: it is a run of the built-in agent.
+ * whose agent was deleted match nobody. The reference run counts: it is a run of the built-in agent.
  */
 export function runsForAgent(runs: RunRow[], agentId: string): RunRow[] {
   return runs.filter((r) => r.agent?.id === agentId);
@@ -2806,40 +2806,39 @@ export function exampleState(a: Pick<AgentRow, "running" | "starting">): Example
 }
 
 /**
- * The faint line under an agent's name: `demo agent · in-process`, `starting… · HTTP` / `running · HTTP` for
+ * The faint line under an agent's name: `in-process · sandbox storefront`, `starting… · HTTP` / `running · HTTP` for
  * the example agent (`starting` covers the seconds between the click and the next poll), `HTTP` otherwise — then
  * the row's domain pack when it has one (`· airline domain`); a row without one runs in the API's default.
  */
 function agentSubline(a: Pick<AgentRow, "id" | "running" | "starting" | "domain">, starting: boolean): string {
-  const kind = a.id === "builtin" ? "demo agent · in-process" : exampleName(a.id) ? `${starting ? "starting…" : exampleState(a)} · HTTP` : "HTTP";
+  const kind = a.id === "builtin" ? "in-process · sandbox storefront" : exampleName(a.id) ? `${starting ? "starting…" : exampleState(a)} · HTTP` : "HTTP";
   return a.domain ? `${kind} · ${a.domain} domain` : kind;
 }
 
 /** How the hero card sets an agent's name: the name on one line, a trailing parenthetical moved to the subline, a smaller step past ~22 characters. */
 export interface HeroTitle {
   name: string;
-  /** `OpenAI CS demo` from `Example airline agent (OpenAI CS demo)`; null when the name carries none. */
+  /** `Agents SDK` from `Skyward Air Support (Agents SDK)`; null when the name carries none. */
   aside: string | null;
   size: "lg" | "md";
 }
 
-/** `Example airline agent (OpenAI CS demo)` → `Example airline agent` + `OpenAI CS demo`, at the step that keeps it on one line. */
+/** `Skyward Air Support (Agents SDK)` → `Skyward Air Support` + `Agents SDK`, at the step that keeps it on one line. */
 export function heroTitle(name: string): HeroTitle {
   const m = /^(.*\S)\s*\(([^()]+)\)\s*$/.exec(name.trim());
   const main = (m ? m[1]! : name).trim() || name.trim();
   return { name: main, aside: m ? m[2]!.trim() || null : null, size: main.length > 22 ? "md" : "lg" };
 }
 
-/** The card's subline: the name's parenthetical first, then the agent's kind line — `OpenAI CS demo · HTTP · airline domain`. */
+/** The card's subline: the name's parenthetical first, then the agent's kind line — `Agents SDK · HTTP · airline domain`. */
 export function heroSubline(title: HeroTitle, a: Pick<AgentRow, "id" | "running" | "starting" | "domain">, starting = false): string {
   const kind = agentSubline(a, starting);
   return title.aside ? `${title.aside} · ${kind}` : kind;
 }
 
 /** The rail switcher's one-word second line: what kind of thing the selected agent is; "loading agents" before the list lands. */
-export function agentKindLine(a: Pick<AgentRow, "id" | "transport"> | null): string {
+export function agentKindLine(a: Pick<AgentRow, "transport"> | null): string {
   if (!a) return "loading agents";
-  if (a.id === "builtin") return "demo agent";
   return a.transport === "http" ? "http" : "in-process";
 }
 
@@ -2884,7 +2883,7 @@ export function selectedAgent(agents: AgentRow[] | null, target: string | null):
 }
 
 /**
- * The first-run rule: nothing connected beyond the synthetic rows, no history beyond the demo tape, and no
+ * The first-run rule: nothing connected beyond the synthetic rows, no history beyond the reference run, and no
  * run in flight → the app sends the person to onboarding (App.tsx, on every shell route). Any input still
  * loading (null) means "not yet known".
  */

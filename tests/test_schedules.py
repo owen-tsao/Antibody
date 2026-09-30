@@ -70,7 +70,7 @@ def test_crud_and_validation(client: TestClient, world):
     r = client.post("/api/schedules", json=_interval())
     assert r.status_code == 201, r.text
     row = r.json()
-    assert row["agent_name"].startswith("Demo agent") and row["enabled"] is True and row["last_result"] is None
+    assert row["agent_name"].startswith("Northwind Support") and row["enabled"] is True and row["last_result"] is None
     assert row["next_at"] is not None and row["settings"]["chaos_cycles"] == 3
     sid = row["id"]
     assert json.loads((world["history"] / "schedules.json").read_text())[0]["id"] == sid
