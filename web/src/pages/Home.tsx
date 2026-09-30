@@ -1,5 +1,5 @@
 import { ArrowRight } from "@phosphor-icons/react";
-import { useEffect } from "react";
+import { useCallback, useMemo } from "react";
 
 import { api } from "@/api";
 import AgentCard, { CARD_FRAME } from "@/components/AgentCard";
@@ -27,23 +27,18 @@ const READ_MS = 10_000;
 export default function Home({ shell, settings, onSettingsChange }: { shell: ShellData; settings: RunSettings; onSettingsChange: (next: RunSettings) => void }) {
   const { agents, agentsError, runs, runsError, loop, refresh } = shell;
   const agent = selectedAgent(agents, settings.target);
-  const agentRuns = agent && runs ? runsForAgent(runs, agent.id) : null;
+  const agentRuns = useMemo(() => (agent && runs ? runsForAgent(runs, agent.id) : null), [agent, runs]);
   const lastRun = agentRuns?.[0] ?? null;
   const source = lastRun ? readSource(lastRun.id) : null;
 
   // The last run's cycles and state, tagged with the source they came from so a just-finished run never shows
   // the previous run's numbers while its own load. usePoll keeps the last answer; the tag says whose it is.
-  // Not memoised: usePoll reads the latest `fn` through a ref and this one polls, so identity is irrelevant.
-  const readFn = () => {
+  // Keyed on the source: switching agents reads at once rather than waiting 10 s for the next tick.
+  const readFn = useCallback(() => {
     if (!source) return Promise.resolve(null);
-    const s = source;
-    return Promise.all([api.cycles(s).catch(() => null), api.state(s).catch(() => null)]).then(([cycles, state]) => ({ source: s, cycles, state }));
-  };
-  const { data: read, refresh: reread } = usePoll(readFn, READ_MS);
-  // usePoll picks up the new `fn` on its next tick; switching agents should not wait 10 s for the numbers.
-  useEffect(() => {
-    reread();
-  }, [source, reread]);
+    return Promise.all([api.cycles(source).catch(() => null), api.state(source).catch(() => null)]).then(([cycles, state]) => ({ source, cycles, state }));
+  }, [source]);
+  const { data: read } = usePoll(readFn, READ_MS);
   const current = read && read.source === source ? read : null;
 
   const down = (agents === null && agentsError !== null) || (runs === null && runsError !== null);

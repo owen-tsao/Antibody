@@ -22,6 +22,7 @@ Model: `AGENT_MODEL` names an OpenAI-compatible chat model. With `WANDB_API_KEY`
 from __future__ import annotations
 
 import json
+import logging
 import os
 import threading
 
@@ -32,6 +33,7 @@ from agents import (
     FunctionTool,
     InputGuardrailTripwireTriggered,
     MaxTurnsExceeded,
+    ModelBehaviorError,
     ModelSettings,
     OpenAIChatCompletionsModel,
     RunContextWrapper,
@@ -59,9 +61,14 @@ DEFAULT_WANDB_MODEL = "Qwen/Qwen3-30B-A3B-Instruct-2507"
 DEFAULT_OPENAI_MODEL = "gpt-5.2"
 MAX_TURNS = 10  # a triage handoff plus a specialist's tool chain is several turns; the demo let its UI run unbounded
 MAX_TURNS_REPLY = "(agent hit max turns without replying)"
+# What the customer hears when the model asks for something the SDK cannot carry out — most often, after a tool
+# call came back blocked, a call to a tool the current specialist does not hold (`ModelBehaviorError`). The demo's
+# UI would have shown a stack trace; a customer gets the agent declining, and the judge scores that, not a 500.
+CANNOT_COMPLETE_REPLY = "Sorry, I wasn't able to complete that action. Is there anything else I can help you with?"
 SESSION_HEADER = "X-Antibody-Session"
 # Tests point this at the tools app in-process; None means real sockets.
 http_transport: httpx.AsyncBaseTransport | None = None
+log = logging.getLogger("airline.agent")
 
 
 class Session(AirlineAgentContext):
@@ -164,6 +171,9 @@ async def episode(req: EpisodeRequest) -> dict[str, str]:
         return {"reply": JAILBREAK_REFUSAL if "Jailbreak" in name else RELEVANCE_REFUSAL}
     except MaxTurnsExceeded:
         return {"reply": MAX_TURNS_REPLY}
+    except ModelBehaviorError as e:
+        log.warning("session %s: model misbehaved, replying with a refusal: %s", req.session_id, e)
+        return {"reply": CANNOT_COMPLETE_REPLY}
     return {"reply": str(result.final_output or "")}
 
 

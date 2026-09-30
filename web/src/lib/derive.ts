@@ -2581,6 +2581,19 @@ export function runAgentLabel(r: Pick<RunRow, "agent" | "target">): string {
 }
 
 /**
+ * The line under the current run's orbs naming who is under attack: "target: Skyward Air Support via HTTP" /
+ * "target: Northwind Support". The run's own row once it is in (`runAgentLabel`); until then — the loop is starting
+ * and `runs/run.json` is not written yet — the agent the start form chose (`selectedAgent`, the same rule Heal
+ * submits). Never the API process's default target (`GET /api/manifest`): that names the agent a run with no choice
+ * would attack, not this one. Null while neither is known.
+ */
+export function runTargetLine(row: Pick<RunRow, "agent" | "target"> | null, agents: AgentRow[] | null, target: string | null): string | null {
+  if (row) return `target: ${runAgentLabel(row)}${row.target === "builtin" ? "" : " via HTTP"}`;
+  const chosen = selectedAgent(agents, target);
+  return chosen ? `target: ${chosen.name}${chosen.transport === "http" ? " via HTTP" : ""}` : null;
+}
+
+/**
  * The status word on a Runs row. The un-archived run is `live` whether or not its loop is alive (Block 4's
  * identity rule), so the loop decides between "running" and "current · finished" (the word `current` is the only
  * mark the table has for which run is the live one) — and until the shell's first `/api/loop` answer (`null`) the

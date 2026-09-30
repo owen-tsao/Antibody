@@ -455,10 +455,7 @@ def test_replay_filters_the_shared_log_by_backend(client, tmp_path, monkeypatch)
     assert gateway.replay(cfg, legacy, backend="http://retail:1")["calls"] == 0, "a row from before the field cannot be attributed to any agent"
 
     runs = tmp_path / "runs"
-    monkeypatch.setattr(state, "RUNS_DIR", runs)
-    monkeypatch.setattr(state, "CONFIGS_DIR", runs / "configs")
-    monkeypatch.setattr(state, "REGRESSION_PATH", runs / "regression.json")
-    monkeypatch.setattr(state, "HISTORY_DIR", tmp_path / "history")
+    _point_runs_at(monkeypatch, tmp_path)
     state.save_config(cfg)
     (tmp_path / "history").mkdir()
     (tmp_path / "history" / "gateway.jsonl").write_text("\n".join(json.dumps(r) for r in rows) + "\n")
@@ -467,12 +464,25 @@ def test_replay_filters_the_shared_log_by_backend(client, tmp_path, monkeypatch)
     assert client.get("/api/gateway/replay?version=3&backend=").json()["calls"] == 5, "an empty filter is no filter"
 
 
-def test_api_replay_route(client, tmp_path, monkeypatch):
+def _point_runs_at(monkeypatch, tmp_path: Path) -> None:
+    """Both modules that resolved runs/ and history/ at import: `chaos.state` (what `save_config` writes) and `api.store`
+    (what the read routes read). Patching one alone makes the route read a run the test never wrote."""
+    from api import store
+
     runs = tmp_path / "runs"
     monkeypatch.setattr(state, "RUNS_DIR", runs)
     monkeypatch.setattr(state, "CONFIGS_DIR", runs / "configs")
     monkeypatch.setattr(state, "REGRESSION_PATH", runs / "regression.json")
     monkeypatch.setattr(state, "HISTORY_DIR", tmp_path / "history")
+    monkeypatch.setattr(store, "CYCLES_PATH", runs / "cycles.jsonl")
+    monkeypatch.setattr(store, "CONFIGS_DIR", runs / "configs")
+    monkeypatch.setattr(store, "REGRESSION_PATH", runs / "regression.json")
+    monkeypatch.setattr(store, "RUN_MANIFEST_PATH", runs / "run.json")
+    monkeypatch.setattr(store, "HISTORY_DIR", tmp_path / "history")
+
+
+def test_api_replay_route(client, tmp_path, monkeypatch):
+    _point_runs_at(monkeypatch, tmp_path)
     empty = client.get("/api/gateway/replay").json()
     assert empty == {"version": 0, "calls": 0, "would_block": 0, "by_tool": {}, "samples": []}
     state.save_config(AgentConfig(version=1, system_prompt="x", tool_policy=RULES))
@@ -487,6 +497,20 @@ def test_api_replay_route(client, tmp_path, monkeypatch):
     assert client.get("/api/gateway/replay?version=7").status_code == 404
     assert client.get("/api/gateway/replay?version=abc").status_code == 400
     assert client.get("/api/gateway/replay?version=1&source=run:nope").status_code == 404
+
+    # A history run's v1 is *that run's* v1 — here one with no rules — and `approved` is what that run certified,
+    # not what the live run did. The demo shoot's Review page showed the live config's answer for a history run.
+    past = tmp_path / "history" / "20260925T233010Z"
+    (past / "configs").mkdir(parents=True)
+    (past / "configs" / "v1.json").write_text(AgentConfig(version=1, system_prompt="x").model_dump_json())
+    (past / "configs" / "v2.json").write_text(AgentConfig(version=2, system_prompt="x", tool_policy=RULES).model_dump_json())
+    (past / "approvals.json").write_text(json.dumps({"2": {"status": "approved", "at": "t", "note": ""}}))
+    assert client.get("/api/gateway/replay?version=1&source=live").json()["would_block"] == 1
+    past_v1 = client.get("/api/gateway/replay?version=1&source=run:20260925T233010Z").json()
+    assert past_v1["version"] == 1 and past_v1["calls"] == 2 and past_v1["would_block"] == 0
+    assert client.get("/api/gateway/replay?version=approved&source=live").json()["version"] == 0, "the live run certified nothing"
+    assert client.get("/api/gateway/replay?version=approved&source=run:20260925T233010Z").json()["version"] == 2
+    assert client.get("/api/gateway/replay?version=2&source=live").status_code == 404, "v2 exists only in the history run"
 
 
 def test_command_line_and_argparse_spell_out_shadow():

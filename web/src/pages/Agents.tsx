@@ -1,5 +1,5 @@
 import { Plugs } from "@phosphor-icons/react";
-import { useEffect } from "react";
+import { useCallback, useMemo } from "react";
 
 import { api, type Approvals, type State } from "@/api";
 import AgentCard from "@/components/AgentCard";
@@ -38,18 +38,15 @@ async function readVerdictInputs(ids: string[]): Promise<Record<string, Read>> {
 export default function Agents({ shell, settings, onSettingsChange }: { shell: ShellData; settings: RunSettings; onSettingsChange: (next: RunSettings) => void }) {
   const { agents, agentsError, runs, refresh } = shell;
   const selected = selectedAgent(agents, settings.target);
-  const sorted = agents ? agentsSorted(agents, runs ?? []) : null;
+  const sorted = useMemo(() => (agents ? agentsSorted(agents, runs ?? []) : null), [agents, runs]);
 
-  // Newest run per agent, then the reads for the first READ_CAP of them, keyed by run id so a finished run rereads.
-  // Same shape as Home's read: usePoll reads the latest `fn` through a ref, and the effect asks again when the set
-  // of runs changes rather than waiting for the next tick.
-  const newest = sorted && runs ? sorted.map((a) => runsForAgent(runs, a.id)[0] ?? null) : null;
-  const ids = (newest ?? []).filter((r) => r !== null).slice(0, READ_CAP).map((r) => r.id);
+  // Newest run per agent, then the reads for the first READ_CAP of them, keyed by run id so a finished run rereads
+  // and a changed set of runs is read at once rather than on the next tick.
+  const newest = useMemo(() => (sorted && runs ? sorted.map((a) => runsForAgent(runs, a.id)[0] ?? null) : null), [sorted, runs]);
+  const ids = useMemo(() => (newest ?? []).filter((r) => r !== null).slice(0, READ_CAP).map((r) => r.id), [newest]);
   const key = ids.join(",");
-  const { data: reads, refresh: reread } = usePoll(() => readVerdictInputs(ids), READ_MS);
-  useEffect(() => {
-    reread();
-  }, [key, reread]);
+  const readsFn = useCallback(() => readVerdictInputs(key ? key.split(",") : []), [key]);
+  const { data: reads } = usePoll(readsFn, READ_MS);
 
   return (
     <Page title="Agents">

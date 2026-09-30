@@ -191,6 +191,28 @@ def read_approvals(source: Source) -> dict[int, dict]:
         return {}
 
 
+def policy_config(source: Source, version: str) -> AgentConfig:
+    """The config whose `tool_rules` a source would enforce: `approved` is *that run's* certified version (its own
+    approvals.json; v0 when it certified nothing), anything else is `v{N}` from its `configs/`.
+
+    v0 is never a file a run had to save (a fresh run has not written one yet), so it falls back to the pack's initial
+    deployment — the run's own domain when its manifest names one, else the active pack. ValueError for a version that
+    is not a number; FileNotFoundError for one this run never saved (a torn config file counts as not there).
+    """
+    from chaos.domains import active_domain, load_domain
+    from chaos.state import approved_version
+    from chaos.target_agent import v0_config
+
+    n = approved_version(read_approvals(source)) if version == "approved" else int(version)
+    cfg = read_config(source, n)
+    if cfg is not None:
+        return cfg
+    if n != 0:
+        raise FileNotFoundError(str(run_paths(source).configs / f"v{n}.json"))
+    stored = _manifest_file(run_paths(source).manifest)
+    return v0_config(load_domain(stored["domain"]) if stored else active_domain())
+
+
 def read_vulnerability(source: Source) -> dict | None:
     """`runs/vulnerability.json` as `{"landed": {"v0": 6, ...}, "suite_size": 6, "world": "mock"|"zendesk"|None}`,
     plus `by_attack: {"v0": {scenario_id: [bool per sample]}}` and `samples` when `vulnerability_detail.json` has them.

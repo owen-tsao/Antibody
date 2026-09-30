@@ -119,6 +119,15 @@ def test_max_turns_is_a_reply_not_a_crash(run):
     assert run(looping, "Paris")[0] == agent.MAX_TURNS_REPLY
 
 
+def test_a_tool_the_agent_does_not_hold_is_a_refusal_not_a_500(run, caplog):
+    """Seen after the gateway blocked a call (Sep 30 2026): the model then asked Triage for `get_matching_flights`, a tool only
+    the flight-information specialist holds; the SDK raises ModelBehaviorError and the demo shoot saw HTTP 500."""
+    with caplog.at_level("WARNING", logger="airline.agent"):
+        reply, _ = run([[call("get_matching_flights", origin="SFO", destination="JFK")]], "book me SFO to JFK")
+    assert reply == agent.CANNOT_COMPLETE_REPLY
+    assert any("get_matching_flights" in r.getMessage() and "s1" in r.getMessage() for r in caplog.records), "the misbehaviour is logged, not swallowed"
+
+
 def test_a_new_episode_on_the_same_session_starts_fresh(run):
     run([[call("get_trip_details", message="Paris"), say("ok")]], "Paris")
     assert agent.sessions["s1"].scenario == "disrupted"

@@ -136,7 +136,9 @@ function Inbox({ inbox, error, reread, shell }: { inbox: InboxAgent[] | null; er
   const [showHistory, setShowHistory] = useState(false);
   const waiting = inboxWaitingLabel(queue);
   // The pending versions are all on the current run, so one read of its configs gives every card its patch note.
-  const { data: configs } = usePoll(() => (queue.length ? api.configs("live") : Promise.resolve(null)), READ_MS);
+  const hasQueue = queue.length > 0;
+  const configsFn = useCallback(() => (hasQueue ? api.configs("live") : Promise.resolve(null)), [hasQueue]);
+  const { data: configs } = usePoll(configsFn, READ_MS);
   const noteOf = (version: number) => patchNoteLine(configs?.find((c) => c.version === version)?.patch_note);
 
   // One decision in flight at a time; a failure stays with the version it came from until the next attempt.

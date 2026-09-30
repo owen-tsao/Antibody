@@ -11,8 +11,11 @@ import { POLL_CADENCES, usePrefs } from "@/lib/prefs";
  * the interval, for right after an action whose effect the next tick would otherwise show late.
  * `failing` counts consecutive failed ticks (0 after any success), so a caller holding last-good data
  * can still tell a one-tick hiccup from an API that has gone away. The Display preference "poll cadence"
- * scales every interval here, so no call site knows about it. `baseIntervalMs: 0` reads once per `fn`
- * identity (and on `refresh()`) — the one-shot read for files that do not change under the page.
+ * scales every interval here, so no call site knows about it. A new `fn` identity reads at once and restarts the
+ * interval, so a fetcher that depends on state the page learns after mount (an agent's backend, a run's source) is
+ * answered as soon as it is known, not at the next tick — which is also why `fn` must be memoised at the call site
+ * (`useCallback`, keyed on what it reads): a fresh arrow every render would fetch every render. `baseIntervalMs: 0`
+ * makes that the only read — the one-shot for files that do not change under the page.
  * `reset()` forgets the last answer (data and error null, as at mount) and asks again at once, retiring any
  * fetch in flight — for a caller that knows the files behind it just changed: keeping last-good data would
  * otherwise show the old answer as if it were new.
@@ -28,10 +31,12 @@ export function usePoll<T>(fn: () => Promise<T>, baseIntervalMs: number) {
   const [failing, setFailing] = useState(0);
   const fnRef = useRef(fn);
   const tickRef = useRef<() => void>(() => undefined);
+  // At mount `tickRef` is still the no-op (the chain below has not started), so this never doubles the first read;
+  // when `fn` and the interval change in the same render the old chain is already dead and only the new one reads.
   useEffect(() => {
     fnRef.current = fn;
-    if (intervalMs === 0) tickRef.current();
-  }, [fn, intervalMs]);
+    tickRef.current();
+  }, [fn]);
 
   useEffect(() => {
     let alive = true;

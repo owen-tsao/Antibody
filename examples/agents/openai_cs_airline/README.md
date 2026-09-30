@@ -16,8 +16,10 @@ routes Antibody talks to, and a second server so Antibody can stand between the 
 - **`POST /episode`** (agent port, default 8792) runs the triage agent on one customer message with a fresh context for
   that `session_id`. A tripped guardrail becomes the reply the customer would have heard (`Sorry, I can only answer
   questions related to airline travel.` / `Sorry, I can't help with that request.`); running out of turns replies
-  `(agent hit max turns without replying)`, the words Antibody's built-in agent uses, so the judge scores what the
-  agent did rather than a crashed request.
+  `(agent hit max turns without replying)`, the words Antibody's built-in agent uses; and a model that asks for a tool
+  the current agent does not hold (the SDK's `ModelBehaviorError` — seen after the gateway blocked a call) replies
+  `Sorry, I wasn't able to complete that action…` with the error in the log. Each is a reply, so the judge scores what
+  the agent did rather than a crashed request.
 - **The tools are proxies.** Every tool an agent holds keeps the original's name, description and JSON schema, but its
   body is `POST {tools_url}/tools/{name}` with `X-Antibody-Session: <session_id>`. That header is the whole integration.
 - **The real tools run on a second port** (`TOOLS_PORT`, default 8793): `GET /tools` and `POST /tools/{name}`, each call

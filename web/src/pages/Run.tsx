@@ -2,7 +2,7 @@ import { CaretRight } from "@phosphor-icons/react";
 import { AnimatePresence, motion } from "framer-motion";
 import { Fragment, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 
-import { api, ApiError, type CycleRecord, type Manifest, type ReadSource, type RollbackResult, type State, type Status } from "@/api";
+import { api, ApiError, type CycleRecord, type ReadSource, type RollbackResult, type State, type Status } from "@/api";
 import AgentCard, { CARD_FRAME } from "@/components/AgentCard";
 import AgentSwitcher from "@/components/AgentSwitcher";
 import ApiDown from "@/components/ApiDown";
@@ -44,6 +44,7 @@ import {
   runHeaderLine,
   runMode,
   runSummary,
+  runTargetLine,
   runTitle,
   selectedAgent,
   settingsLine,
@@ -72,16 +73,6 @@ const ORB_COLORS: Record<Agent, [string, string]> = {
 
 // A phase change is what the dwell protects; a new `since` or `attempt` inside the same phase is not.
 const phaseKey = (s: Status | null) => s?.phase ?? "idle";
-
-/**
- * "target: openai-agents via HTTP" / "target: built-in", from the manifest's `target`. Null until the backend
- * reports a `transport`. The backend's word for the built-in agent is "in-process" (chaos/target.py).
- */
-function targetLine(t: Manifest["target"] | undefined): string | null {
-  if (!t?.transport) return null;
-  if (t.transport === "in-process") return "target: built-in";
-  return `target: ${t.name} via ${t.transport === "http" ? "HTTP" : t.transport}`;
-}
 
 const quietLink = "group rounded text-[var(--muted)] transition-colors hover:text-[var(--fg)] disabled:cursor-default disabled:text-[var(--faint)]";
 
@@ -195,11 +186,6 @@ export default function Run({
     resetCycles();
     resetState();
   }, [id, resetRow, resetCycles, resetState]);
-  // usePoll picks up a new fetcher on its next tick; a mode change should not wait for one.
-  useEffect(() => {
-    refreshCycles();
-    refreshState();
-  }, [source, refreshCycles, refreshState]);
   const cycles = bySource[source]?.cycles ?? null;
   const state = bySource[source]?.state ?? null;
 
@@ -395,7 +381,7 @@ export default function Run({
   const tape = polled ?? status;
   const transport = watching && tape?.replay === true && tape.duration_s != null;
 
-  const target = targetLine(manifest?.target);
+  const target = runTargetLine(row, agents, settings.target);
   const booting = id === "live" && loop === null && !statusError;
   // At rest, the current run's face is decided by three reads that land in any order; none of it paints
   // until all three are in (docs/plans/08-rework-round-2.md, follow-ups §6).

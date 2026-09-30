@@ -792,17 +792,18 @@ def get_gateway_log(tail: int = Query(200, ge=1, le=5000), backend: str | None =
 @app.get("/api/gateway/replay")
 def get_gateway_replay(version: str = Query("approved"), source: str = Query("live"), tail: int = Query(5000, ge=1, le=50000), backend: str | None = Query(None)) -> dict:
     """Version N's (`approved` for the certified one) `tool_rules` re-run over the last `tail` rows of the real gateway
-    log (`chaos.gateway.replay`): the Review page's "would have blocked N of the last M real calls". The log belongs to
-    the install, not to a run, so every `source` but `golden` reads the same file; golden has no real traffic and
-    replays empty. `backend=<url>` keeps only the rows a gateway in front of that tools backend wrote — the Review
-    page passes the agent's `tools_backend`. 400 for a version that is not a number, 404 for one nobody saved."""
-    src = _source(source)
+    log (`chaos.gateway.replay`): the Review page's "would have blocked N of the last M real calls". The config is the
+    requested source's own (`store.policy_config`): a history run's v1 is that run's v1, not the live run's. The log
+    belongs to the install, not to a run, so every `source` but `golden` reads the same file; golden has no real
+    traffic and replays empty. `backend=<url>` keeps only the rows a gateway in front of that tools backend wrote — the
+    Review page passes the agent's `tools_backend`. 400 for a version that is not a number, 404 for one nobody saved."""
+    src = _read_source(_source(source))
     try:
-        cfg = gateway.load_policy_config(version)
+        cfg = store.policy_config(src, version)
     except ValueError:
         raise HTTPException(400, "version must be 'approved' or a saved version number")
     except FileNotFoundError:
-        raise HTTPException(404, f"no saved config v{version}")
+        raise HTTPException(404, f"no saved config v{version} in {src}")
     rows = [] if src == "golden" else gateway.read_log(tail, calls_only=False)
     return gateway.replay(cfg, rows, backend=backend or None)
 
