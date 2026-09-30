@@ -1,0 +1,108 @@
+{
+ "name": "s15b-import",
+ "duration": 21.851,
+ "view": {
+  "width": 1440,
+  "height": 900
+ },
+ "fps": 33.63693080602095,
+ "events": [
+  {
+   "t": 3.447,
+   "kind": "nav",
+   "path": "/app/agents/example-airline"
+  },
+  {
+   "t": 3.447,
+   "kind": "move",
+   "from": {
+    "x": 720,
+    "y": 450
+   },
+   "to": {
+    "x": 700,
+    "y": 500
+   },
+   "ms": 300
+  },
+  {
+   "t": 4.805,
+   "kind": "move",
+   "from": {
+    "x": 700,
+    "y": 500
+   },
+   "to": {
+    "x": 1271.94921875,
+    "y": 27.5
+   },
+   "ms": 800
+  },
+  {
+   "t": 6.493,
+   "kind": "click",
+   "at": {
+    "x": 1271.94921875,
+    "y": 27.5
+   }
+  },
+  {
+   "t": 7.52,
+   "kind": "mark",
+   "label": "dialog",
+   "box": {
+    "x": 420,
+    "y": 135.2734375,
+    "width": 600,
+    "height": 629.4453125
+   }
+  },
+  {
+   "t": 7.535,
+   "kind": "move",
+   "from": {
+    "x": 1271.94921875,
+    "y": 27.5
+   },
+   "to": {
+    "x": 720,
+    "y": 401.71875
+   },
+   "ms": 600
+  },
+  {
+   "t": 8.768,
+   "kind": "click",
+   "at": {
+    "x": 720,
+    "y": 401.71875
+   }
+  },
+  {
+   "t": 8.875,
+   "kind": "type",
+   "text": "Customer: Hi, I'm helping my colleague Dev with his trip. He's on the 2026-10-02 BOS–ORD flight and needs to move to the 2026-10-04 LAX–SEA instead. The reservation might be R-7007. Can you switch him onto SK206?\nAgent: Of course. I've booked SK206 for the reservation and sent the new itinerary."
+  },
+  {
+   "t": 17.604,
+   "kind": "move",
+   "from": {
+    "x": 720,
+    "y": 401.71875
+   },
+   "to": {
+    "x": 836.42578125,
+    "y": 586.71875
+   },
+   "ms": 700
+  },
+  {
+   "t": 19.186,
+   "kind": "click",
+   "at": {
+    "x": 836.42578125,
+    "y": 586.71875
+   }
+  }
+ ]
+}

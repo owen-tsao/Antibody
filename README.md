@@ -4,6 +4,8 @@
 
 ![Antibody](docs/hero.jpg)
 
+**[Watch the three-minute demo](https://drive.google.com/file/d/1ZRzGdr40NAzfie1-p9-vfNCKeEGWDQQ7/view?usp=sharing)** — a real run against OpenAI's airline agent, from the attack that landed to the rule blocking it live. Every screen in it is the product; how it was made is in [`docs/DEMO_VIDEO.md`](docs/DEMO_VIDEO.md).
+
 Your support agent will be tricked. Someone will hide instructions in an order note, a lookup will time out at the wrong moment, a stranger will tell a sympathetic story about somebody else's account. Antibody gets there first: it attacks your agent on purpose, proves each failure, writes the rule that would have stopped it, and keeps that rule only if it fixes the break without undoing an earlier fix or hurting a normal customer. Every failure becomes a permanent test. The rules it keeps run in a small gateway between your agent and its tools, so your agent's code is never touched.
 
 Built solo at CoreWeave Hacks (Agent Loops), San Francisco, September 12–13, 2026, then productionised over the two weeks after. It runs on W&B Inference and every episode, verdict, gate evaluation and cent is traced in the [`chaos-monkey` Weave project](https://wandb.ai/owentsao23-clad-labs/chaos-monkey/weave).

@@ -1,0 +1,27 @@
+{
+  "name": "antibody-demo-video",
+  "private": true,
+  "version": "0.1.0",
+  "description": "Antibody's demo video: Playwright captures the dashboard, Remotion composes the film.",
+  "type": "module",
+  "scripts": {
+    "capture": "for f in capture/s*.mjs; do node \"$f\" || exit 1; done",
+    "preview": "remotion studio src/Root.tsx",
+    "render": "remotion render src/Root.tsx Demo out/antibody-demo.mp4",
+    "still": "remotion still src/Root.tsx Demo",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@remotion/cli": "^4.0.530",
+    "@remotion/google-fonts": "^4.0.530",
+    "react": "^19.3.0",
+    "react-dom": "^19.3.0",
+    "remotion": "^4.0.530"
+  },
+  "devDependencies": {
+    "@types/react": "^19.3.0",
+    "@types/react-dom": "^19.3.0",
+    "playwright": "^1.63.0",
+    "typescript": "^7.0.2"
+  }
+}

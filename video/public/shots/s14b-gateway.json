@@ -1,0 +1,64 @@
+{
+ "name": "s14b-gateway",
+ "duration": 13.142,
+ "view": {
+  "width": 1440,
+  "height": 900
+ },
+ "fps": 58.51673798127381,
+ "events": [
+  {
+   "t": 3.322,
+   "kind": "nav",
+   "path": "/app/agents/example-airline"
+  },
+  {
+   "t": 3.322,
+   "kind": "move",
+   "from": {
+    "x": 720,
+    "y": 450
+   },
+   "to": {
+    "x": 400,
+    "y": 600
+   },
+   "ms": 300
+  },
+  {
+   "t": 5.804,
+   "kind": "mark",
+   "label": "row",
+   "box": {
+    "x": 273,
+    "y": 717,
+    "width": 556,
+    "height": 39.75
+   }
+  },
+  {
+   "t": 5.807,
+   "kind": "move",
+   "from": {
+    "x": 400,
+    "y": 600
+   },
+   "to": {
+    "x": 551,
+    "y": 736.875
+   },
+   "ms": 900
+  },
+  {
+   "t": 11.141,
+   "kind": "mark",
+   "label": "summary",
+   "box": {
+    "x": 649.0390625,
+    "y": 568.5,
+    "width": 163.9609375,
+    "height": 18
+   }
+  }
+ ]
+}
