@@ -9,7 +9,7 @@ import Panel, { PanelEmpty, PanelRow } from "@/components/Panel";
 import type { ShellData } from "@/components/Shell";
 import { usePoll } from "@/hooks/usePoll";
 import { fmtDate, homeStats, needsAttention, readSource, runLine, runsForAgent, selectedAgent, versionSpan } from "@/lib/derive";
-import { agent as agentRoute, linkProps } from "@/lib/routes";
+import { linkProps, RUNS } from "@/lib/routes";
 import type { RunSettings } from "@/lib/settings";
 import { eyebrow, pill, surface } from "@/lib/ui";
 import { cn } from "@/lib/utils";
@@ -99,7 +99,7 @@ export default function Home({ shell, settings, onSettingsChange }: { shell: She
               title="Recent runs"
               aside={
                 agent && agentRuns && agentRuns.length > 3 ? (
-                  <a {...linkProps(agentRoute(agent.id))} className="rounded transition-colors hover:text-[var(--fg)]">
+                  <a {...linkProps(RUNS)} className="rounded transition-colors hover:text-[var(--fg)]">
                     all runs →
                   </a>
                 ) : undefined

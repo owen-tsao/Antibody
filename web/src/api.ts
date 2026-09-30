@@ -422,6 +422,9 @@ export type PingResult =
   | { ok: true; latency_ms: number; reply_preview: string | null; tools: AgentTool[] | null; mapping: ToolMapping | null }
   | { ok: false; latency_ms: number; error: string; tools: AgentTool[] | null; mapping: ToolMapping | null };
 
+/** The bundled examples `POST /api/agents/example/start` knows (api/example_agent.py `EXAMPLES`). */
+export type ExampleName = "support" | "airline";
+
 interface ExampleAgentState {
   running: boolean;
   url: string;
@@ -721,9 +724,10 @@ export const api = {
   agentPing: (id: string) => post<PingResult>(`/api/agents/${id}/ping`),
   /** The same ping for a URL nobody has saved yet; stores nothing. 400 for a URL `POST /api/agents` would reject. */
   agentPingUrl: (url: string) => post<PingResult>("/api/agents/ping", { url }),
-  /** 202: spawned, `running` flips when 8790 answers (first start syncs a venv, up to a minute). 503 without a key, 409 if 8790 is taken. */
-  exampleStart: () => post<ExampleAgentState & { started_at: string }>("/api/agents/example/start"),
-  /** 404 when nothing runs; an agent on 8790 we did not spawn is left alone (`owned: false`). */
-  exampleStop: () => post<ExampleAgentState & { stopped: boolean; owned: boolean }>("/api/agents/example/stop"),
+  /** 202: spawned, `running` flips when its port answers (first start syncs a venv, up to a minute). 503 without a key,
+   *  409 if the port is taken. `name` picks the bundled example (`support` on 8790, `airline` on 8792/8793). */
+  exampleStart: (name: ExampleName = "support") => post<ExampleAgentState & { started_at: string }>("/api/agents/example/start", { name }),
+  /** 404 when nothing runs; an agent on the port we did not spawn is left alone (`owned: false`). */
+  exampleStop: (name: ExampleName = "support") => post<ExampleAgentState & { stopped: boolean; owned: boolean }>("/api/agents/example/stop", { name }),
   exampleLog: (tail = 200) => get<{ lines: string[] }>(`/api/agents/example/log?tail=${tail}`),
 };

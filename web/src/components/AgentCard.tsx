@@ -42,8 +42,9 @@ export default function AgentCard({
   /** The example agent between the click and the next poll — the subline says so. */
   starting?: boolean;
   ratio?: "video" | "free";
-  /** Where the name sits: centred, or in the upper third to leave the lower half to an overlay. */
-  title?: "center" | "upper";
+  /** Where the name sits: centred, in the upper third to leave the lower half to an overlay, or nowhere (the Agent
+   *  page, whose header already names the agent and whose overlay is the point). */
+  title?: "center" | "upper" | "none";
   /** Overlay above the photo and below the title layer (z-40; use z-10…z-30). Stops pointer events only where it draws. */
   children?: ReactNode;
   className?: string;
@@ -77,23 +78,25 @@ export default function AgentCard({
 
       {/* The title layer lets clicks fall through to the overlay (a grid card's face is a link) except on
           its own controls: the switcher's trigger and the links in its panel. */}
-      <div
-        className={cn(
-          "pointer-events-none absolute inset-0 z-40 flex flex-col items-center px-6 text-center text-white",
-          !reduced && "transition-transform duration-700 ease-out group-hover:-translate-y-1",
-          title === "upper" ? "justify-start pt-[14%]" : "justify-center",
-        )}
-      >
+      {title !== "none" && (
         <div
           className={cn(
-            "display whitespace-nowrap leading-[1] [&_a]:pointer-events-auto [&_button]:pointer-events-auto [&_[role=listbox]]:pointer-events-auto",
-            hero.size === "lg" ? "[font-size:clamp(24px,9cqw,72px)]" : "[font-size:clamp(22px,6.5cqw,52px)]",
+            "pointer-events-none absolute inset-0 z-40 flex flex-col items-center px-6 text-center text-white",
+            !reduced && "transition-transform duration-700 ease-out group-hover:-translate-y-1",
+            title === "upper" ? "justify-start pt-[14%]" : "justify-center",
           )}
         >
-          {name ?? hero.name}
+          <div
+            className={cn(
+              "display whitespace-nowrap leading-[1] [&_a]:pointer-events-auto [&_button]:pointer-events-auto [&_[role=listbox]]:pointer-events-auto",
+              hero.size === "lg" ? "[font-size:clamp(24px,9cqw,72px)]" : "[font-size:clamp(22px,6.5cqw,52px)]",
+            )}
+          >
+            {name ?? hero.name}
+          </div>
+          <div className="mt-2 text-[13px] text-white/70">{subline ?? heroSubline(hero, agent, starting)}</div>
         </div>
-        <div className="mt-2 text-[13px] text-white/70">{subline ?? heroSubline(hero, agent, starting)}</div>
-      </div>
+      )}
     </div>
   );
 }

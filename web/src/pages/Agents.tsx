@@ -7,7 +7,7 @@ import ApiDown from "@/components/ApiDown";
 import Page from "@/components/Page";
 import type { ShellData } from "@/components/Shell";
 import { usePoll } from "@/hooks/usePoll";
-import { agentsSorted, exampleState, readSource, runsForAgent, runVerdict, selectable, selectedAgent } from "@/lib/derive";
+import { agentsSorted, exampleName, exampleState, readSource, runsForAgent, runVerdict, selectable, selectedAgent } from "@/lib/derive";
 import { agent as agentRoute, linkProps, onboarding } from "@/lib/routes";
 import type { RunSettings } from "@/lib/settings";
 import { eyebrow } from "@/lib/ui";
@@ -59,7 +59,7 @@ export default function Agents({ shell, settings, onSettingsChange }: { shell: S
         <div className="grid gap-6 sm:grid-cols-2 xl:grid-cols-3">
           {sorted.map((a, i) => {
             const on = a.id === selected?.id;
-            const example = a.id === "example";
+            const example = exampleName(a.id) !== null;
             const state = example ? exampleState(a) : null;
             const run = newest?.[i] ?? null;
             const read = run ? reads?.[run.id] : undefined;

@@ -2,11 +2,11 @@
 
 [![CI](https://github.com/owen-tsao/Antibody/actions/workflows/ci.yml/badge.svg)](https://github.com/owen-tsao/Antibody/actions/workflows/ci.yml)
 
-![The Antibody dashboard mid-run: cycle 5, the Target and Judge lit, the gate re-verifying a retried patch while the run's numbers sit above the four agents](docs/hero.png)
+![The Antibody dashboard: the agent card with its facts — config v0 → v4, blocks 5 of 7, normal customers 11 of 11 — beside the list of failures that still need a decision and the recent runs](docs/hero.jpg)
 
 Antibody attacks your AI agent on purpose, proves each failure, writes a rule that would have stopped it, and only keeps the rule if it fixes the break without undoing any earlier fix or hurting normal users. Every failure becomes a permanent regression test. The rules it keeps are enforced by a gateway that sits between your agent and its tools — so your agent's code is never touched.
 
-Built solo at CoreWeave Hacks (Agent Loops), San Francisco, September 12–13, 2026, and productionised in the week after. Runs on W&B Inference, traced and evaluated in Weave: every episode, judge call, gate evaluation and cost number in this README is in the [`chaos-monkey` Weave project](https://wandb.ai/owentsao23-clad-labs/chaos-monkey/weave).
+Built solo at CoreWeave Hacks (Agent Loops), San Francisco, September 12–13, 2026, and productionised over the two weeks after. Runs on W&B Inference, traced and evaluated in Weave: every episode, judge call, gate evaluation and cost number in this README is in the [`chaos-monkey` Weave project](https://wandb.ai/owentsao23-clad-labs/chaos-monkey/weave).
 
 ## Reviewing this repo
 
@@ -18,7 +18,9 @@ If you have ten minutes, read these in order — they are the whole argument:
 4. `chaos/domains/airline/` — what a domain pack is, in five files.
 5. `docs/plans/10-production-fit.md` — the research and decisions behind the shape above, including what was rejected and what is not built.
 
-CI runs the test suite (522 keyless tests), the web build and lint on every PR. `docs/SMOKE.md` is the ten-minute manual checklist; `docs/plans/handoffs/` holds the report from every build lane and the independent review that found and fixed the last blocker.
+CI runs the test suite (522 tests, none of which need an API key), the web build and lint on every push to `main` and every pull request. `docs/SMOKE.md` is the ten-minute manual checklist; `docs/plans/handoffs/` holds the report from every build lane and the independent reviews that gated each plan, including the blockers they found.
+
+What is deliberately *not* here: a database (runs are files on disk, moved to `history/` between runs), per-user auth (one shared bearer token each for the API and the gateway), a shared session store for the gateway, and an SDK that applies rules as code. Each is named where it matters below, with what stands in for it today.
 
 ## The idea in one paragraph
 
@@ -64,7 +66,7 @@ Other commands: `check [version]` (re-verify a saved config against every known 
 scripts/dev.sh              # API on :8000, web UI on :5173
 ```
 
-Pages: **Home** (the current run and what needs attention), **Agents** (everything you have connected, with its tools, starter rules and shadow log), **Current run** (the four orbs live, then the results with per-version numbers — fixed k/k, legit coverage, cost and latency), **Runs** (history), **Schedules**, **Review** (approve or reject each version with its diff against the last approved one, what it would have blocked in real traffic, and the rules file and gateway command to copy), **Settings** (models, run settings, domain, API token). Press **Heal** to start a live run, or **Replay** to play the committed golden run back on its original timeline so a demo never depends on the network.
+Pages: **Home** (the current run and what needs attention), **Agents** (everything you have connected; open one for what is in force, what every run found, its live gateway traffic and the rules it is running under), **Current run** (the four orbs live, then the results with per-version numbers — fixed k/k, legit coverage, cost and latency), **Runs** (history), **Schedules**, **Review** (approve or reject each version with its diff against the last approved one, what it would have blocked in real traffic, and the rules file and gateway command to copy), **Settings** (models, run settings, domain, API token). Press **Heal** to start a live run, or **Replay** to play the committed golden run back on its original timeline so a demo never depends on the network.
 
 ## Bring your own agent
 

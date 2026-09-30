@@ -65,7 +65,7 @@ def test_register_costs_hands_weave_the_table_per_token_and_only_what_is_missing
     loop.register_costs()
     added = {llm: (p, c) for llm, p, c in client.added}
     assert llama not in added, "already registered at the same price"
-    assert added["openai/gpt-oss-20b"] == (0.05 / 1e6, 0.20 / 1e6), "a stale price is re-registered"
+    assert added["openai/gpt-oss-20b"] == tuple(x / 1e6 for x in config.PRICE_PER_MILLION_USD["openai/gpt-oss-20b"]), "a stale price is re-registered"
     assert set(added) == set(config.PRICE_PER_MILLION_USD) - {llama}
     for llm, (p, c) in added.items():
         assert (p, c) == (config.PRICE_PER_MILLION_USD[llm][0] / 1e6, config.PRICE_PER_MILLION_USD[llm][1] / 1e6)

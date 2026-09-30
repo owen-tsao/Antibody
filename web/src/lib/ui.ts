@@ -8,6 +8,10 @@ export const NO_KEY_LINE = "Set WANDB_API_KEY to run live; replays still play";
 export const primaryButton =
   "inline-flex h-9 items-center rounded-lg bg-[var(--fg)] px-4 text-[13px] font-medium text-[var(--bg)] transition-opacity hover:opacity-85 disabled:cursor-default disabled:opacity-40 disabled:hover:opacity-40";
 
+/** The header's second action beside `primaryButton`: same height and radius, hairline edge instead of fill. */
+export const secondaryButton =
+  "inline-flex h-9 items-center rounded-lg border border-[var(--border)] bg-transparent px-4 text-[13px] font-medium text-[var(--muted)] transition-colors hover:border-[var(--border-2)] hover:text-[var(--fg)] disabled:cursor-default disabled:opacity-40";
+
 /** A quiet text button: muted, brightens on hover; faint and inert when disabled. The `.u-line` wipe goes only on a surface's one primary text action. */
 export const textButton =
   "group rounded text-[13px] text-[var(--muted)] transition-colors hover:text-[var(--fg)] disabled:cursor-default disabled:text-[var(--faint)] disabled:hover:text-[var(--faint)]";

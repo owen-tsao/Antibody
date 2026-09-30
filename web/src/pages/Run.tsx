@@ -19,7 +19,7 @@ import { useDwell } from "@/hooks/useDwell";
 import { usePoll } from "@/hooks/usePoll";
 import { useMotionPref } from "@/hooks/useMotionPref";
 import {
-  aboutFacts,
+  aboutGroups,
   type Agent,
   AGENT_LABEL,
   AGENTS,
@@ -52,7 +52,7 @@ import {
 import { agent as agentRoute, linkProps, replace } from "@/lib/routes";
 import { usePrefs } from "@/lib/prefs";
 import type { RunSettings } from "@/lib/settings";
-import { surface } from "@/lib/ui";
+import { eyebrow, surface } from "@/lib/ui";
 import { cn } from "@/lib/utils";
 
 // Fixed per orb so the blobs do not reshuffle on every re-render (orb.tsx seeds its PRNG from this).
@@ -497,14 +497,21 @@ export default function Run({
       </button>
       {aboutOpen === id && (
         <div className="border-t border-[var(--border)]">
-          <dl className="tabular grid grid-cols-[max-content_1fr] gap-x-8 gap-y-1.5 px-4 py-3 text-[12.5px]">
-            {aboutFacts(row, sum).map((f) => (
-              <Fragment key={f.label}>
-                <dt className="text-[var(--muted)]">{f.label}</dt>
-                <dd className="text-[var(--fg)]">{f.value}</dd>
-              </Fragment>
+          <div className="grid gap-x-10 gap-y-4 px-4 py-3 sm:grid-cols-2">
+            {aboutGroups(row, sum).map((g) => (
+              <div key={g.title} className="flex flex-col gap-2">
+                <h3 className={eyebrow}>{g.title}</h3>
+                <dl className="tabular grid grid-cols-[max-content_1fr] gap-x-6 gap-y-1.5 text-[12.5px]">
+                  {g.facts.map((f) => (
+                    <Fragment key={f.label}>
+                      <dt className="text-[var(--muted)]">{f.label}</dt>
+                      <dd className="text-[var(--fg)]">{f.value}</dd>
+                    </Fragment>
+                  ))}
+                </dl>
+              </div>
             ))}
-          </dl>
+          </div>
           {settingsLine(row.flags) && <p className="border-t border-[var(--border)] px-4 py-2.5 text-[12px] text-[var(--faint)]">Ran with {settingsLine(row.flags)}.</p>}
           {legitCoverageWarning(sum.legitCovered) && (
             <p role="alert" className="border-t border-[var(--border)] px-4 py-2.5 text-[12.5px] text-[var(--danger)]">

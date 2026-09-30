@@ -15,7 +15,7 @@ Two servers in one process:
     uv sync && uv run python agent.py
 
 Model: `AGENT_MODEL` names an OpenAI-compatible chat model. With `WANDB_API_KEY` set it is served by W&B Inference
-(default `Qwen/Qwen3-235B-A22B-Instruct-2507`); with `OPENAI_API_KEY` and no W&B key, by OpenAI directly
+(default `Qwen/Qwen3-30B-A3B-Instruct-2507`); with `OPENAI_API_KEY` and no W&B key, by OpenAI directly
 (`AGENT_MODEL=gpt-5.2` is the demo's own choice). One variable, both branches.
 """
 
@@ -52,9 +52,10 @@ set_tracing_disabled(True)  # never phone home to OpenAI's trace exporter
 WANDB_INFERENCE_URL = "https://api.inference.wandb.ai/v1"
 WANDB_PROJECT = os.environ.get("WANDB_PROJECT", "owentsao23-clad-labs/chaos-monkey")
 # Qwen, not gpt-oss: on W&B Inference gpt-oss-120b narrates the handoff ("Transferring you now…") instead of calling
-# the transfer tool, so no specialist runs and no tool is ever called (12 of 12 loop episodes, Sep 22 2026); Qwen3-235B
-# completes triage → handoff → tool chain in 5–7 s. See README.
-DEFAULT_WANDB_MODEL = "Qwen/Qwen3-235B-A22B-Instruct-2507"
+# the transfer tool, so no specialist runs and no tool is ever called (12 of 12 loop episodes, Sep 22 2026); Qwen3
+# completes triage → handoff → tool chain in seconds. Qwen3-235B left the W&B catalogue by Sep 29 2026 (every episode
+# was a 404 from the model, surfaced as HTTP 500); the 30B sibling from the same release is what it serves now. See README.
+DEFAULT_WANDB_MODEL = "Qwen/Qwen3-30B-A3B-Instruct-2507"
 DEFAULT_OPENAI_MODEL = "gpt-5.2"
 MAX_TURNS = 10  # a triage handoff plus a specialist's tool chain is several turns; the demo let its UI run unbounded
 MAX_TURNS_REPLY = "(agent hit max turns without replying)"

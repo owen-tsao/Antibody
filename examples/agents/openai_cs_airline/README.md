@@ -52,14 +52,14 @@ The ports are one pair above the other example's (8790) so both examples can be 
 ## The model
 
 `AGENT_MODEL` names an OpenAI-compatible chat model; where it runs follows the key present. With `WANDB_API_KEY` the
-agents run on W&B Inference, default **`Qwen/Qwen3-235B-A22B-Instruct-2507`**; with `OPENAI_API_KEY` and no W&B key
+agents run on W&B Inference, default **`Qwen/Qwen3-30B-A3B-Instruct-2507`**; with `OPENAI_API_KEY` and no W&B key
 they run on OpenAI directly, default `gpt-5.2` (the demo's own choice). The guardrails use the same model as the
 agents — the demo used a separate small model, which W&B Inference does not serve.
 
 Why Qwen and not gpt-oss: the plan named `openai/gpt-oss-120b`, and it does answer — but through the Agents SDK it
 *narrates* the handoff ("I'm transferring you to our Flight Information specialist…") instead of calling the
 `transfer_to_*` tool, so no specialist ever runs and no tool is ever called. In a 12-episode Antibody run on Sep 22
-2026 every episode ended with zero tool calls and took 75–170 s. Qwen3-235B completes triage → handoff → tool chain
+2026 every episode ended with zero tool calls and took 75–170 s. Qwen3 completes triage → handoff → tool chain
 in 5–7 s per episode. `AGENT_MODEL=openai/gpt-oss-120b` still works if you want to see that failure yourself.
 
 ## Tests

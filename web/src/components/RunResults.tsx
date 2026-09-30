@@ -38,7 +38,7 @@ import { displayHead, eyebrow, pill, primaryButton, surface, textButton } from "
 import { cn } from "@/lib/utils";
 
 /** A version stop, or `all` — the whole run, every cycle. */
-type Pick = number | "all";
+export type Pick = number | "all";
 
 /**
  * One run as a story (plan 12 §4), top to bottom: the verdict — one sentence on what the run found and where that
@@ -59,7 +59,6 @@ export default function RunResults({
   shell,
   manifest,
   onMeasured,
-  compareOpen = false,
   after,
 }: {
   runId: string;
@@ -74,8 +73,6 @@ export default function RunResults({
   manifest: Manifest | null;
   /** After Measure was accepted (202): the host re-polls the loop and, on its exit, the state. */
   onMeasured?: () => void;
-  /** `Compare versions` starts open — the Agent page, where the matrix is the point; elsewhere it starts closed. */
-  compareOpen?: boolean;
   /** Rendered last: the run page's About-this-run. */
   after?: React.ReactNode;
 }) {
@@ -103,7 +100,9 @@ export default function RunResults({
   const verdict = runVerdict(row, cycles, vuln, approvals);
   const parts = headlineParts(verdict.headline);
   const [compare, setCompare] = useState<{ runId: string; open: boolean } | null>(null);
-  const open = compare && compare.runId === runId ? compare.open : compareOpen && versions.length > 1;
+  const open = compare && compare.runId === runId ? compare.open : false;
+  const [moreFor, setMoreFor] = useState<{ runId: string; open: boolean } | null>(null);
+  const more = moreFor?.runId === runId && moreFor.open;
   const measure = <MeasureAction runId={runId} row={row} cycles={cycles} versions={versions.length} vuln={vuln} shell={shell} manifest={manifest} onMeasured={onMeasured} />;
 
   if (cycles.length === 0) return <PanelEmpty>No cycles in this run.</PanelEmpty>;
@@ -188,7 +187,7 @@ export default function RunResults({
               </tr>
             </thead>
             <tbody>
-              {gate.map((r) => (
+              {gate.filter((r) => !r.detail).map((r) => (
                 <tr key={r.label} className="border-b border-[var(--border)]">
                   <th scope="row" title={r.title} className="whitespace-nowrap px-4 py-2 text-left font-normal text-[var(--muted)]">
                     {r.label}
@@ -220,6 +219,30 @@ export default function RunResults({
                 </tr>
               )}
             </tbody>
+            {/* The three rows above decide a version; cost, timing and every attack inform, so they wait behind `more`. */}
+            <tbody>
+              <tr className={cn(more && "border-b border-[var(--border)]")}>
+                <td colSpan={1 + columns.length} className="px-4 py-2">
+                  <button type="button" aria-expanded={more} onClick={() => setMoreFor({ runId, open: !more })} className={cn(textButton, "text-[12.5px]")}>
+                    {more ? "Less" : `More · cost, timing and every attack`}
+                  </button>
+                </td>
+              </tr>
+              {more &&
+                gate.filter((r) => r.detail).map((r) => (
+                  <tr key={r.label} className="border-b border-[var(--border)]">
+                    <th scope="row" title={r.title} className="whitespace-nowrap px-4 py-2 text-left font-normal text-[var(--muted)]">
+                      {r.label}
+                    </th>
+                    {r.cells.map((cell, i) => (
+                      <td key={columns[i]!.v} className={cn("px-3 py-2 text-right", cell === "—" ? "text-[var(--faint)]" : "text-[var(--fg)]")}>
+                        {cell}
+                      </td>
+                    ))}
+                  </tr>
+                ))}
+            </tbody>
+            {more && (
             <tbody>
               <tr className="border-b border-[var(--border)] bg-[var(--inset)]/40">
                 <th scope="rowgroup" colSpan={1 + columns.length} className={cn(eyebrow, "px-4 py-2 text-left font-normal")}>
@@ -249,6 +272,7 @@ export default function RunResults({
                 </tr>
               )}
             </tbody>
+            )}
           </table>
         </div>
         {uncovered && (
@@ -369,9 +393,9 @@ export function ReviewMark({ decision, compact = false, label }: { decision: App
  * sliding pill. A radiogroup, so arrow keys move the selection and each stop announces itself. Stops stay `v4`
  * (five fit on one track); the long name is each stop's title and what a screen reader hears.
  */
-function VersionRail({ versions, value, onChange, marks, nameOf }: { versions: number[]; value: Pick; onChange: (v: Pick) => void; marks?: Approvals | null; nameOf: (v: number) => string }) {
+export function VersionRail({ versions, value, onChange, marks, nameOf, all = true }: { versions: number[]; value: Pick; onChange: (v: Pick) => void; marks?: Approvals | null; nameOf: (v: number) => string; all?: boolean }) {
   const reduced = useMotionPref();
-  const stops: Pick[] = [...versions, "all"];
+  const stops: Pick[] = all ? [...versions, "all"] : versions;
   const idx = stops.indexOf(value);
   const step = (d: number) => {
     const next = stops[Math.min(stops.length - 1, Math.max(0, idx + d))];

@@ -105,7 +105,7 @@ function AppPages({ route, settings, onSettingsChange }: { route: Route; setting
                 case "agents":
                   return <Agents shell={data} settings={settings} onSettingsChange={onSettingsChange} />;
                 case "agent":
-                  return <AgentPage id={route.id} shell={data} />;
+                  return <AgentPage id={route.id} shell={data} settings={settings} onSettingsChange={onSettingsChange} />;
                 case "runs":
                   return <Runs runs={runs} runsError={runsError} loop={loop} refresh={refresh} />;
                 case "schedules":

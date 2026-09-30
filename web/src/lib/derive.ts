@@ -10,6 +10,7 @@ import type {
   Approvals,
   CycleRecord,
   Domain,
+  ExampleName,
   GateResult,
   GatewayEvent,
   GatewayLog,
@@ -29,7 +30,6 @@ import type {
   RecordingInfo,
   ReplayInfo,
   RunRow,
-  Scenario,
   ScenarioKind,
   Schedule,
   ScheduleTrigger,
@@ -37,7 +37,6 @@ import type {
   Status,
   ToolCall,
   ToolClass,
-  ToolMapping,
   ToolPolicy,
   ToolRule,
   ToolsProposal,
@@ -1224,12 +1223,6 @@ export function runLine(r: Pick<RunRow, "id" | "cycles">, loopRunning: boolean):
   return cyclesCount(r.cycles);
 }
 
-/** `Sep 19, 8:00 PM · v0 → v3 · 9 cycles` — a run as one line for a picker; the golden run's date is `demo tape`. */
-export function runPickerLabel(r: Pick<RunRow, "id" | "started_at" | "cycles" | "versions" | "final_version">): string {
-  const when = r.id === "golden" ? "demo tape" : r.started_at ? fmtDate(r.started_at) : r.id;
-  return `${when} · ${versionSpan(r)} · ${cyclesCount(r.cycles)}`;
-}
-
 /** Every config version a run passed through, oldest first: `versions` from the row, else what the cycles saw. */
 export function versionsOf(row: Pick<RunRow, "versions" | "final_version"> | null, cycles: CycleRecord[]): number[] {
   const set = new Set<number>(row?.versions ?? []);
@@ -1280,6 +1273,8 @@ export interface GateRow {
   cells: string[];
   /** A per-cell tooltip where a cell has more to say than its number (the normal-customer row's coverage); null cells have none. */
   cellTitles?: (string | null)[];
+  /** Cost and timing: shown behind the table's `more` toggle, because they inform but never decide (Owen, Sep 29). */
+  detail?: boolean;
 }
 
 /**
@@ -1307,6 +1302,7 @@ export function gateRows(cycles: CycleRecord[], columns: VersionColumn[]): GateR
     },
     {
       label: "cost",
+      detail: true,
       title: "Summed over the cycles that attacked this version (attack, judge, repair and gate)",
       cells: cell((_, ran) => {
         const costs = ran.map((c) => c.cost_usd).filter((x): x is number => typeof x === "number");
@@ -1315,6 +1311,7 @@ export function gateRows(cycles: CycleRecord[], columns: VersionColumn[]): GateR
     },
     {
       label: "typical cycle",
+      detail: true,
       title: "Median time of one whole cycle (attack, judge, repair and gate) over the cycles that attacked this version",
       cells: cell((_, ran) => {
         const m = median(ran.map((c) => c.latency_ms).filter((x): x is number => typeof x === "number"));
@@ -1612,23 +1609,6 @@ export function scheduleTitle(s: Pick<Schedule, "name" | "agent_name">): string 
 /** Schedules on the same agent are "related" on the orbit: selecting one pulses the others. Indexes into `rows`. */
 export function relatedSchedules(rows: Schedule[], i: number): number[] {
   return rows.map((s, j) => (j !== i && s.agent === rows[i]!.agent ? j : -1)).filter((j) => j >= 0);
-}
-
-// --- Regression suite (docs/plans/09-roadmap-v1.md §3) --------------------------------------------------
-
-/** The Regression panel's aside: `7 tests · 2 imported` (the imported count only when there is one). */
-export function suiteLine(suite: Scenario[]): string {
-  const imported = suite.filter((s) => s.origin === "imported").length;
-  const n = `${suite.length} ${suite.length === 1 ? "test" : "tests"}`;
-  return imported ? `${n} · ${imported} imported` : n;
-}
-
-/** Rows for the Regression panel, imported incidents first (they are the person's own), then seeds, then the chaos agent's finds. */
-export function suiteRows(suite: Scenario[]): { id: string; title: string; kind: string; origin: Scenario["origin"] }[] {
-  const rank: Record<Scenario["origin"], number> = { imported: 0, seed: 1, chaos_agent: 2, legit: 3 };
-  return [...suite]
-    .sort((a, b) => rank[a.origin] - rank[b.origin])
-    .map((s) => ({ id: s.id, title: s.title, kind: humanizeKind(s.kind), origin: s.origin }));
 }
 
 // --- Approval (docs/plans/09-roadmap-v1.md §2) ----------------------------------------------------------
@@ -2765,9 +2745,14 @@ export function baselineOnlyLine(cycles: CycleRecord[], vuln: Vulnerability | nu
   return `Only the baseline was tested · ${n} of ${attacksCount(m)} got through`;
 }
 
-/** The finished run's one key/value list under `About this run`: where it ran, then what it found (`runFacts` + `summaryCells`). */
-export function aboutFacts(row: RunRow, summary: RunSummary): Fact[] {
-  return [...runFacts(row), ...(summary.cycles > 0 ? summaryCells(summary) : [])];
+/**
+ * `About this run` as two short lists side by side — *Where it ran* (`runFacts`) and *What it found* (`summaryCells`) —
+ * instead of one sixteen-row column. The second list is left out before the first cycle, when there is nothing found yet.
+ */
+export function aboutGroups(row: RunRow, summary: RunSummary): { title: string; facts: Fact[] }[] {
+  const groups = [{ title: "Where it ran", facts: runFacts(row) }];
+  if (summary.cycles > 0) groups.push({ title: "What it found", facts: summaryCells(summary) });
+  return groups;
 }
 
 // --- Agents (docs/plans/00-overview.md Block 3) ------------------------------------------------------
@@ -2804,25 +2789,14 @@ export function pingResultLine(r: PingResult): string {
   return `ok · ${fmtLatency(r.latency_ms)}${quote}`;
 }
 
-/**
- * Which of an agent's listed tools the sandbox serves — the client-side twin of `api.agents.tool_mapping`, for
- * stored rows (which carry `tools` but not `mapping`). Null when the agent lists no tools, or when the sandbox's
- * names (the built-in row's tool list) are not known yet.
- */
-export function toolMapping(tools: AgentTool[] | null, sandbox: string[] | null): ToolMapping | null {
-  if (!tools || !sandbox) return null;
-  const known = new Set(sandbox);
-  const names = tools.map((t) => t.name);
-  return { known: names.filter((n) => known.has(n)), unknown: names.filter((n) => !known.has(n)) };
-}
-
-/** The tools column: `5/7` (mapped of listed), or `—` when the agent has not listed its tools. */
-export function toolsMappedLabel(m: ToolMapping | null): string {
-  if (!m) return "—";
-  return `${m.known.length}/${m.known.length + m.unknown.length}`;
-}
-
 export type ExampleState = "running" | "starting" | "stopped";
+
+/** Which bundled example an agent row is (`example` → support, `example-airline` → airline), or null for any other agent. */
+export function exampleName(id: string): ExampleName | null {
+  if (id === "example") return "support";
+  if (id.startsWith("example-")) return id.slice("example-".length) as ExampleName;
+  return null;
+}
 
 /** The example agent's state word from its probed row. */
 export function exampleState(a: Pick<AgentRow, "running" | "starting">): ExampleState {
@@ -2836,8 +2810,8 @@ export function exampleState(a: Pick<AgentRow, "running" | "starting">): Example
  * the example agent (`starting` covers the seconds between the click and the next poll), `HTTP` otherwise — then
  * the row's domain pack when it has one (`· airline domain`); a row without one runs in the API's default.
  */
-export function agentSubline(a: Pick<AgentRow, "id" | "running" | "starting" | "domain">, starting: boolean): string {
-  const kind = a.id === "builtin" ? "demo agent · in-process" : a.id === "example" ? `${starting ? "starting…" : exampleState(a)} · HTTP` : "HTTP";
+function agentSubline(a: Pick<AgentRow, "id" | "running" | "starting" | "domain">, starting: boolean): string {
+  const kind = a.id === "builtin" ? "demo agent · in-process" : exampleName(a.id) ? `${starting ? "starting…" : exampleState(a)} · HTTP` : "HTTP";
   return a.domain ? `${kind} · ${a.domain} domain` : kind;
 }
 
@@ -2893,9 +2867,9 @@ export function sameUrl(a: string, b: string): boolean {
   return norm(a) === norm(b);
 }
 
-/** Whether an agent can be attacked right now: the example agent only answers while its process is up. */
+/** Whether an agent can be attacked right now: a bundled example only answers while its process is up. */
 export function selectable(a: AgentRow): boolean {
-  return a.id !== "example" || exampleState(a) === "running";
+  return exampleName(a.id) === null || exampleState(a) === "running";
 }
 
 /**
@@ -2975,4 +2949,198 @@ export function smokeFinding(cycles: CycleRecord[]): { cycle: number; title: str
 /** What the smoke step says when the loop exited without a single cycle: a crash names its exit code, a clean exit does not. */
 export function smokeEmptyLine(exitCode: number | null): string {
   return exitCode ? `The run stopped with an error (exit code ${exitCode}) before any attack ran — Current run has its log.` : "The run ended before any attack reached a verdict — Current run has its log.";
+}
+
+// --- The Agent page (docs/plans/14-agent-page.md): the agent as the patient, not the last run again -----------
+
+/** A status-strip cell: a fact plus, when there is one, a quiet second line (the card shows it as the value's tooltip). */
+export interface StatusCell extends Fact {
+  line?: string;
+}
+
+/** One run's state and decisions as the Agent page reads them (null = the read failed; the run stays a row). */
+export interface RunRead {
+  state: State | null;
+  approvals: Approvals | null;
+}
+
+/** The pending versions of a run — every version past v0 without a decision — highest first. */
+function pendingVersions(row: RunRow, approvals: Approvals | null): number[] {
+  const decided = new Map((approvals?.decisions ?? []).map((d) => [d.version, d.status]));
+  return versionsOf(row, [])
+    .filter((v) => v > 0 && (decided.get(v) ?? "pending") === "pending")
+    .sort((a, b) => b - a);
+}
+
+/**
+ * The strip under the agent's card — *am I protected?* in four cells: what is in force, what the gateway is doing,
+ * when it was last tested, when it is next tested. What is in force belongs to the **live run**, not to the agent:
+ * versions restart at v0 with every run and the approvals file is archived with it (api/store.py `review_inbox`),
+ * so when the live run attacked a different agent this one has nothing in force and the cell says so. `reads`
+ * is keyed by run id; a run not yet read shows `…`.
+ */
+export function agentStatus(
+  agent: Pick<AgentRow, "id" | "name" | "tools_backend">,
+  agentRuns: RunRow[],
+  allRuns: RunRow[],
+  reads: Record<string, RunRead | undefined>,
+  liveCycles: CycleRecord[] | null,
+  gatewayLog: GatewayLog | null,
+  schedules: Schedule[] | null,
+  now = Date.now(),
+): StatusCell[] {
+  const newest = agentRuns[0] ?? null;
+  const live = allRuns.find((r) => r.id === "live") ?? null;
+  const liveIsOurs = live !== null && live.agent?.id === agent.id;
+  const liveRead = liveIsOurs ? reads["live"] : undefined;
+  const certified = liveRead?.approvals?.certified ?? 0;
+
+  // Cell 1: running on.
+  let inForce: StatusCell;
+  if (!newest) inForce = { label: "running on", value: "never tested", line: "Heal to get a first result" };
+  else if (!liveIsOurs) inForce = { label: "running on", value: "nothing in force", line: live ? `current run: ${runAgentLabel(live)}` : "no current run" };
+  else if (liveRead === undefined) inForce = { label: "running on", value: "…" };
+  else {
+    const pending = pendingVersions(live, liveRead.approvals);
+    const name = certified > 0 ? (liveCycles ? versionNameIn(liveCycles, certified, null) : versionName(certified, true, null)) : "Baseline";
+    inForce = { label: "running on", value: name };
+    if (pending.length > 0) inForce.line = `${pending.length} ${pending.length === 1 ? "fix" : "fixes"} waiting for review`;
+    else if (certified === 0) inForce.line = "no fix approved";
+  }
+
+  // Cell 2: the gateway. The built-in agent's tools are the sandbox's; nothing sits in front of them.
+  let gateway: StatusCell;
+  if (agent.id === "builtin") gateway = { label: "gateway", value: "sandbox", line: "built-in tools, nothing to enforce" };
+  else if (!agent.tools_backend) gateway = { label: "gateway", value: "none", line: "no real tools connected" };
+  else if (gatewayLog === null) gateway = { label: "gateway", value: "…" };
+  else if (gatewayLog.events.length === 0) gateway = { label: "gateway", value: "no traffic", line: "start it beside the agent" };
+  else {
+    const last = gatewayLog.events.at(-1)!;
+    const flagged = gatewayLog.events.filter((e) => e.decision !== "allowed").length;
+    gateway = { label: "gateway", value: `${last.mode} · ${versionShort(last.config_version)}`, line: `${gatewayLog.events.length} calls · ${flagged} ${last.mode === "shadow" ? "would block" : "blocked"}` };
+    // The gateway follows `approved` on its own clock; when it lags the decision, that is the finding.
+    if (liveIsOurs && liveRead && last.config_version !== certified) gateway.line = `approved ${versionShort(certified)}, gateway still on ${versionShort(last.config_version)}`;
+  }
+
+  // Cell 3: last tested.
+  let tested: StatusCell;
+  if (!newest) tested = { label: "last tested", value: "never" };
+  else {
+    const read = reads[newest.id];
+    const v = read?.state?.vulnerability;
+    const through = v && v.suite_size > 0 ? v.landed["v0"] : undefined;
+    tested = {
+      label: "last tested",
+      value: newest.started_at ? fmtAgo(newest.started_at, now) : "—",
+      line: read === undefined ? undefined : through === undefined ? `${cyclesCount(newest.cycles)} · not measured` : `${through} of ${attacksCount(v!.suite_size)} got through`,
+    };
+  }
+
+  // Cell 4: next test.
+  const mine = (schedules ?? []).filter((s) => s.agent === agent.id && s.enabled);
+  let next: StatusCell;
+  if (schedules === null) next = { label: "next test", value: "…" };
+  else if (mine.length === 0) next = { label: "next test", value: "—", line: "no schedule" };
+  else {
+    const timed = mine.filter((s) => s.next_at).sort((a, b) => new Date(a.next_at!).getTime() - new Date(b.next_at!).getTime());
+    if (timed.length > 0) {
+      const ms = new Date(timed[0]!.next_at!).getTime() - now;
+      next = { label: "next test", value: ms <= 0 ? "due now" : `in ${fmtSpan(ms)}`, line: timed[0]!.name };
+    } else next = { label: "next test", value: "on change", line: mine[0]!.name };
+  }
+  return [inForce, gateway, tested, next];
+}
+
+/** One run as the Agent page lists it: what got through at baseline, the fix that would help most, and what became of it. */
+export interface RunFinding {
+  runId: string;
+  at: string | null;
+  live: boolean;
+  /** Attacks the run's sweep found getting through on the baseline, of the run's suite. */
+  gotThrough: number;
+  suite: number;
+  /** The best fix the run produced, or null when no version past v0 was measured; `approved` when it is the certified one. */
+  fix: { version: number; name: string; wouldBlock: number; approved: boolean } | null;
+  status: "approved" | "pending" | "never decided" | "rejected" | "no fix";
+}
+
+/**
+ * *What every run found*: one row per run with a sweep, newest first. `wouldBlock` is what the highest measured
+ * version blocks of the suite. `pending` is only ever the live run — an older run's undecided version cannot be
+ * decided any more (api/main.py `review_config`), so it reads `never decided` and gets no link.
+ */
+export function runFindings(agentRuns: RunRow[], reads: Record<string, RunRead | undefined>): RunFinding[] {
+  const out: RunFinding[] = [];
+  for (const row of agentRuns) {
+    const read = reads[row.id];
+    const v = read?.state?.vulnerability;
+    if (!v || v.suite_size <= 0 || v.landed["v0"] === undefined) continue;
+    const measured = Object.keys(v.landed)
+      .map((k) => Number(k.slice(1)))
+      .filter((n) => n > 0);
+    const best = measured.length ? Math.max(...measured) : null;
+    const approvals = read?.approvals ?? null;
+    const certified = approvals?.certified ?? 0;
+    const decided = new Map((approvals?.decisions ?? []).map((d) => [d.version, d.status]));
+    const open = versionsOf(row, []).filter((n) => n > 0 && (decided.get(n) ?? "pending") === "pending");
+    const status: RunFinding["status"] = certified > 0 ? "approved" : best === null && open.length === 0 ? "no fix" : open.length > 0 ? (row.id === "live" ? "pending" : "never decided") : "rejected";
+    // The approved version when the sweep measured it; otherwise the highest version it did — an approval the sweep
+    // never saw still leaves the run's best-measured fix as the honest number.
+    const shown = certified > 0 && v.landed[`v${certified}`] !== undefined ? certified : best;
+    const fix = shown !== null && v.landed[`v${shown}`] !== undefined ? { version: shown, name: verdictName(shown, row, null), wouldBlock: v.suite_size - v.landed[`v${shown}`]!, approved: shown === certified } : null;
+    out.push({ runId: row.id, at: row.started_at, live: row.id === "live", gotThrough: v.landed["v0"]!, suite: v.suite_size, fix, status });
+  }
+  return out;
+}
+
+/** The status word after a finding's fix: `pending` / `approved` / `rejected` / `never decided`; empty when there was no fix. */
+export function findingStatusLabel(f: RunFinding): string {
+  if (f.status === "no fix") return "no fix";
+  if (f.status === "approved") return "approved";
+  return f.status;
+}
+
+/** The *What every run found* aside: `12 of 16 runs measured`, or `no run measured` — an unmeasured run has no row. */
+export function findingsLine(agentRuns: RunRow[], findings: RunFinding[]): string {
+  if (agentRuns.length === 0) return "never tested";
+  if (findings.length === 0) return `${agentRuns.length} ${agentRuns.length === 1 ? "run" : "runs"} · none measured`;
+  return `${findings.length} of ${agentRuns.length} ${agentRuns.length === 1 ? "run" : "runs"} measured`;
+}
+
+/**
+ * One row per tool the agent lists, with the rule the version in force carries for it (null = no rule). Tools the
+ * config rules but the agent does not list are appended, so a rule is never hidden by a stale tool list.
+ */
+export function rulesInForce(config: AgentConfig | null, tools: AgentTool[] | null): { tool: string; rule: ToolRule | null }[] {
+  const rules = config?.tool_policy.tool_rules ?? {};
+  const names = tools ? tools.map((t) => t.name) : [];
+  for (const name of Object.keys(rules).sort()) if (!names.includes(name)) names.push(name);
+  return names.map((tool) => ({ tool, rule: rules[tool] ?? null }));
+}
+
+/** The *Rules in force* aside: `3 tools · 1 rule`. */
+export function rulesLine(rows: { rule: ToolRule | null }[]): string {
+  const n = rows.filter((r) => r.rule).length;
+  return `${rows.length} ${rows.length === 1 ? "tool" : "tools"} · ${n} ${n === 1 ? "rule" : "rules"}`;
+}
+
+/** One donut segment: an attack family, how many of the suite's attacks it holds, and how many version `v` blocks. */
+export interface FamilyShare {
+  family: string;
+  attacks: number;
+  blocked: number;
+}
+
+/**
+ * The suite by family for the donut: every attack the newest run produced or measured, grouped as `matrixRows`
+ * groups them, with the count version `v` blocks in the run's sweep. Empty unless the sweep measured per attack
+ * (`matrixMode` `attacks`): a counts-only or absent sweep would draw every family as zero blocked, and a zero the
+ * page cannot tell from "not measured" is not a fact. Within a measured sweep, an attack it skipped counts as not
+ * blocked — the donut shows what is proven, not what is hoped.
+ */
+export function suiteByFamily(cycles: CycleRecord[], vuln: Vulnerability | null | undefined, v: number): FamilyShare[] {
+  if (matrixMode(vuln) !== "attacks") return [];
+  return matrixRows(cycles, vuln)
+    .map((f) => ({ family: f.family, attacks: f.rows.length, blocked: f.rows.filter((r) => matrixCell(vuln, r.id, v) === "blocked").length }))
+    .filter((f) => f.attacks > 0);
 }

@@ -32,13 +32,6 @@ export default function Intro({ onNext }: { onNext: () => void }) {
       >
         Self-healing for AI agents
       </motion.p>
-      <motion.p
-        {...fade(0.42)}
-        className="mt-2 whitespace-nowrap text-center text-[14px] font-normal text-white/70 sm:text-[15px]"
-        style={{ textShadow: "0 1px 14px rgba(0, 0, 0, 0.8), 0 0 2px rgba(0, 0, 0, 0.4)" }}
-      >
-        Let it break. Watch it heal.
-      </motion.p>
 
       <motion.div {...fade(0.55)} className="mt-16">
         <OrbButton onClick={onNext} aria-label="Continue" className="h-24 w-24" lift={{ x: 2, y: -2 }}>

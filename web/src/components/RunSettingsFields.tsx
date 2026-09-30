@@ -120,6 +120,7 @@ export function Select({
   name,
   className,
   panelWidth = 160,
+  size = "sm",
 }: {
   value: string;
   onChange: (value: string) => void;
@@ -127,6 +128,8 @@ export function Select({
   name: string;
   className?: string;
   panelWidth?: number;
+  /** `sm` sits in a settings row; `field` is a form field the height and face of `textInput`, beside one. */
+  size?: "sm" | "field";
 }) {
   return (
     <Dropdown
@@ -136,11 +139,12 @@ export function Select({
       label={name}
       align="end"
       panelWidth={panelWidth}
-      className={cn("inline-block", className)}
+      className={cn(size === "field" ? "block" : "inline-block", className)}
       trigger={({ open, selected }) => (
         <span
           className={cn(
-            "tabular inline-flex h-8 min-w-[72px] max-w-[320px] items-center justify-end gap-2 rounded-lg border bg-[var(--bg)] pl-3 pr-2.5 text-[12.5px] text-[var(--fg)] transition-colors",
+            "tabular inline-flex items-center gap-2 border text-[var(--fg)] transition-colors",
+            size === "field" ? "h-11 w-full justify-between rounded-xl bg-[var(--inset)] pl-4 pr-3 text-[14px]" : "h-8 min-w-[72px] max-w-[320px] justify-end rounded-lg bg-[var(--bg)] pl-3 pr-2.5 text-[12.5px]",
             open ? "border-[var(--border-2)]" : "border-[var(--border)] hover:border-[var(--border-2)]",
           )}
         >

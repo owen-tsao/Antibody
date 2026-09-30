@@ -53,14 +53,15 @@ JUDGE_MODEL = os.environ.get("ANTIBODY_JUDGE_MODEL", "openai/gpt-oss-120b")
 # column in the Weave UI and the estimate here cannot disagree. Keys are the request ids: W&B Inference echoes the
 # request id back as the response's `model` (checked live Sep 27 2026 for gpt-oss-20b and Llama-3.1-8B), and the
 # response string is what Weave keys usage and cost on.
+# Prices from wandb.ai/site/pricing/inference, read Sep 29 2026.
 PRICE_PER_MILLION_USD: dict[str, tuple[float, float]] = {
     "meta-llama/Llama-3.1-8B-Instruct": (0.22, 0.22),
-    "deepseek-ai/DeepSeek-V4-Pro": (1.10, 2.20),
+    "deepseek-ai/DeepSeek-V4-Pro": (1.15, 2.55),
     "deepseek-ai/DeepSeek-V3.1": (0.55, 1.65),
-    "openai/gpt-oss-120b": (0.15, 0.60),
-    "openai/gpt-oss-20b": (0.05, 0.20),
+    "openai/gpt-oss-120b": (0.03, 0.17),
+    "openai/gpt-oss-20b": (0.03, 0.13),
     # The bundled airline example's model (examples/agents/openai_cs_airline): its calls land in the same project.
-    "Qwen/Qwen3-235B-A22B-Instruct-2507": (0.10, 0.10),
+    "Qwen/Qwen3-30B-A3B-Instruct-2507": (0.10, 0.30),
 }
 
 
